@@ -1,0 +1,8 @@
+bin/
+*.log
+.rfuf/
+/Bug_Bounty/
+*.txt
+!README.txt
+sqlmap_results/
+.DS_Store
