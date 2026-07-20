@@ -29,6 +29,10 @@ func GetRequiredTools(goBin string) []Tool {
 		{"Gxss", "go install github.com/KathanP19/Gxss@latest", "Gxss"},
 		{"dalfox", "go install github.com/hahwul/dalfox/v2@latest", "dalfox"},
 		{"sqlmap", "sudo apt update && sudo apt install -y sqlmap", "sqlmap"},
+		{"gau", "go install github.com/lc/gau/v2/cmd/gau@latest", "gau"},
+		{"waybackurls", "go install github.com/tomnomnom/waybackurls@latest", "waybackurls"},
+		{"ffuf", "go install github.com/ffuf/ffuf/v2@latest", "ffuf"},
+		{"jq", "sudo apt update && sudo apt install -y jq", "jq"},
 	}
 }
 
@@ -87,7 +91,54 @@ func EnsureTools(goBin string) error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to clone gf patterns: %v", err)
 		}
+	} else {
+		// Verify and pull latest for new patterns (ssrf, redirect, lfi)
+		fmt.Println("[*] Updating GF patterns...")
+		exec.Command("git", "-C", gfDir, "pull").Run()
+	}
+
+	// Verify required patterns exist
+	requiredPatterns := []string{"sqli", "xss", "rce", "idor", "ssrf", "redirect", "lfi"}
+	for _, p := range requiredPatterns {
+		patternPath := filepath.Join(gfDir, p+".json")
+		if _, err := os.Stat(patternPath); os.IsNotExist(err) {
+			return fmt.Errorf("required GF pattern %s.json missing in %s", p, gfDir)
+		}
 	}
 
 	return nil
+}
+
+func EnsureSeclists() (string, error) {
+	home, _ := os.UserHomeDir()
+	paths := []string{
+		"/usr/share/wordlists/SecLists/Discovery/Web-Content/raft-medium-directories.txt",
+		"/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt",
+		"/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories.txt",
+		filepath.Join(home, "SecLists", "Discovery", "Web-Content", "raft-medium-directories.txt"),
+	}
+
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+
+	fmt.Println("[*] Installing seclists...")
+	// Sandbox uses apt
+	cmd := exec.Command("sudo", "apt", "update")
+	cmd.Run()
+	cmd = exec.Command("sudo", "apt", "install", "-y", "seclists")
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to install seclists: %v", err)
+	}
+
+	// Re-check
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+
+	return "", fmt.Errorf("seclists wordlist not found after installation")
 }

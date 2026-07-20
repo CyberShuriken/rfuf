@@ -8,10 +8,11 @@ import (
 )
 
 type Paths struct {
-	NucleiTemplates string
-	GfPatterns      string
-	WorkDir         string
-	GoBin           string
+	NucleiTemplates     string
+	GfPatterns          string
+	WorkDir             string
+	GoBin               string
+	SeclistsDirWordlist string
 }
 
 func ResolvePaths(domain string) (*Paths, error) {
@@ -30,12 +31,14 @@ func ResolvePaths(domain string) (*Paths, error) {
 
 	nucleiTemplates := resolveNucleiTemplates(home)
 	gfPatterns := filepath.Join(home, ".gf")
+	seclistsWordlist := resolveSeclists(home)
 
 	return &Paths{
-		NucleiTemplates: nucleiTemplates,
-		GfPatterns:      gfPatterns,
-		WorkDir:         workDir,
-		GoBin:           goBin,
+		NucleiTemplates:     nucleiTemplates,
+		GfPatterns:          gfPatterns,
+		WorkDir:             workDir,
+		GoBin:               goBin,
+		SeclistsDirWordlist: seclistsWordlist,
 	}, nil
 }
 
@@ -63,4 +66,21 @@ func resolveNucleiTemplates(home string) string {
 	}
 
 	return filepath.Join(home, "nuclei-templates") // Default fallback
+}
+
+func resolveSeclists(home string) string {
+	paths := []string{
+		"/usr/share/wordlists/SecLists/Discovery/Web-Content/raft-medium-directories.txt",
+		"/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt",
+		"/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories.txt",
+		filepath.Join(home, "SecLists", "Discovery", "Web-Content", "raft-medium-directories.txt"),
+	}
+
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	return "" // Return empty, installer will handle installation
 }

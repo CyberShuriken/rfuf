@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	version = "1.0.0"
+	version = "2.0.0"
 )
 
 func main() {
@@ -54,7 +54,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 3. Run Pipeline
+	// 3. Ensure Seclists (V2)
+	seclistsPath, err := installer.EnsureSeclists()
+	if err != nil {
+		fmt.Printf("[!] Warning: %v\n", err)
+	} else {
+		paths.SeclistsDirWordlist = seclistsPath
+	}
+
+	// 4. Run Pipeline
 	if err := pipeline.Run(*domain, *resume, paths); err != nil {
 		fmt.Printf("[!] Pipeline failed: %v\n", err)
 		os.Exit(1)

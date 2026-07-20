@@ -25,6 +25,7 @@ Wi-Fi doesn't mean starting over.
 
 - Fedora Linux (or any modern Linux distro), zsh
 - Go 1.22+ (`sudo apt install -y golang-go` if you don't have it)
+- `seclists` and `jq` (will be auto-installed via `apt` if missing)
 
 ## Install
 
@@ -55,19 +56,34 @@ All output is written to:
 2. DNS resolution — dnsx
 3. Subdomain takeover check — subzy + nuclei
 4. HTTP probing — httpx
-5. Baseline exposure/misconfig scan — nuclei
+5. Baseline exposure/misconfig/auth/GraphQL scan — nuclei
 6. Deep crawl — katana
 7. Secret scanning — trufflehog + grep patterns
-8. Targeted vuln scans — SQLi (gf + sqlmap), XSS (gf + Gxss + dalfox), RCE (gf + nuclei), IDOR (gf + nuclei)
-9. Summary report generation
+8. Historical URL mining — gau + waybackurls
+9. Targeted vuln scans — SQLi, XSS, RCE, IDOR, SSRF, open redirect, LFI (gf + nuclei/sqlmap/dalfox)
+10. CORS misconfiguration check
+11. Hidden directory brute-force — ffuf + seclists
+12. Manual business-logic review queue generation
+13. Summary report generation
 
 ## Tools used under the hood
 
 subfinder · assetfinder · amass · dnsx · subzy · nuclei · httpx · katana ·
-trufflehog · gf · Gxss · dalfox · sqlmap
+trufflehog · gau · waybackurls · gf · Gxss · dalfox · sqlmap · ffuf · seclists · jq
 
 `rfuf` orchestrates these; it doesn't replace them. All credit to their respective authors —
 see each project's repo for licensing.
+
+## Changelog
+
+### v2.0.0
+- Added auth/JWT scanning and GraphQL exposure scanning.
+- Added historical URL mining via `gau` and `waybackurls`.
+- Expanded targeted scans to include SSRF, open redirect, and LFI.
+- Added a reflective-origin CORS misconfiguration check.
+- Added hidden directory brute-forcing via `ffuf` with `seclists`.
+- Added manual business-logic review queue generation.
+- Updated all targeted scans to use a merged URL list (`all_urls.txt`).
 
 ## Disclaimer
 
