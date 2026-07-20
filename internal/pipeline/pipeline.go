@@ -18,7 +18,7 @@ type Step struct {
 
 func GetSteps(domain string, paths *config.Paths) []Step {
 	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
-	
+
 	return []Step{
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default"},
 		{"subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "default"},
@@ -68,8 +68,14 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		return err
 	}
 
+	// If the user did not pass -resume but a previous checkpoint exists,
+	// treat this as a fresh run: clear the checkpoint so every step
+	// re-runs from scratch instead of being silently skipped.
 	if !resume && len(cp.CompletedSteps) > 0 {
-		fmt.Printf("[!] Existing scan found for %s. Resuming...\n", domain)
+		fmt.Printf("[!] Existing checkpoint found for %s. Starting fresh scan (use -resume to continue previous run)...\n", domain)
+		if err := cp.Reset(); err != nil {
+			return fmt.Errorf("failed to reset checkpoint: %w", err)
+		}
 	}
 
 	logFile, err := executor.GetLogFile(paths.WorkDir)
@@ -86,7 +92,7 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		}
 
 		fmt.Printf("[%d/%d] %s — running...\n", i+1, len(steps), s.ID)
-		
+
 		// Special handling for dirbrute_ffuf if wordlist is missing
 		if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" {
 			fmt.Printf("[%d/%d] %s — [SKIP] (Seclists wordlist not found)\n", i+1, len(steps), s.ID)

@@ -48,11 +48,11 @@ func EnsureTools(goBin string) error {
 		newPath := goBin + ":" + path
 		os.Setenv("PATH", newPath)
 		fmt.Printf("[*] Added %s to current PATH\n", goBin)
-		
+
 		home, _ := os.UserHomeDir()
 		zshrc := filepath.Join(home, ".zshrc")
 		exportLine := fmt.Sprintf("export PATH=\"%s:$PATH\"", goBin)
-		
+
 		if content, err := os.ReadFile(zshrc); err == nil {
 			if !strings.Contains(string(content), exportLine) {
 				f, _ := os.OpenFile(zshrc, os.O_APPEND|os.O_WRONLY, 0644)

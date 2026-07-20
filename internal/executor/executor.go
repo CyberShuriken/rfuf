@@ -18,7 +18,7 @@ type Result struct {
 
 func RunCommand(cmdStr string, workDir string, logFile *os.File) (*Result, error) {
 	start := time.Now()
-	
+
 	cmd := exec.Command("bash", "-c", cmdStr)
 	cmd.Dir = workDir
 

@@ -12,18 +12,18 @@ import (
 
 func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	duration := cp.LastUpdated.Sub(cp.StartedAt)
-	
+
 	subdomains := countLines(filepath.Join(workDir, "subs.txt"))
 	liveSubs := countLines(filepath.Join(workDir, "live_subs.txt"))
 	aliveHosts := countLines(filepath.Join(workDir, "alive.txt"))
 	takeovers := countLines(filepath.Join(workDir, "validated_takeovers.txt"))
 	secrets := countLines(filepath.Join(workDir, "trufflehog_results.txt")) + countLines(filepath.Join(workDir, "potential_secrets.txt"))
-	
+
 	sqli := countLines(filepath.Join(workDir, "sqli_targets.txt"))
 	xss := countLines(filepath.Join(workDir, "xss_targets.txt"))
 	rce := countLines(filepath.Join(workDir, "rce_targets.txt"))
 	idor := countLines(filepath.Join(workDir, "idor_targets.txt"))
-	
+
 	// V2 stats
 	auth := countLines(filepath.Join(workDir, "auth_results.txt"))
 	graphql := countLines(filepath.Join(workDir, "graphql_exposed.txt"))
@@ -68,9 +68,9 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - [ ] Manually verify XSS findings in `+"`"+`xss_vulnerabilities.txt`+"`"+`.
 - [ ] Analyze `+"`"+`manual_business_logic_review.txt`+"`"+` for sensitive endpoints (checkout, payment, etc.).
 - [ ] Review FFUF discovered paths in `+"`"+`ffuf_dirs_200.txt`+"`"+`.
-`, cp.Domain, cp.StartedAt.Format(time.RFC822), cp.LastUpdated.Format(time.RFC822), duration, 
-	subdomains, liveSubs, aliveHosts, takeovers, secrets, auth, graphql, cors, ffuf,
-	sqli, xss, rce, idor, ssrf, redirect, lfi)
+`, cp.Domain, cp.StartedAt.Format(time.RFC822), cp.LastUpdated.Format(time.RFC822), duration,
+		subdomains, liveSubs, aliveHosts, takeovers, secrets, auth, graphql, cors, ffuf,
+		sqli, xss, rce, idor, ssrf, redirect, lfi)
 
 	return os.WriteFile(filepath.Join(workDir, "SUMMARY.md"), []byte(content), 0644)
 }

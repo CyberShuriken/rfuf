@@ -68,3 +68,14 @@ func (cp *Checkpoint) CompleteStep(stepID string) error {
 	cp.CompletedSteps = append(cp.CompletedSteps, stepID)
 	return cp.Save()
 }
+
+// Reset clears all completed steps and resets the start time to now.
+// This is used when starting a fresh scan without resuming a previous one,
+// so that the pipeline runs every step from scratch instead of skipping
+// steps carried over from a prior run.
+func (cp *Checkpoint) Reset() error {
+	cp.CompletedSteps = []string{}
+	cp.StartedAt = time.Now()
+	cp.LastUpdated = time.Now()
+	return cp.Save()
+}
