@@ -50,21 +50,22 @@ All output is written to:
 ~/Desktop/Bug_Bounty/website.com/
 ```
 
-## Pipeline
+## Pipeline & Commands
 
-1. Subdomain enumeration — subfinder, assetfinder, amass
-2. DNS resolution — dnsx
-3. Subdomain takeover check — subzy + nuclei
-4. HTTP probing — httpx
-5. Baseline exposure/misconfig/auth/GraphQL scan — nuclei
-6. Deep crawl — katana
-7. Secret scanning — trufflehog + grep patterns
-8. Historical URL mining — gau + waybackurls
-9. Targeted vuln scans — SQLi, XSS, RCE, IDOR, SSRF, open redirect, LFI (gf + nuclei/sqlmap/dalfox)
-10. CORS misconfiguration check
-11. Hidden directory brute-force — ffuf + seclists
-12. Manual business-logic review queue generation
-13. Summary report generation
+Below is the sequence of commands `rfuf` executes under the hood:
+
+1. **Subdomain Enum:** `subfinder`, `assetfinder`, `amass`
+2. **DNS Resolution:** `dnsx -l subs.txt -silent -o live_subs.txt`
+3. **Takeover Check:** `subzy run --targets live_subs.txt --vuln` + `nuclei`
+4. **HTTP Probing:** `httpx -l live_subs.txt -silent -o alive.txt`
+5. **Vulnerability Scans:** `nuclei` with tags `token-spray,exposure,config,jwt,auth-bypass,default-login`
+6. **Crawling:** `katana -list alive.txt -jc -kf all -d 3 -fs rdn -o katana_urls.txt`
+7. **Secret Scanning:** `trufflehog filesystem` + `grep` patterns
+8. **URL Mining:** `gau` and `waybackurls` to create `all_urls.txt`
+9. **Targeted Scans:** `gf` + `nuclei`/`sqlmap`/`dalfox` for SQLi, XSS, RCE, IDOR, SSRF, Open Redirect, LFI
+10. **CORS Check:** Reflective-origin check via `curl`
+11. **Dir Brute-force:** `ffuf` with `seclists` on all live hosts
+12. **Manual Review:** Grep sensitive endpoints to `manual_business_logic_review.txt`
 
 ## Tools used under the hood
 
