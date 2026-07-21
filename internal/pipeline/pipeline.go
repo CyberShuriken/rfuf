@@ -3,8 +3,10 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
+	"github.com/CyberShuriken/rfuf/internal/cli"
 	"github.com/CyberShuriken/rfuf/internal/config"
 	"github.com/CyberShuriken/rfuf/internal/executor"
 	"github.com/CyberShuriken/rfuf/internal/summary"
@@ -18,7 +20,7 @@ type Step struct {
 
 func GetSteps(domain string, paths *config.Paths) []Step {
 	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
-
+	
 	return []Step{
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default"},
 		{"subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "default"},
@@ -68,14 +70,14 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		return err
 	}
 
-	// If the user did not pass -resume but a previous checkpoint exists,
-	// treat this as a fresh run: clear the checkpoint so every step
-	// re-runs from scratch instead of being silently skipped.
+	startTime := cp.StartedAt
 	if !resume && len(cp.CompletedSteps) > 0 {
 		fmt.Printf("[!] Existing checkpoint found for %s. Starting fresh scan (use -resume to continue previous run)...\n", domain)
 		if err := cp.Reset(); err != nil {
 			return fmt.Errorf("failed to reset checkpoint: %w", err)
 		}
+	} else if resume && len(cp.CompletedSteps) > 0 {
+		fmt.Printf("[!] Resuming scan for %s...\n", domain)
 	}
 
 	logFile, err := executor.GetLogFile(paths.WorkDir)
@@ -85,25 +87,58 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 	defer logFile.Close()
 
 	steps := GetSteps(domain, paths)
+	stepIDs := make([]string, len(steps))
+	completed := make(map[string]bool)
 	for i, s := range steps {
+		stepIDs[i] = s.ID
 		if cp.IsCompleted(s.ID) {
-			fmt.Printf("[%d/%d] %s — [SKIP] (already completed)\n", i+1, len(steps), s.ID)
+			completed[s.ID] = true
+		}
+	}
+
+	// Dashboard update ticker
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for _, s := range steps {
+		if cp.IsCompleted(s.ID) {
 			continue
 		}
 
-		fmt.Printf("[%d/%d] %s — running...\n", i+1, len(steps), s.ID)
-
 		// Special handling for dirbrute_ffuf if wordlist is missing
 		if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" {
-			fmt.Printf("[%d/%d] %s — [SKIP] (Seclists wordlist not found)\n", i+1, len(steps), s.ID)
+			completed[s.ID] = true
 			cp.CompleteStep(s.ID)
 			continue
 		}
 
+		// Update dashboard before running
+		stats := cli.UpdateStats(paths.WorkDir)
+		cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats)
+		fmt.Printf("\n[*] Step [%s] started...\n", s.ID)
+
+		// Start a goroutine to keep the dashboard alive during long steps
+		stopDash := make(chan bool)
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					stats := cli.UpdateStats(paths.WorkDir)
+					cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats)
+					fmt.Printf("\n[*] Step [%s] running...\n", s.ID)
+					fmt.Println("\nLive Log:")
+					fmt.Println(cli.GetLiveLog(paths.WorkDir, 5))
+				case <-stopDash:
+					return
+				}
+			}
+		}()
+
 		res, err := executor.RunCommand(s.Command, paths.WorkDir, logFile)
+		stopDash <- true
+		
 		if err != nil {
-			fmt.Printf("[%d/%d] %s — FAILED: %v\n", i+1, len(steps), s.ID, err)
-			return err
+			return fmt.Errorf("step %s failed: %v", s.ID, err)
 		}
 
 		success := false
@@ -118,15 +153,18 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		}
 
 		if !success {
-			fmt.Printf("[%d/%d] %s — FAILED (exit code %d). See .rfuf/rfuf.log\n", i+1, len(steps), s.ID, res.ExitCode)
-			return fmt.Errorf("step %s failed", s.ID)
+			return fmt.Errorf("step %s failed with exit code %d", s.ID, res.ExitCode)
 		}
 
-		fmt.Printf("[%d/%d] %s — done (%v)\n", i+1, len(steps), s.ID, res.Duration)
+		completed[s.ID] = true
 		cp.CompleteStep(s.ID)
 	}
 
-	fmt.Println("[*] Generating summary...")
+	// Final dashboard update
+	stats := cli.UpdateStats(paths.WorkDir)
+	cli.DrawDashboard(domain, startTime, stepIDs, completed, "", stats)
+
+	fmt.Println("\n[*] Generating summary...")
 	if err := summary.Generate(paths.WorkDir, cp); err != nil {
 		return err
 	}
