@@ -21,23 +21,24 @@ type Stats struct {
 	FFUF       int
 }
 
-func ClearScreen() {
-	// Move cursor to top-left and clear screen
-	fmt.Print("\033[H\033[2J")
-}
-
-func DrawDashboard(domain string, startTime time.Time, steps []string, completed map[string]bool, currentStep string, stats Stats) {
-	ClearScreen()
+// DrawDashboard builds the entire UI string in memory and prints it atomically
+func DrawDashboard(domain string, startTime time.Time, steps []string, completed map[string]bool, currentStep string, stats Stats, workDir string) {
+	var b strings.Builder
+	
+	// ANSI Escape: Move to top-left and clear from cursor to end of screen
+	// This is much more robust than clearing the whole screen buffer
+	b.WriteString("\033[H\033[J")
+	
 	elapsed := time.Since(startTime).Round(time.Second)
 
-	fmt.Println("┌────────────────────────────────────────────────────────────────────────┐")
-	fmt.Printf("│ rfuf ─ RECON FASTER U FOOL                                            │\n")
-	fmt.Printf("│ Target: %-30s | Elapsed: %-15v │\n", domain, elapsed)
-	fmt.Println("├────────────────────────────────────────────────────────────────────────┤")
-	fmt.Printf("│ LIVE STATS:                                                            │\n")
-	fmt.Printf("│ Subs: %-5d | Live: %-5d | Alive: %-5d | Takeovers: %-5d       │\n", stats.Subdomains, stats.LiveSubs, stats.AliveHosts, stats.Takeovers)
-	fmt.Printf("│ Secrets: %-5d | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d │\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF)
-	fmt.Println("└────────────────────────────────────────────────────────────────────────┘")
+	b.WriteString("┌────────────────────────────────────────────────────────────────────────┐\n")
+	b.WriteString("│ rfuf ─ RECON FASTER U FOOL                                            │\n")
+	b.WriteString(fmt.Sprintf("│ Target: %-30s | Elapsed: %-15v │\n", domain, elapsed))
+	b.WriteString("├────────────────────────────────────────────────────────────────────────┤\n")
+	b.WriteString("│ LIVE STATS:                                                            │\n")
+	b.WriteString(fmt.Sprintf("│ Subs: %-5d | Live: %-5d | Alive: %-5d | Takeovers: %-5d       │\n", stats.Subdomains, stats.LiveSubs, stats.AliveHosts, stats.Takeovers))
+	b.WriteString(fmt.Sprintf("│ Secrets: %-5d | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d │\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF))
+	b.WriteString("└────────────────────────────────────────────────────────────────────────┘\n")
 
 	// Draw steps in 2 columns
 	for i := 0; i < len(steps); i += 2 {
@@ -47,14 +48,13 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 				s := steps[i+j]
 				status := "  "
 				if completed[s] {
-					status = "✔ "
+					status = "\033[32m✔\033[0m " // Green check
 				} else if s == currentStep {
-					status = "→ "
+					status = "\033[34m→\033[0m " // Blue arrow
 				} else {
 					status = "○ "
 				}
 				
-				// Truncate step name if too long
 				name := s
 				if len(name) > 25 {
 					name = name[:22] + "..."
@@ -64,9 +64,16 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 				line += item
 			}
 		}
-		fmt.Println(line)
+		b.WriteString(line + "\n")
 	}
-	fmt.Println("\n" + strings.Repeat("─", 74))
+	
+	b.WriteString("\n" + strings.Repeat("─", 74) + "\n")
+	b.WriteString(fmt.Sprintf("[*] Current Step: \033[1m%s\033[0m\n", currentStep))
+	b.WriteString("\nLive Log (last 5 lines):\n")
+	b.WriteString(GetLiveLog(workDir, 5))
+	
+	// Final atomic print to terminal
+	fmt.Print(b.String())
 }
 
 func UpdateStats(workDir string) Stats {
@@ -97,6 +104,9 @@ func countLines(path string) int {
 
 func GetLiveLog(workDir string, lines int) string {
 	logPath := filepath.Join(workDir, ".rfuf", "rfuf.log")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		return "(no log yet)\n"
+	}
 	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logPath)
 	out, _ := cmd.Output()
 	return string(out)

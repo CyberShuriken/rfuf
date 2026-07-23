@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
@@ -17,6 +18,10 @@ type Step struct {
 	Command string
 	Type    string // "default", "grep"
 }
+
+var (
+	uiLock sync.Mutex
+)
 
 func GetSteps(domain string, paths *config.Paths) []Step {
 	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
@@ -72,12 +77,9 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 
 	startTime := cp.StartedAt
 	if !resume && len(cp.CompletedSteps) > 0 {
-		fmt.Printf("[!] Existing checkpoint found for %s. Starting fresh scan (use -resume to continue previous run)...\n", domain)
 		if err := cp.Reset(); err != nil {
 			return fmt.Errorf("failed to reset checkpoint: %w", err)
 		}
-	} else if resume && len(cp.CompletedSteps) > 0 {
-		fmt.Printf("[!] Resuming scan for %s...\n", domain)
 	}
 
 	logFile, err := executor.GetLogFile(paths.WorkDir)
@@ -96,7 +98,6 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		}
 	}
 
-	// Dashboard update ticker
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -105,34 +106,32 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 			continue
 		}
 
-		// Special handling for dirbrute_ffuf if wordlist is missing
 		if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" {
 			completed[s.ID] = true
 			cp.CompleteStep(s.ID)
 			continue
 		}
 
-		// Update dashboard before running
+		// Initial draw
+		uiLock.Lock()
 		stats := cli.UpdateStats(paths.WorkDir)
-		cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats)
-		fmt.Printf("\n[*] Step [%s] started...\n", s.ID)
+		cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats, paths.WorkDir)
+		uiLock.Unlock()
 
-		// Start a goroutine to keep the dashboard alive during long steps
 		stopDash := make(chan bool)
-		go func() {
+		go func(stepID string) {
 			for {
 				select {
 				case <-ticker.C:
+					uiLock.Lock()
 					stats := cli.UpdateStats(paths.WorkDir)
-					cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats)
-					fmt.Printf("\n[*] Step [%s] running...\n", s.ID)
-					fmt.Println("\nLive Log:")
-					fmt.Println(cli.GetLiveLog(paths.WorkDir, 5))
+					cli.DrawDashboard(domain, startTime, stepIDs, completed, stepID, stats, paths.WorkDir)
+					uiLock.Unlock()
 				case <-stopDash:
 					return
 				}
 			}
-		}()
+		}(s.ID)
 
 		res, err := executor.RunCommand(s.Command, paths.WorkDir, logFile)
 		stopDash <- true
@@ -160,15 +159,15 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		cp.CompleteStep(s.ID)
 	}
 
-	// Final dashboard update
+	uiLock.Lock()
 	stats := cli.UpdateStats(paths.WorkDir)
-	cli.DrawDashboard(domain, startTime, stepIDs, completed, "", stats)
+	cli.DrawDashboard(domain, startTime, stepIDs, completed, "FINISHED", stats, paths.WorkDir)
+	uiLock.Unlock()
 
-	fmt.Println("\n[*] Generating summary...")
 	if err := summary.Generate(paths.WorkDir, cp); err != nil {
 		return err
 	}
 
-	fmt.Printf("[+] Pipeline complete! Output saved to %s\n", paths.WorkDir)
+	fmt.Printf("\n[+] Pipeline complete! Output saved to %s\n", paths.WorkDir)
 	return nil
 }
