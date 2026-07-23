@@ -19,6 +19,13 @@ type Stats struct {
 	GraphQL    int
 	CORS       int
 	FFUF       int
+	SQLi       int
+	XSS        int
+	RCE        int
+	IDOR       int
+	SSRF       int
+	Redirect   int
+	LFI        int
 }
 
 // DrawDashboard builds the entire UI string in memory and prints it atomically
@@ -26,7 +33,6 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 	var b strings.Builder
 	
 	// ANSI Escape: Move to top-left and clear from cursor to end of screen
-	// This is much more robust than clearing the whole screen buffer
 	b.WriteString("\033[H\033[J")
 	
 	elapsed := time.Since(startTime).Round(time.Second)
@@ -38,6 +44,8 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 	b.WriteString("│ LIVE STATS:                                                            │\n")
 	b.WriteString(fmt.Sprintf("│ Subs: %-5d | Live: %-5d | Alive: %-5d | Takeovers: %-5d       │\n", stats.Subdomains, stats.LiveSubs, stats.AliveHosts, stats.Takeovers))
 	b.WriteString(fmt.Sprintf("│ Secrets: %-5d | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d │\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF))
+	b.WriteString(fmt.Sprintf("│ SQLi: %-5d | XSS: %-5d  | RCE: %-5d | IDOR: %-5d | SSRF: %-5d │\n", stats.SQLi, stats.XSS, stats.RCE, stats.IDOR, stats.SSRF))
+	b.WriteString(fmt.Sprintf("│ Redir: %-5d | LFI: %-5d                                            │\n", stats.Redirect, stats.LFI))
 	b.WriteString("└────────────────────────────────────────────────────────────────────────┘\n")
 
 	// Draw steps in 2 columns
@@ -87,6 +95,13 @@ func UpdateStats(workDir string) Stats {
 		GraphQL:    countLines(filepath.Join(workDir, "graphql_exposed.txt")),
 		CORS:       countLines(filepath.Join(workDir, "cors_findings.txt")),
 		FFUF:       countLines(filepath.Join(workDir, "ffuf_dirs_200.txt")),
+		SQLi:       countLinesInDir(filepath.Join(workDir, "sqlmap_results")),
+		XSS:        countLines(filepath.Join(workDir, "xss_vulnerabilities.txt")),
+		RCE:        countLines(filepath.Join(workDir, "nuclei_rce_rce.txt")),
+		IDOR:       countLines(filepath.Join(workDir, "idor_vulnerabilities.txt")),
+		SSRF:       countLines(filepath.Join(workDir, "ssrf_vulnerabilities.txt")),
+		Redirect:   countLines(filepath.Join(workDir, "open_redirect_results.txt")),
+		LFI:        countLines(filepath.Join(workDir, "lfi_results.txt")),
 	}
 }
 
@@ -100,6 +115,20 @@ func countLines(path string) int {
 		return 0
 	}
 	return len(lines)
+}
+
+func countLinesInDir(path string) int {
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, f := range files {
+		if !f.IsDir() {
+			count++
+		}
+	}
+	return count
 }
 
 func GetLiveLog(workDir string, lines int) string {
