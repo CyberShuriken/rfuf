@@ -52,7 +52,7 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"sqli_targets", "gf sqli all_urls.txt > sqli_targets.txt; grep -Ei \"id=|select|report|search|query|sort|category|item|view\" all_urls.txt >> sqli_targets.txt; sort -u sqli_targets.txt -o sqli_targets.txt", "grep"},
 		{"sqlmap_scan", "sqlmap -m sqli_targets.txt --batch --random-agent --level=2 --risk=2 --output-dir=./sqlmap_results", "default"},
 		{"xss_targets", "gf xss all_urls.txt > xss_targets.txt; grep -Ei \"q=|search|query|keyword|text|name|email|msg|redirect|url=\" all_urls.txt >> xss_targets.txt; sort -u xss_targets.txt -o xss_targets.txt", "grep"},
-		{"xss_scan", "cat xss_targets.txt | Gxss -p khXSS | dalfox pipe --output xss_vulnerabilities.txt", "default"},
+		{"xss_scan", "cat xss_targets.txt | Gxss -p khXSS | dalfox pipe --batch --output xss_vulnerabilities.txt", "default"},
 		{"rce_targets", "gf rce all_urls.txt > rce_targets.txt; grep -Ei \"cmd=|exec|command|run|ping|ip|file|path|dir|url|daemon|upload\" all_urls.txt >> rce_targets.txt; sort -u rce_targets.txt -o rce_targets.txt", "grep"},
 		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -t %[1]s/http/vulnerabilities/ -t %[1]s/http/cves/ -severity high,critical -o nuclei_rce_rce.txt", paths.NucleiTemplates), "default"},
 		{"idor_targets", "gf idor all_urls.txt > idor_targets.txt; grep -Ei \"id=|user|account|number|order|doc|file|profile|booking|reservation\" all_urls.txt >> idor_targets.txt; sort -u idor_targets.txt -o idor_targets.txt", "grep"},
@@ -98,6 +98,13 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		}
 	}
 
+	// Prepare the screen for the fixed dashboard
+	fmt.Print("\033[2J") // Clear screen
+	// Leave space for the dashboard (approx 15 lines)
+	for i := 0; i < 15; i++ {
+		fmt.Println()
+	}
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -112,10 +119,10 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 			continue
 		}
 
-		// Initial draw
+		// Initial dashboard draw
 		uiLock.Lock()
 		stats := cli.UpdateStats(paths.WorkDir)
-		cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats, paths.WorkDir)
+		cli.DrawDashboard(domain, startTime, stepIDs, completed, s.ID, stats)
 		uiLock.Unlock()
 
 		stopDash := make(chan bool)
@@ -125,7 +132,7 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 				case <-ticker.C:
 					uiLock.Lock()
 					stats := cli.UpdateStats(paths.WorkDir)
-					cli.DrawDashboard(domain, startTime, stepIDs, completed, stepID, stats, paths.WorkDir)
+					cli.DrawDashboard(domain, startTime, stepIDs, completed, stepID, stats)
 					uiLock.Unlock()
 				case <-stopDash:
 					return
@@ -161,7 +168,7 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 
 	uiLock.Lock()
 	stats := cli.UpdateStats(paths.WorkDir)
-	cli.DrawDashboard(domain, startTime, stepIDs, completed, "FINISHED", stats, paths.WorkDir)
+	cli.DrawDashboard(domain, startTime, stepIDs, completed, "FINISHED", stats)
 	uiLock.Unlock()
 
 	if err := summary.Generate(paths.WorkDir, cp); err != nil {

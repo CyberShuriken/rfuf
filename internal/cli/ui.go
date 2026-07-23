@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -28,60 +27,36 @@ type Stats struct {
 	LFI        int
 }
 
-// DrawDashboard builds the entire UI string in memory and prints it atomically
-func DrawDashboard(domain string, startTime time.Time, steps []string, completed map[string]bool, currentStep string, stats Stats, workDir string) {
-	var b strings.Builder
+// DrawDashboard uses ANSI "Save Cursor" and "Restore Cursor" to keep the dashboard fixed at the top
+func DrawDashboard(domain string, startTime time.Time, steps []string, completed map[string]bool, currentStep string, stats Stats) {
+	// Save cursor position, move to top-left (1,1)
+	fmt.Print("\033[s\033[1;1H")
 	
-	// ANSI Escape: Move to top-left and clear from cursor to end of screen
-	b.WriteString("\033[H\033[J")
-	
+	// Clear the lines we're about to write (approx 15 lines for the header)
+	for i := 0; i < 15; i++ {
+		fmt.Print("\033[2K\n")
+	}
+	// Move back to top-left
+	fmt.Print("\033[1;1H")
+
 	elapsed := time.Since(startTime).Round(time.Second)
 
-	b.WriteString("┌────────────────────────────────────────────────────────────────────────┐\n")
-	b.WriteString("│ rfuf ─ RECON FASTER U FOOL                                            │\n")
-	b.WriteString(fmt.Sprintf("│ Target: %-30s | Elapsed: %-15v │\n", domain, elapsed))
-	b.WriteString("├────────────────────────────────────────────────────────────────────────┤\n")
-	b.WriteString("│ LIVE STATS:                                                            │\n")
-	b.WriteString(fmt.Sprintf("│ Subs: %-5d | Live: %-5d | Alive: %-5d | Takeovers: %-5d       │\n", stats.Subdomains, stats.LiveSubs, stats.AliveHosts, stats.Takeovers))
-	b.WriteString(fmt.Sprintf("│ Secrets: %-5d | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d │\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF))
-	b.WriteString(fmt.Sprintf("│ SQLi: %-5d | XSS: %-5d  | RCE: %-5d | IDOR: %-5d | SSRF: %-5d │\n", stats.SQLi, stats.XSS, stats.RCE, stats.IDOR, stats.SSRF))
-	b.WriteString(fmt.Sprintf("│ Redir: %-5d | LFI: %-5d                                            │\n", stats.Redirect, stats.LFI))
-	b.WriteString("└────────────────────────────────────────────────────────────────────────┘\n")
+	fmt.Println("\033[1;36m┌────────────────────────────────────────────────────────────────────────┐\033[0m")
+	fmt.Println("\033[1;36m│ rfuf ─ RECON FASTER U FOOL                                            │\033[0m")
+	fmt.Printf("\033[1;36m│\033[0m Target: \033[1m%-30s\033[0m | Elapsed: \033[1;33m%-15v\033[0m \033[1;36m│\033[0m\n", domain, elapsed)
+	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────────────────────┤\033[0m")
+	fmt.Println("\033[1;36m│ LIVE STATS:                                                            │\033[0m")
+	fmt.Printf("\033[1;36m│\033[0m Subs: %-5d | Live: %-5d | Alive: %-5d | Takeovers: \033[1;31m%-5d\033[0m       \033[1;36m│\033[0m\n", stats.Subdomains, stats.LiveSubs, stats.AliveHosts, stats.Takeovers)
+	fmt.Printf("\033[1;36m│\033[0m Secrets: \033[1;31m%-5d\033[0m | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d \033[1;36m│\033[0m\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF)
+	fmt.Printf("\033[1;36m│\033[0m SQLi: %-5d | XSS: %-5d  | RCE: %-5d | IDOR: %-5d | SSRF: %-5d \033[1;36m│\033[0m\n", stats.SQLi, stats.XSS, stats.RCE, stats.IDOR, stats.SSRF)
+	fmt.Printf("\033[1;36m│\033[0m Redir: %-5d | LFI: %-5d                                            \033[1;36m│\033[0m\n", stats.Redirect, stats.LFI)
+	fmt.Println("\033[1;36m└────────────────────────────────────────────────────────────────────────┘\033[0m")
 
-	// Draw steps in 2 columns
-	for i := 0; i < len(steps); i += 2 {
-		line := ""
-		for j := 0; j < 2; j++ {
-			if i+j < len(steps) {
-				s := steps[i+j]
-				status := "  "
-				if completed[s] {
-					status = "\033[32m✔\033[0m " // Green check
-				} else if s == currentStep {
-					status = "\033[34m→\033[0m " // Blue arrow
-				} else {
-					status = "○ "
-				}
-				
-				name := s
-				if len(name) > 25 {
-					name = name[:22] + "..."
-				}
-				
-				item := fmt.Sprintf("%s %-28s", status, name)
-				line += item
-			}
-		}
-		b.WriteString(line + "\n")
-	}
+	fmt.Printf("\n[*] Current Step: \033[1;34m%s\033[0m\n", currentStep)
+	fmt.Println(strings.Repeat("─", 74))
 	
-	b.WriteString("\n" + strings.Repeat("─", 74) + "\n")
-	b.WriteString(fmt.Sprintf("[*] Current Step: \033[1m%s\033[0m\n", currentStep))
-	b.WriteString("\nLive Log (last 5 lines):\n")
-	b.WriteString(GetLiveLog(workDir, 5))
-	
-	// Final atomic print to terminal
-	fmt.Print(b.String())
+	// Restore cursor position to continue logging below the dashboard
+	fmt.Print("\033[u")
 }
 
 func UpdateStats(workDir string) Stats {
@@ -129,14 +104,4 @@ func countLinesInDir(path string) int {
 		}
 	}
 	return count
-}
-
-func GetLiveLog(workDir string, lines int) string {
-	logPath := filepath.Join(workDir, ".rfuf", "rfuf.log")
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		return "(no log yet)\n"
-	}
-	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logPath)
-	out, _ := cmd.Output()
-	return string(out)
 }
