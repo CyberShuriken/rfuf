@@ -2,8 +2,11 @@ package pipeline
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
@@ -88,6 +91,10 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 	}
 	defer logFile.Close()
 
+	// Setup signal handling for graceful exit
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	
 	steps := GetSteps(domain, paths)
 	stepIDs := make([]string, len(steps))
 	completed := make(map[string]bool)
@@ -98,12 +105,8 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		}
 	}
 
-	// Prepare the screen for the fixed dashboard
-	fmt.Print("\033[2J") // Clear screen
-	// Leave space for the dashboard (approx 15 lines)
-	for i := 0; i < 15; i++ {
-		fmt.Println()
-	}
+	// Prepare the screen
+	fmt.Print("\033[2J\033[H") 
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -111,6 +114,14 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 	for _, s := range steps {
 		if cp.IsCompleted(s.ID) {
 			continue
+		}
+
+		// Check for interruption
+		select {
+		case <-sigChan:
+			fmt.Println("\n[!] Received interrupt signal. Cleaning up and exiting...")
+			return nil
+		default:
 		}
 
 		if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" {
@@ -144,6 +155,9 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 		stopDash <- true
 		
 		if err != nil {
+			if strings.Contains(err.Error(), "interrupted") {
+				return nil
+			}
 			return fmt.Errorf("step %s failed: %v", s.ID, err)
 		}
 

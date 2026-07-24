@@ -1,11 +1,14 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -16,14 +19,22 @@ type Result struct {
 	Duration time.Duration
 }
 
+// RunCommand executes a shell command with signal handling and logging
 func RunCommand(cmdStr string, workDir string, logFile *os.File) (*Result, error) {
 	start := time.Now()
 
-	cmd := exec.Command("bash", "-c", cmdStr)
-	cmd.Dir = workDir
+	// Create a context that is cancelled on interrupt signal
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Log the command
-	header := fmt.Sprintf("\n--- [%s] COMMAND: %s ---\n", time.Now().Format(time.RFC3339), cmdStr)
+	cmd := exec.CommandContext(ctx, "bash", "-c", cmdStr)
+	cmd.Dir = workDir
+	
+	// Ensure child processes are killed when the parent is killed
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Log the command start
+	header := fmt.Sprintf("\n--- [%s] COMMAND START: %s ---\n", time.Now().Format(time.RFC3339), cmdStr)
 	logFile.WriteString(header)
 
 	// Capture output
@@ -34,11 +45,30 @@ func RunCommand(cmdStr string, workDir string, logFile *os.File) (*Result, error
 		return nil, err
 	}
 
-	stdout, _ := io.ReadAll(stdoutPipe)
-	stderr, _ := io.ReadAll(stderrPipe)
+	// Read output in goroutines to prevent blocking
+	stdoutChan := make(chan []byte)
+	stderrChan := make(chan []byte)
+	go func() {
+		out, _ := io.ReadAll(stdoutPipe)
+		stdoutChan <- out
+	}()
+	go func() {
+		errOut, _ := io.ReadAll(stderrPipe)
+		stderrChan <- errOut
+	}()
 
+	// Wait for command completion or context cancellation
 	err := cmd.Wait()
 	duration := time.Since(start)
+
+	// Kill the process group if context was cancelled (Ctrl+C)
+	if ctx.Err() != nil {
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return nil, fmt.Errorf("command interrupted by user")
+	}
+
+	stdout := <-stdoutChan
+	stderr := <-stderrChan
 
 	exitCode := 0
 	if err != nil {
@@ -49,10 +79,10 @@ func RunCommand(cmdStr string, workDir string, logFile *os.File) (*Result, error
 		}
 	}
 
-	// Write to log
+	// Write results to log
 	logFile.Write(stdout)
 	logFile.Write(stderr)
-	footer := fmt.Sprintf("\n--- [%s] EXIT CODE: %d DURATION: %v ---\n", time.Now().Format(time.RFC3339), exitCode, duration)
+	footer := fmt.Sprintf("\n--- [%s] COMMAND END: EXIT %d DURATION %v ---\n", time.Now().Format(time.RFC3339), exitCode, duration)
 	logFile.WriteString(footer)
 
 	return &Result{
