@@ -24,6 +24,13 @@ type Step struct {
 
 var (
 	uiLock sync.Mutex
+
+	// nucleiFast limits request rate so large target lists finish in minutes, not days.
+	nucleiFast = "-rl 150 -c 25 -timeout 10"
+
+	// maxScanTargets caps gf/grep output — without this, broad greps can match all_urls.txt
+	// and multiply scan time by thousands of templates × hundreds of thousands of URLs.
+	maxScanTargets = 5000
 )
 
 func GetSteps(domain string, paths *config.Paths) []Step {
@@ -56,16 +63,16 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"sqlmap_scan", "sqlmap -m sqli_targets.txt --batch --random-agent --level=2 --risk=2 --output-dir=./sqlmap_results", "default"},
 		{"xss_targets", "gf xss all_urls.txt > xss_targets.txt; grep -Ei \"q=|search|query|keyword|text|name|email|msg|redirect|url=\" all_urls.txt >> xss_targets.txt; sort -u xss_targets.txt -o xss_targets.txt", "grep"},
 		{"xss_scan", "cat xss_targets.txt | Gxss -p khXSS | dalfox pipe --batch --output xss_vulnerabilities.txt", "default"},
-		{"rce_targets", "gf rce all_urls.txt > rce_targets.txt; grep -Ei \"cmd=|exec|command|run|ping|ip|file|path|dir|url|daemon|upload\" all_urls.txt >> rce_targets.txt; sort -u rce_targets.txt -o rce_targets.txt", "grep"},
-		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -t %[1]s/http/vulnerabilities/ -t %[1]s/http/cves/ -severity high,critical -o nuclei_rce_rce.txt", paths.NucleiTemplates), "default"},
-		{"idor_targets", "gf idor all_urls.txt > idor_targets.txt; grep -Ei \"id=|user|account|number|order|doc|file|profile|booking|reservation\" all_urls.txt >> idor_targets.txt; sort -u idor_targets.txt -o idor_targets.txt", "grep"},
-		{"idor_scan", fmt.Sprintf("nuclei -l idor_targets.txt -t %[1]s/http/misconfiguration/ -t %[1]s/http/exposed-panels/ -o idor_vulnerabilities.txt", paths.NucleiTemplates), "default"},
+		{"rce_targets", fmt.Sprintf("{ gf rce all_urls.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' all_urls.txt; } | sort -u | head -n %d > rce_targets.txt", maxScanTargets), "grep"},
+		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -tags rce -severity high,critical %s -o nuclei_rce_rce.txt", nucleiFast), "default"},
+		{"idor_targets", fmt.Sprintf("{ gf idor all_urls.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' all_urls.txt; } | sort -u | head -n %d > idor_targets.txt", maxScanTargets), "grep"},
+		{"idor_scan", fmt.Sprintf("nuclei -l idor_targets.txt -tags idor %s -o idor_vulnerabilities.txt", nucleiFast), "default"},
 		{"ssrf_targets", "gf ssrf all_urls.txt > ssrf_targets.txt; grep -Ei \"url=|uri=|path=|dest=|redirect=|callback=|webhook=|src=|fetch=|proxy=|target=\" all_urls.txt >> ssrf_targets.txt; sort -u ssrf_targets.txt -o ssrf_targets.txt", "grep"},
-		{"ssrf_scan", "nuclei -l ssrf_targets.txt -tags ssrf -o ssrf_vulnerabilities.txt", "default"},
-		{"redirect_targets", "gf redirect all_urls.txt > redirect_targets.txt; sort -u redirect_targets.txt -o redirect_targets.txt", "grep"},
-		{"redirect_scan", "nuclei -l redirect_targets.txt -tags redirect -o open_redirect_results.txt", "default"},
+		{"ssrf_scan", fmt.Sprintf("nuclei -l ssrf_targets.txt -tags ssrf %s -o ssrf_vulnerabilities.txt", nucleiFast), "default"},
+		{"redirect_targets", fmt.Sprintf("gf redirect all_urls.txt | sort -u | head -n %d > redirect_targets.txt", maxScanTargets), "grep"},
+		{"redirect_scan", fmt.Sprintf("nuclei -l redirect_targets.txt -tags redirect %s -o open_redirect_results.txt", nucleiFast), "default"},
 		{"lfi_targets", "gf lfi all_urls.txt > lfi_targets.txt; sort -u lfi_targets.txt -o lfi_targets.txt", "grep"},
-		{"lfi_scan", "nuclei -l lfi_targets.txt -tags lfi -o lfi_results.txt", "default"},
+		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiFast), "default"},
 		{"cors_check", "while read -r url; do curl -s -H \"Origin: https://evil.com\" -I \"$url\" | grep -qi \"access-control-allow-origin: https://evil.com\" && echo \"[VULN] $url\"; done < alive.txt > cors_findings.txt", "grep"},
 		{"dirbrute_ffuf", fmt.Sprintf("mkdir -p ffuf_results; while read -r host; do safe_name=$(echo \"$host\" | sed 's|https\\?://||; s|[/:]|_|g'); ffuf -w %s -u \"${host}/FUZZ\" -mc 200 -o \"ffuf_results/${safe_name}.json\" -of json -s; done < alive.txt; for f in ffuf_results/*.json; do jq -r '.results[]? | .url' \"$f\" 2>/dev/null; done | sort -u > ffuf_dirs_200.txt", paths.SeclistsDirWordlist), "default"},
 		{"manual_review_queue", "grep -Ei \"checkout|price|payment|coupon|book|cart|fare\" all_urls.txt | sort -u > manual_business_logic_review.txt", "grep"},
