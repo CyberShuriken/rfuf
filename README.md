@@ -1,11 +1,11 @@
 # rfuf — Recon Faster U Fool
 
-> One command. Full recon pipeline. Resumable. Self-installing.
+> One command. Full recon pipeline. Parallel. Resumable. Self-installing.
 
 `rfuf` is a single-binary orchestration layer that chains together the
 bug-bounty recon tools you already use — `subfinder`, `dnsx`, `httpx`,
-`katana`, `nuclei`, `sqlmap`, `dalfox`, `ffuf`, and more — into a single
-sequential, checkpointed, restartable scan.
+`katana`, `nuclei`, `sqlmap`, `dalfox`, `ffuf`, and more — into a 
+**parallelized, dependency-aware** pipeline that is checkpointed and restartable.
 
 It does not reinvent any of those tools. It just runs them in the right
 order, against the right files, with the right flags, and remembers where
@@ -42,24 +42,22 @@ step, and can resume exactly where it stopped.
 
 ## Features
 
-- **Single command, full pipeline** — subdomain enum → DNS → takeovers →
-  HTTP probing → nuclei → crawling → secret scanning → SQLi/XSS/RCE/IDOR
-  /SSRF/LFI/open-redirect → CORS → directory brute-force.
+- **Single command, parallel pipeline** — intelligent dependency tracking 
+  allows multiple tools to run simultaneously (e.g., `subfinder`, `assetfinder`, 
+  and `amass` run in parallel) while ensuring data integrity.
 - **Crash-safe checkpoints** — every completed step is written to
   `checkpoint.json`. Kill the process, restart, pick up where you stopped.
 - **Self-installing** — missing tools are detected and installed via
   `go install` or `apt`. GF patterns are cloned if absent.
 - **One-command system install** — `rfuf install` places the binary in
-  `/opt/rfuf/` and auto-configures `~/.bashrc` or `~/.zshrc` based on
-  your login shell, so `rfuf` is on `$PATH` everywhere after one run.
+  `/opt/rfuf/` and auto-configures your shell.
+- **Live Multi-Stage Dashboard** — real-time tracking of all active stages 
+  with a visual progress bar and live vulnerability stats.
 - **Zero configuration** — no API keys, no YAML, no environment file. Pass
   `-d` and go.
-- **Per-domain output directory** — every run writes to
-  `~/Desktop/Bug_Bounty/<domain>/` for clean separation between targets.
-- **Auto-generated `SUMMARY.md`** — final run produces a Markdown report
-  with finding counts and a manual-review checklist.
-- **Pure Go, no runtime dependencies** — single static binary, no
-  Python, no Node, no Docker.
+- **Per-domain output directory** — clean separation between targets.
+- **Auto-generated `SUMMARY.md`** — final report with finding counts.
+- **Pure Go** — single static binary, no runtime dependencies.
 
 ## How It Works
 
@@ -78,11 +76,11 @@ step, and can resume exactly where it stopped.
         └────────────┬───────────────┘
                      ▼
    ┌─────────────────────────────────────────────┐
-   │  3. Execute pipeline stages sequentially    │
-   │     (subfinder → dnsx → nuclei → … → ffuf)  │
+   │  3. Parallel Pipeline Execution              │
+   │     (Dependency-aware graph execution)      │
    │                                             │
-   │     After each successful step:             │
-   │       • record step ID in checkpoint.json   │
+   │     • Runs multiple tools simultaneously    │
+   │     • Thread-safe checkpointing             │
    └─────────────────────┬───────────────────────┘
                          ▼
               ┌──────────────────────┐

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 type Checkpoint struct {
+	mu             sync.Mutex
 	Domain         string    `json:"domain"`
 	StartedAt      time.Time `json:"started_at"`
 	LastUpdated    time.Time `json:"last_updated"`
@@ -41,6 +43,8 @@ func Load(workDir string, domain string) (*Checkpoint, error) {
 }
 
 func (cp *Checkpoint) Save() error {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
 	cp.LastUpdated = time.Now()
 	data, err := json.MarshalIndent(cp, "", "  ")
 	if err != nil {
@@ -56,6 +60,8 @@ func (cp *Checkpoint) Save() error {
 }
 
 func (cp *Checkpoint) IsCompleted(stepID string) bool {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
 	for _, s := range cp.CompletedSteps {
 		if s == stepID {
 			return true
@@ -65,17 +71,17 @@ func (cp *Checkpoint) IsCompleted(stepID string) bool {
 }
 
 func (cp *Checkpoint) CompleteStep(stepID string) error {
+	cp.mu.Lock()
 	cp.CompletedSteps = append(cp.CompletedSteps, stepID)
+	cp.mu.Unlock()
 	return cp.Save()
 }
 
-// Reset clears all completed steps and resets the start time to now.
-// This is used when starting a fresh scan without resuming a previous one,
-// so that the pipeline runs every step from scratch instead of skipping
-// steps carried over from a prior run.
 func (cp *Checkpoint) Reset() error {
+	cp.mu.Lock()
 	cp.CompletedSteps = []string{}
 	cp.StartedAt = time.Now()
 	cp.LastUpdated = time.Now()
+	cp.mu.Unlock()
 	return cp.Save()
 }

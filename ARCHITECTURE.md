@@ -5,7 +5,7 @@ This document describes how `rfuf` is structured and how the recon pipeline work
 
 ## Overview
 
-`rfuf` is a Go CLI that orchestrates external recon tools in a **fixed sequential pipeline**.
+`rfuf` is a Go CLI that orchestrates external recon tools in a **parallelized dependency graph**.
 It does not wrap tool APIs — each stage runs a **bash one-liner** via `internal/executor`.
 
 ```
@@ -13,8 +13,10 @@ cmd/rfuf/main.go
   → config.ResolvePaths()
   → installer.EnsureTools() / EnsureSeclists()
   → pipeline.Run()
-       → checkpoint load/save (.rfuf/checkpoint.json)
-       → executor.RunCommand() per stage
+       → checkpoint load/save (.rfuf/checkpoint.json) [Thread-Safe]
+       → pipeline.ExecuteGraph()
+            → Concurrently run steps whose dependencies are met
+            → executor.RunCommand() per stage
        → summary.Generate() → SUMMARY.md
 ```
 
@@ -35,13 +37,13 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
 
 ## Pipeline Rules (Do Not Break)
 
-1. **Stages run in order** — defined only in `internal/pipeline/pipeline.go` → `GetSteps()`.
-2. **Checkpoint after every success** — step ID stored in `checkpoint.json`.
+1. **Dependency Integrity** — stages run as soon as their `Deps` (dependencies) are met.
+2. **Thread-Safe Checkpointing** — `checkpoint.json` is updated via a mutex-protected process.
 3. **Fresh run clears checkpoint** — `rfuf -d domain` without `-resume` resets progress.
 4. **Step types:**
    - `"default"` — exit code 0 = success
    - `"grep"` — exit code 0 or 1 = success (no matches is OK)
-5. **Do not run full nuclei template directories against URL lists** — use `-tags` (see below).
+5. **Dashboard Consistency** — The UI uses ANSI escapes to maintain a fixed multi-stage dashboard at the top of the terminal.
 
 ## Data Flow
 

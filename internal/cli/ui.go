@@ -28,12 +28,12 @@ type Stats struct {
 }
 
 // DrawDashboard uses ANSI "Save Cursor" and "Restore Cursor" to keep the dashboard fixed at the top
-func DrawDashboard(domain string, startTime time.Time, steps []string, completed map[string]bool, currentStep string, stats Stats) {
+func DrawDashboard(domain string, startTime time.Time, steps []string, completed map[string]bool, currentSteps string, stats Stats) {
 	// Save cursor position, move to top-left (1,1)
 	fmt.Print("\033[s\033[1;1H")
 	
-	// Clear the lines we're about to write (approx 15 lines for the header)
-	for i := 0; i < 15; i++ {
+	// Clear the lines we're about to write (approx 20 lines for the header)
+	for i := 0; i < 20; i++ {
 		fmt.Print("\033[2K\n")
 	}
 	// Move back to top-left
@@ -42,7 +42,7 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 	elapsed := time.Since(startTime).Round(time.Second)
 
 	fmt.Println("\033[1;36m┌────────────────────────────────────────────────────────────────────────┐\033[0m")
-	fmt.Println("\033[1;36m│ rfuf ─ RECON FASTER U FOOL                                            │\033[0m")
+	fmt.Println("\033[1;36m│ rfuf ─ RECON FASTER U FOOL (Parallel Mode)                             │\033[0m")
 	fmt.Printf("\033[1;36m│\033[0m Target: \033[1m%-30s\033[0m | Elapsed: \033[1;33m%-15v\033[0m \033[1;36m│\033[0m\n", domain, elapsed)
 	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────────────────────┤\033[0m")
 	fmt.Println("\033[1;36m│ LIVE STATS:                                                            │\033[0m")
@@ -50,9 +50,27 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 	fmt.Printf("\033[1;36m│\033[0m Secrets: \033[1;31m%-5d\033[0m | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d \033[1;36m│\033[0m\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF)
 	fmt.Printf("\033[1;36m│\033[0m SQLi: %-5d | XSS: %-5d  | RCE: %-5d | IDOR: %-5d | SSRF: %-5d \033[1;36m│\033[0m\n", stats.SQLi, stats.XSS, stats.RCE, stats.IDOR, stats.SSRF)
 	fmt.Printf("\033[1;36m│\033[0m Redir: %-5d | LFI: %-5d                                            \033[1;36m│\033[0m\n", stats.Redirect, stats.LFI)
+	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────────────────────┤\033[0m")
+	
+	// Progress Bar
+	doneCount := 0
+	for _, s := range steps {
+		if completed[s] {
+			doneCount++
+		}
+	}
+	pct := float64(doneCount) / float64(len(steps)) * 100
+	barLen := 50
+	filledLen := int(float64(barLen) * pct / 100)
+	bar := strings.Repeat("█", filledLen) + strings.Repeat("░", barLen-filledLen)
+	fmt.Printf("\033[1;36m│\033[0m Progress: [%s] %3.0f%% (%d/%d) \033[1;36m│\033[0m\n", bar, pct, doneCount, len(steps))
 	fmt.Println("\033[1;36m└────────────────────────────────────────────────────────────────────────┘\033[0m")
 
-	fmt.Printf("\n[*] Current Step: \033[1;34m%s\033[0m\n", currentStep)
+	if currentSteps == "FINISHED" {
+		fmt.Println("\n[+] \033[1;32mALL STAGES COMPLETE!\033[0m")
+	} else {
+		fmt.Printf("\n[*] Active Stages: \033[1;34m%s\033[0m\n", currentSteps)
+	}
 	fmt.Println(strings.Repeat("─", 74))
 	
 	// Restore cursor position to continue logging below the dashboard
