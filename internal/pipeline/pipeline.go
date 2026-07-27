@@ -27,8 +27,8 @@ type Step struct {
 var (
 	uiLock sync.Mutex
 
-	// nucleiOptimized provides better performance for large scans
-	nucleiOptimized = "-rl 300 -c 50 -bs 25 -timeout 7 -silent -no-interact"
+		// nucleiOptimized provides better performance for large scans
+		nucleiOptimized = " -rl 300 -c 50 -bs 25 -timeout 7 -silent -no-interact"
 
 	// maxScanTargets caps gf/grep output
 	maxScanTargets = 5000
@@ -50,7 +50,7 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 			{"validate_takeovers", fmt.Sprintf("nuclei -l takeover_targets.txt -t %s/http/takeovers/ %s -o validated_takeovers.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"extract_takeover_targets"}},
 			{"httpx_probe", "httpx -l live_subs.txt -silent -o alive.txt", "default", []string{"dnsx_resolve"}},
 			{"nuclei_exposures", fmt.Sprintf("nuclei -l alive.txt -tags token-spray,exposure,config -severity medium,high,critical %s -o credentials_found.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
-			{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -t %[1]s/http/vulnerabilities/ -t %[1]s/http/exposed-panels/ -t %[1]s/http/misconfiguration/ %[2]s -o misconfigs.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"httpx_probe"}},
+			{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -t %s/http/vulnerabilities/ -t %s/http/exposed-panels/ -t %s/http/misconfiguration/ %s -o misconfigs.txt", paths.NucleiTemplates, paths.NucleiTemplates, paths.NucleiTemplates, nucleiOptimized), "default", []string{"httpx_probe"}},
 			{"nuclei_auth_scan", fmt.Sprintf("nuclei -l alive.txt -tags jwt,auth-bypass,default-login %s -o auth_results.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
 			{"nuclei_graphql_scan", fmt.Sprintf("nuclei -l alive.txt -t %s/http/exposed-panels/graphql/ %s -o graphql_exposed.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"httpx_probe"}},
 		{"katana_crawl", "katana -list alive.txt -jc -kf all -d 3 -fs rdn -o katana_urls.txt", "default", []string{"httpx_probe"}},
