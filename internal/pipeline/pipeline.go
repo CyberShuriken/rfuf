@@ -27,8 +27,8 @@ type Step struct {
 var (
 	uiLock sync.Mutex
 
-	// nucleiFast limits request rate so large target lists finish in minutes, not days.
-	nucleiFast = "-rl 150 -c 25 -timeout 10"
+	// nucleiOptimized provides better performance for large scans
+	nucleiOptimized = "-rl 300 -c 50 -bs 25 -timeout 7 -silent -no-interact"
 
 	// maxScanTargets caps gf/grep output
 	maxScanTargets = 5000
@@ -47,12 +47,12 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"dnsx_resolve", "dnsx -l subs.txt -silent -o live_subs.txt", "default", []string{"merge_subs"}},
 		{"subzy_takeover", "subzy run --targets live_subs.txt --vuln | tee subzy_vulnerable.txt", "default", []string{"dnsx_resolve"}},
 		{"extract_takeover_targets", fmt.Sprintf("grep \"VULNERABLE\" subzy_vulnerable.txt | grep -oE '[a-zA-Z0-9._-]+\\.%s' | sort -u > takeover_targets.txt", domainEscaped), "grep", []string{"subzy_takeover"}},
-		{"validate_takeovers", fmt.Sprintf("nuclei -l takeover_targets.txt -t %s/http/takeovers/ -o validated_takeovers.txt", paths.NucleiTemplates), "default", []string{"extract_takeover_targets"}},
-		{"httpx_probe", "httpx -l live_subs.txt -silent -o alive.txt", "default", []string{"dnsx_resolve"}},
-		{"nuclei_exposures", "nuclei -l alive.txt -tags token-spray,exposure,config -severity medium,high,critical -o credentials_found.txt", "default", []string{"httpx_probe"}},
-		{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -t %[1]s/http/vulnerabilities/ -t %[1]s/http/exposed-panels/ -t %[1]s/http/misconfiguration/ -o misconfigs.txt", paths.NucleiTemplates), "default", []string{"httpx_probe"}},
-		{"nuclei_auth_scan", "nuclei -l alive.txt -tags jwt,auth-bypass,default-login -o auth_results.txt", "default", []string{"httpx_probe"}},
-		{"nuclei_graphql_scan", fmt.Sprintf("nuclei -l alive.txt -t %s/http/exposed-panels/graphql/ -o graphql_exposed.txt", paths.NucleiTemplates), "default", []string{"httpx_probe"}},
+			{"validate_takeovers", fmt.Sprintf("nuclei -l takeover_targets.txt -t %s/http/takeovers/ %s -o validated_takeovers.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"extract_takeover_targets"}},
+			{"httpx_probe", "httpx -l live_subs.txt -silent -o alive.txt", "default", []string{"dnsx_resolve"}},
+			{"nuclei_exposures", fmt.Sprintf("nuclei -l alive.txt -tags token-spray,exposure,config -severity medium,high,critical %s -o credentials_found.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
+			{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -t %[1]s/http/vulnerabilities/ -t %[1]s/http/exposed-panels/ -t %[1]s/http/misconfiguration/ %[2]s -o misconfigs.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"httpx_probe"}},
+			{"nuclei_auth_scan", fmt.Sprintf("nuclei -l alive.txt -tags jwt,auth-bypass,default-login %s -o auth_results.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
+			{"nuclei_graphql_scan", fmt.Sprintf("nuclei -l alive.txt -t %s/http/exposed-panels/graphql/ %s -o graphql_exposed.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"httpx_probe"}},
 		{"katana_crawl", "katana -list alive.txt -jc -kf all -d 3 -fs rdn -o katana_urls.txt", "default", []string{"httpx_probe"}},
 		{"clean_urls", fmt.Sprintf("grep -Ei '^https?://([a-zA-Z0-9-]+\\.)*%s' katana_urls.txt | grep -Ev '\\.(css|js|png|jpg|jpeg|gif|pdf|svg|ico)($|\\?)' | sed 's/\\\\$//' | sort -u > clean_katana_urls.txt", domainEscaped), "grep", []string{"katana_crawl"}},
 		{"trufflehog_scan", "trufflehog filesystem clean_katana_urls.txt --only-verified > trufflehog_results.txt", "default", []string{"clean_urls"}},
@@ -65,15 +65,15 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"xss_targets", "gf xss all_urls.txt > xss_targets.txt; grep -Ei \"q=|search|query|keyword|text|name|email|msg|redirect|url=\" all_urls.txt >> xss_targets.txt; sort -u xss_targets.txt -o xss_targets.txt", "grep", []string{"merge_all_urls"}},
 		{"xss_scan", "cat xss_targets.txt | Gxss -p khXSS | dalfox pipe --batch --output xss_vulnerabilities.txt", "default", []string{"xss_targets"}},
 		{"rce_targets", fmt.Sprintf("{ gf rce all_urls.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' all_urls.txt; } | sort -u | head -n %d > rce_targets.txt", maxScanTargets), "grep", []string{"merge_all_urls"}},
-		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -tags rce -severity high,critical %s -o nuclei_rce_rce.txt", nucleiFast), "default", []string{"rce_targets"}},
+		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -tags rce -severity high,critical %s -o nuclei_rce_rce.txt", nucleiOptimized), "default", []string{"rce_targets"}},
 		{"idor_targets", fmt.Sprintf("{ gf idor all_urls.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' all_urls.txt; } | sort -u | head -n %d > idor_targets.txt", maxScanTargets), "grep", []string{"merge_all_urls"}},
-		{"idor_scan", fmt.Sprintf("nuclei -l idor_targets.txt -tags idor %s -o idor_vulnerabilities.txt", nucleiFast), "default", []string{"idor_targets"}},
+		{"idor_scan", fmt.Sprintf("nuclei -l idor_targets.txt -tags idor %s -o idor_vulnerabilities.txt", nucleiOptimized), "default", []string{"idor_targets"}},
 		{"ssrf_targets", "gf ssrf all_urls.txt > ssrf_targets.txt; grep -Ei \"url=|uri=|path=|dest=|redirect=|callback=|webhook=|src=|fetch=|proxy=|target=\" all_urls.txt >> ssrf_targets.txt; sort -u ssrf_targets.txt -o ssrf_targets.txt", "grep", []string{"merge_all_urls"}},
-		{"ssrf_scan", fmt.Sprintf("nuclei -l ssrf_targets.txt -tags ssrf %s -o ssrf_vulnerabilities.txt", nucleiFast), "default", []string{"ssrf_targets"}},
+		{"ssrf_scan", fmt.Sprintf("nuclei -l ssrf_targets.txt -tags ssrf %s -o ssrf_vulnerabilities.txt", nucleiOptimized), "default", []string{"ssrf_targets"}},
 		{"redirect_targets", fmt.Sprintf("gf redirect all_urls.txt | sort -u | head -n %d > redirect_targets.txt", maxScanTargets), "grep", []string{"merge_all_urls"}},
-		{"redirect_scan", fmt.Sprintf("nuclei -l redirect_targets.txt -tags redirect %s -o open_redirect_results.txt", nucleiFast), "default", []string{"redirect_targets"}},
+		{"redirect_scan", fmt.Sprintf("nuclei -l redirect_targets.txt -tags redirect %s -o open_redirect_results.txt", nucleiOptimized), "default", []string{"redirect_targets"}},
 		{"lfi_targets", "gf lfi all_urls.txt > lfi_targets.txt; sort -u lfi_targets.txt -o lfi_targets.txt", "grep", []string{"merge_all_urls"}},
-		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiFast), "default", []string{"lfi_targets"}},
+		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiOptimized), "default", []string{"lfi_targets"}},
 		{"cors_check", "while read -r url; do curl -s -H \"Origin: https://evil.com\" -I \"$url\" | grep -qi \"access-control-allow-origin: https://evil.com\" && echo \"[VULN] $url\"; done < alive.txt > cors_findings.txt", "grep", []string{"httpx_probe"}},
 		{"dirbrute_ffuf", fmt.Sprintf("mkdir -p ffuf_results; while read -r host; do safe_name=$(echo \"$host\" | sed 's|https\\?://||; s|[/:]|_|g'); ffuf -w %s -u \"${host}/FUZZ\" -mc 200 -o \"ffuf_results/${safe_name}.json\" -of json -s; done < alive.txt; for f in ffuf_results/*.json; do jq -r '.results[]? | .url' \"$f\" 2>/dev/null; done | sort -u > ffuf_dirs_200.txt", paths.SeclistsDirWordlist), "default", []string{"httpx_probe"}},
 		{"manual_review_queue", "grep -Ei \"checkout|price|payment|coupon|book|cart|fare\" all_urls.txt | sort -u > manual_business_logic_review.txt", "grep", []string{"merge_all_urls"}},
@@ -125,6 +125,10 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 	running := make(map[string]bool)
 	var mu sync.Mutex
 
+	// Max concurrent steps
+	maxConcurrent := 5
+	semaphore := make(chan struct{}, maxConcurrent)
+	
 	for _, s := range steps {
 		if cp.IsCompleted(s.ID) {
 			completed[s.ID] = true
@@ -182,29 +186,32 @@ func Run(domain string, resume bool, paths *config.Paths) error {
 				}
 			}
 
-			if depsMet {
-				if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" {
-					completed[s.ID] = true
-					cp.CompleteStep(s.ID)
-					continue
-				}
-
-				running[s.ID] = true
-				startedAny = true
-				wg.Add(1)
-				go func(step Step) {
-					defer wg.Done()
-					res, err := executor.RunCommand(step.Command, paths.WorkDir, logFile)
-					
-					mu.Lock()
-					delete(running, step.ID)
-					if err != nil {
-						mu.Unlock()
-						if !strings.Contains(err.Error(), "interrupted") {
-							errChan <- fmt.Errorf("step %s failed: %v", step.ID, err)
-						}
-						return
+				if depsMet {
+					if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" {
+						completed[s.ID] = true
+						cp.CompleteStep(s.ID)
+						continue
 					}
+	
+					running[s.ID] = true
+					startedAny = true
+					wg.Add(1)
+					go func(step Step) {
+						defer wg.Done()
+						semaphore <- struct{}{}
+						defer func() { <-semaphore }()
+
+						res, err := executor.RunCommand(step.Command, paths.WorkDir, logFile)
+						
+						mu.Lock()
+						delete(running, step.ID)
+						if err != nil {
+							mu.Unlock()
+							if !strings.Contains(err.Error(), "interrupted") {
+								errChan <- fmt.Errorf("step %s failed: %v", step.ID, err)
+							}
+							return
+						}
 
 					success := false
 					if step.Type == "grep" {

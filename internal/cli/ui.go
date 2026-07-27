@@ -32,8 +32,8 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 	// Save cursor position, move to top-left (1,1)
 	fmt.Print("\033[s\033[1;1H")
 	
-	// Clear the lines we're about to write (approx 20 lines for the header)
-	for i := 0; i < 20; i++ {
+	// Clear the lines we're about to write (approx 25 lines for the header)
+	for i := 0; i < 25; i++ {
 		fmt.Print("\033[2K\n")
 	}
 	// Move back to top-left
@@ -45,11 +45,21 @@ func DrawDashboard(domain string, startTime time.Time, steps []string, completed
 	fmt.Println("\033[1;36m│ rfuf ─ RECON FASTER U FOOL (Parallel Mode)                             │\033[0m")
 	fmt.Printf("\033[1;36m│\033[0m Target: \033[1m%-30s\033[0m | Elapsed: \033[1;33m%-15v\033[0m \033[1;36m│\033[0m\n", domain, elapsed)
 	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────────────────────┤\033[0m")
-	fmt.Println("\033[1;36m│ LIVE STATS:                                                            │\033[0m")
+	fmt.Println("\033[1;36m│ LIVE FINDINGS:                                                         │\033[0m")
 	fmt.Printf("\033[1;36m│\033[0m Subs: %-5d | Live: %-5d | Alive: %-5d | Takeovers: \033[1;31m%-5d\033[0m       \033[1;36m│\033[0m\n", stats.Subdomains, stats.LiveSubs, stats.AliveHosts, stats.Takeovers)
 	fmt.Printf("\033[1;36m│\033[0m Secrets: \033[1;31m%-5d\033[0m | Auth: %-5d | GQL: %-5d | CORS: %-5d | FFUF: %-5d \033[1;36m│\033[0m\n", stats.Secrets, stats.Auth, stats.GraphQL, stats.CORS, stats.FFUF)
 	fmt.Printf("\033[1;36m│\033[0m SQLi: %-5d | XSS: %-5d  | RCE: %-5d | IDOR: %-5d | SSRF: %-5d \033[1;36m│\033[0m\n", stats.SQLi, stats.XSS, stats.RCE, stats.IDOR, stats.SSRF)
 	fmt.Printf("\033[1;36m│\033[0m Redir: %-5d | LFI: %-5d                                            \033[1;36m│\033[0m\n", stats.Redirect, stats.LFI)
+	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────────────────────┤\033[0m")
+	fmt.Println("\033[1;36m│ RECENT FINDINGS (Last 3):                                              │\033[0m")
+	findings := getRecentFindings(stats)
+	for i := 0; i < 3; i++ {
+		line := ""
+		if i < len(findings) {
+			line = findings[i]
+		}
+		fmt.Printf("\033[1;36m│\033[0m %-70s \033[1;36m│\033[0m\n", line)
+	}
 	fmt.Println("\033[1;36m├────────────────────────────────────────────────────────────────────────┤\033[0m")
 	
 	// Progress Bar
@@ -122,4 +132,18 @@ func countLinesInDir(path string) int {
 		}
 	}
 	return count
+}
+
+func getRecentFindings(stats Stats) []string {
+	var res []string
+	if stats.Takeovers > 0 { res = append(res, fmt.Sprintf("\033[1;31m[!] Subdomain Takeover Found!\033[0m")) }
+	if stats.RCE > 0 { res = append(res, fmt.Sprintf("\033[1;31m[!] RCE Vulnerability Found!\033[0m")) }
+	if stats.SQLi > 0 { res = append(res, fmt.Sprintf("\033[1;31m[!] SQL Injection Found!\033[0m")) }
+	if stats.Secrets > 0 { res = append(res, fmt.Sprintf("\033[1;33m[!] Secrets Exposed!\033[0m")) }
+	if stats.XSS > 0 { res = append(res, fmt.Sprintf("\033[1;33m[!] XSS Found!\033[0m")) }
+	
+	if len(res) == 0 {
+		return []string{"Scanning in progress... No critical findings yet."}
+	}
+	return res
 }
