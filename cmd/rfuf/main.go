@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/CyberShuriken/rfuf/internal/config"
 	"github.com/CyberShuriken/rfuf/internal/installer"
@@ -28,6 +29,7 @@ func main() {
 
 	domain := flag.String("d", "", "Target domain for recon")
 	resume := flag.Bool("resume", false, "Resume a previous scan")
+	stepTimeout := flag.Duration("step-timeout", 2*time.Hour, "Maximum runtime for each pipeline step (0 disables the limit)")
 	showVersion := flag.Bool("v", false, "Show version")
 	showHelp := flag.Bool("h", false, "Show help")
 
@@ -83,7 +85,7 @@ func main() {
 	}
 
 	// 4. Run Pipeline
-	if err := pipeline.Run(*domain, *resume, paths); err != nil {
+	if err := pipeline.Run(*domain, *resume, paths, *stepTimeout); err != nil {
 		fmt.Printf("[!] Pipeline failed: %v\n", err)
 		os.Exit(1)
 	}

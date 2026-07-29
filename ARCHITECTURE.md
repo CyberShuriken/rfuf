@@ -57,7 +57,7 @@ katana → katana_urls.txt → clean_katana_urls.txt
 gau + waybackurls + katana → all_urls.txt
 gf + grep → *_targets.txt
 tool scan → *_results.txt / sqlmap_results/
-ffuf → ffuf_dirs_200.txt
+ffuf → ffuf_dirs_raw.txt → dirbrute_verify_200 → ffuf_dirs_200.txt
 grep business logic → manual_business_logic_review.txt
 ```
 
@@ -103,7 +103,7 @@ Rules for `*_targets` steps:
 2. Optional **grep** must match **query parameters** (`[?&]param=`), not bare words like `file`, `url`, `user`, `run` (those match almost every URL).
 3. Always **`sort -u | head -n 5000`** for rce/idor/redirect targets to cap worst-case size.
 
-## All 39 Stage IDs (execution order)
+## All Stage IDs (execution order)
 
 1. setup_directories  
 2. subfinder  
@@ -127,23 +127,30 @@ Rules for `*_targets` steps:
 20. gau_urls  
 21. wayback_urls  
 22. merge_all_urls  
-23. sqli_targets  
-24. sqlmap_scan  
-25. xss_targets  
-26. xss_scan  
-27. rce_targets  
-28. rce_scan  
-29. idor_targets  
-30. idor_scan  
-31. ssrf_targets  
-32. ssrf_scan  
-33. redirect_targets  
-34. redirect_scan  
-35. lfi_targets  
-36. lfi_scan  
-37. cors_check  
-38. dirbrute_ffuf  
-39. manual_review_queue  
+23. uro_dedup  
+24. url_filter_alive (writes `all_urls_200.txt`; all `*_targets` deps switch here)  
+25. sqli_targets  
+26. sqlmap_scan (level=3, risk=1, technique=BEUSTQ)  
+27. ghauri_sqli (technique=BT, capped)  
+28. xss_targets  
+29. xss_scan  
+30. rce_targets  
+31. rce_scan  
+32. idor_targets  
+33. idor_scan  
+34. ssrf_targets  
+35. ssrf_scan  
+36. redirect_targets  
+37. redirect_scan  
+38. lfi_targets  
+39. lfi_scan  
+40. cors_check  
+41. dirbrute_ffuf (two-wordlist, recursion depth 2, maxtime 600)  
+42. dirbrute_verify_200 (httpx -mc 200 on raw ffuf hits)  
+43. waf_detect  
+44. port_scan_naabu  
+45. hidden_params_arjun  
+46. manual_review_queue  
 
 ## Safe Change Checklist for Agents
 

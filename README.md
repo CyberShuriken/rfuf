@@ -56,7 +56,9 @@ step, and can resume exactly where it stopped.
 - **Zero configuration** — no API keys, no YAML, no environment file. Pass
   `-d` and go.
 - **Per-domain output directory** — clean separation between targets.
-- **Auto-generated `SUMMARY.md`** — final report with finding counts.
+- **Auto-generated `findings.md`** — severity-grouped report with retest
+  hints per vulnerability class and a transparent "what was filtered out"
+  appendix. Open this first after a run.
 - **Pure Go** — single static binary, no runtime dependencies.
 
 ## How It Works
@@ -92,13 +94,16 @@ step, and can resume exactly where it stopped.
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Go          | 1.22+   | `sudo dnf install -y golang` |
-| Linux       | Any modern distro (tested on Fedora) | macOS likely works but is untested |
-| `sudo`      | —       | Required for installing `seclists` and `sqlmap` via `apt`/`dnf` |
+| Go          | 1.22+   | `sudo dnf install -y golang` (Fedora) / `sudo apt install -y golang-go` (Kali/Debian/Ubuntu) |
+| Linux       | Fedora 41+ or Kali / Debian / Ubuntu 22.04+ | macOS likely works but is untested |
+| `sudo`      | —       | Required for installing `seclists` / `sqlmap` via `apt`/`dnf` |
 | Disk        | ~2 GB   | Tool binaries + nuclei templates + SecLists |
+| Python 3    | 3.10+   | Required on Fedora for `wafw00f`, `arjun`, `ghauri` (already present on Kali) |
 
-`jq`, `seclists`, and all Go-based tools will be auto-installed on first
-run if missing.
+`jq`, `seclists`, and every Go-based tool are auto-installed on first
+run if missing. The installer detects your package manager (Fedora →
+`dnf`, Kali/Debian/Ubuntu → `apt`) and uses the right install command
+for each.
 
 ## Installation
 
@@ -149,6 +154,7 @@ sudo cp bin/rfuf /usr/local/bin/               # any dir already on $PATH
 rfuf install              # one-time system install (places binary in /opt/rfuf)
 rfuf -d example.com       # fresh full scan
 rfuf -d example.com -resume  # continue a previously interrupted scan
+rfuf -d example.com -step-timeout 4h  # allow up to four hours per stage
 rfuf -v                   # print version
 rfuf -h                   # show help
 ```
@@ -162,10 +168,17 @@ By default all output is written to:
 Override the working directory or target list is intentionally not
 exposed — the tool is opinionated by design.
 
+Each pipeline stage has a two-hour wall-clock limit by default. This keeps a
+single unresponsive upstream tool from leaving the dashboard stuck indefinitely.
+Use `-step-timeout <duration>` to adjust it, or `-step-timeout 0` only when you
+explicitly want to permit unlimited stage runtime.
+
 ## Pipeline Stages
 
 `rfuf` runs the following stages in order. Every stage is checkpointed;
-re-running with `-resume` skips the ones already completed.
+re-running with `-resume` skips the ones already completed. Stages
+added per the bb-methodology / security-arsenal playbook are marked
+**new**.
 
 | # | Stage | Tool(s) | Output |
 |---|-------|---------|--------|
@@ -180,17 +193,29 @@ re-running with `-resume` skips the ones already completed.
 | 9 | Crawling | `katana` | `katana_urls.txt` → `clean_katana_urls.txt` |
 | 10 | Secret scanning | `trufflehog` + grep | `trufflehog_results.txt`, `potential_secrets.txt` |
 | 11 | Historical URL mining | `gau`, `waybackurls` | `all_urls.txt` |
-| 12 | SQLi scan | `gf sqli` → `sqlmap` | `sqlmap_results/` |
-| 13 | XSS scan | `gf xss` → `Gxss` → `dalfox` | `xss_vulnerabilities.txt` |
-| 14 | RCE scan | `gf rce` → `nuclei` | `nuclei_rce_rce.txt` |
-| 15 | IDOR scan | `gf idor` → `nuclei` | `idor_vulnerabilities.txt` |
-| 16 | SSRF scan | `gf ssrf` → `nuclei` | `ssrf_vulnerabilities.txt` |
-| 17 | Open redirect scan | `gf redirect` → `nuclei` | `open_redirect_results.txt` |
-| 18 | LFI scan | `gf lfi` → `nuclei` | `lfi_results.txt` |
-| 19 | CORS reflective-origin check | `curl` | `cors_findings.txt` |
-| 20 | Directory brute-force | `ffuf` + SecLists | `ffuf_results/`, `ffuf_dirs_200.txt` |
-| 21 | Manual review queue | `grep` | `manual_business_logic_review.txt` |
-| 22 | Summary report | (built-in) | `SUMMARY.md` |
+| 12 | URL dedup (**new**) | `uro` | `all_urls.txt` (in place) |
+| 13 | 200-only URL filter (**new**) | `httpx -mc 200` | `all_urls_200.txt` |
+| 14 | SQLi scan | `gf sqli` → `sqlmap` (level=3, risk=1) | `sqlmap_results/` |
+| 15 | SQLi modern scan (**new**) | `ghauri` (BT technique) | `ghauri_results.txt` |
+| 16 | XSS scan | `gf xss` → `Gxss` → `dalfox` | `xss_vulnerabilities.txt` |
+| 17 | RCE scan | `gf rce` → `nuclei` | `nuclei_rce_rce.txt` |
+| 18 | IDOR scan | `gf idor` → `nuclei` | `idor_vulnerabilities.txt` |
+| 19 | SSRF scan | `gf ssrf` → `nuclei` | `ssrf_vulnerabilities.txt` |
+| 20 | Open redirect scan | `gf redirect` → `nuclei` | `open_redirect_results.txt` |
+| 21 | LFI scan | `gf lfi` → `nuclei` | `lfi_results.txt` |
+| 22 | CORS reflective-origin check | `curl` | `cors_findings.txt` |
+| 23 | Directory brute-force | `ffuf` (small wordlist + recursion) | `ffuf_results/`, `ffuf_dirs_raw.txt` |
+| 24 | 200-only verify (**new**) | `httpx -mc 200` on ffuf hits | `ffuf_dirs_200.txt` |
+| 25 | WAF detection (**new**) | `wafw00f` | `waf_detections.txt` |
+| 26 | Port scan (**new**) | `naabu` | `naabu_ports.txt` |
+| 27 | Hidden params (**new**) | `arjun` | `hidden_params.txt` |
+| 28 | Manual review queue | `grep` | `manual_business_logic_review.txt` |
+| 29 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
+
+> Stages 14, 15, 16, 17, 18, 19, 20, 21 source from `all_urls_200.txt` —
+> only endpoints that responded 200 are scanned. Stage 28 (manual review
+> queue) deliberately keeps the unfiltered `all_urls.txt` so the hunter
+> can see all historically-interesting paths, not just live ones.
 
 ## Output Layout
 
@@ -212,6 +237,7 @@ re-running with `-resume` skips the ones already completed.
 ├── trufflehog_results.txt
 ├── potential_secrets.txt
 ├── all_urls.txt
+├── all_urls_200.txt
 ├── sqlmap_results/
 ├── xss_vulnerabilities.txt
 ├── nuclei_rce_rce.txt
@@ -223,7 +249,8 @@ re-running with `-resume` skips the ones already completed.
 ├── ffuf_results/
 ├── ffuf_dirs_200.txt
 ├── manual_business_logic_review.txt
-└── SUMMARY.md
+├── SUMMARY.md
+└── findings.md
 ```
 
 ## Resume vs. Fresh Run
