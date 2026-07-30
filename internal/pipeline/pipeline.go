@@ -71,7 +71,7 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default", nil},
 		{"subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "default", []string{"setup_directories"}},
 		{"assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "default", []string{"setup_directories"}},
-		{"amass_enum", fmt.Sprintf("amass enum -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
+		{"amass_enum", fmt.Sprintf("amass enum -passive -norecursive -timeout 20 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
 		{"amass_parse", fmt.Sprintf("awk '{print $1}' amass_raw.txt | grep \"%s\" | sort -u > amass_sub.txt", domain), "grep", []string{"amass_enum"}},
 		{"merge_subs", "cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}},
 		{"dnsx_resolve", "dnsx -l subs.txt -silent -o live_subs.txt", "default", []string{"merge_subs"}},
