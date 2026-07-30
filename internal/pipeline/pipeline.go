@@ -71,8 +71,24 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default", nil},
 		{"subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "default", []string{"setup_directories"}},
 		{"assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "default", []string{"setup_directories"}},
+<<<<<<< HEAD
 		{"amass_enum", fmt.Sprintf("amass enum -passive -norecursive -timeout 20 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
 		{"amass_parse", fmt.Sprintf("awk '{print $1}' amass_raw.txt | grep \"%s\" | sort -u > amass_sub.txt", domain), "grep", []string{"amass_enum"}},
+=======
+		// amass_enum: bound the runtime inside the command itself. amass
+		// defaults to active enumeration (zone transfers, cert grabs,
+		// recursive brute forcing) which can run for many hours on a
+		// non-trivial target. -passive skips all of that and uses only
+		// the data-source APIs, finishing in minutes. -timeout 30 is
+		// defense in depth: even if the global -step-timeout is disabled,
+		// amass still exits in 30 minutes.
+		{"amass_enum", fmt.Sprintf("amass enum -passive -timeout 30 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
+		// amass_parse: `amass -o file.txt` writes one subdomain per line,
+		// so the awk '{print $1}' is a no-op. grep -F treats the domain
+		// as a fixed string, so regex metacharacters in the domain
+		// (e.g. dots) cannot misfire.
+		{"amass_parse", fmt.Sprintf("grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt", domain), "grep", []string{"amass_enum"}},
+>>>>>>> 377c431 (feat: Enhance amass command configuration for improved performance and reliability)
 		{"merge_subs", "cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}},
 		{"dnsx_resolve", "dnsx -l subs.txt -silent -o live_subs.txt", "default", []string{"merge_subs"}},
 		{"subzy_takeover", "subzy run --targets live_subs.txt --vuln | tee subzy_vulnerable.txt", "default", []string{"dnsx_resolve"}},
