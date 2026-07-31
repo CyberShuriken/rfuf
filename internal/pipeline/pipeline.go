@@ -71,10 +71,6 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default", nil},
 		{"subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "default", []string{"setup_directories"}},
 		{"assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "default", []string{"setup_directories"}},
-<<<<<<< HEAD
-		{"amass_enum", fmt.Sprintf("amass enum -passive -norecursive -timeout 20 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
-		{"amass_parse", fmt.Sprintf("awk '{print $1}' amass_raw.txt | grep \"%s\" | sort -u > amass_sub.txt", domain), "grep", []string{"amass_enum"}},
-=======
 		// amass_enum: bound the runtime inside the command itself. amass
 		// defaults to active enumeration (zone transfers, cert grabs,
 		// recursive brute forcing) which can run for many hours on a
@@ -82,14 +78,11 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		// the data-source APIs, finishing in minutes. -timeout 30 is
 		// defense in depth: even if the global -step-timeout is disabled,
 		// amass still exits in 30 minutes.
-		{"amass_enum", fmt.Sprintf("amass enum -passive -timeout 30 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
-		// amass_parse: `amass -o file.txt` writes one subdomain per line,
-		// so the awk '{print $1}' is a no-op. grep -F treats the domain
-		// as a fixed string, so regex metacharacters in the domain
-		// (e.g. dots) cannot misfire.
-		{"amass_parse", fmt.Sprintf("grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt", domain), "grep", []string{"amass_enum"}},
->>>>>>> 377c431 (feat: Enhance amass command configuration for improved performance and reliability)
-		{"merge_subs", "cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}},
+		{"amass_enum", fmt.Sprintf("amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}},
+		// amass_parse: `amass -o file.txt` writes one subdomain per line.
+		// grep -F treats the domain as a fixed string. Added file check for resilience.
+		{"amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "grep", []string{"amass_enum"}},
+		{"merge_subs", "touch subfinder.txt assetfinder.txt amass_sub.txt; cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}},
 		{"dnsx_resolve", "dnsx -l subs.txt -silent -o live_subs.txt", "default", []string{"merge_subs"}},
 		{"subzy_takeover", "subzy run --targets live_subs.txt --vuln | tee subzy_vulnerable.txt", "default", []string{"dnsx_resolve"}},
 		{"extract_takeover_targets", fmt.Sprintf("grep \"VULNERABLE\" subzy_vulnerable.txt | grep -oE '[a-zA-Z0-9._-]+\\.%s' | sort -u > takeover_targets.txt", domainEscaped), "grep", []string{"subzy_takeover"}},
@@ -99,16 +92,14 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -tags misconfig,exposure,panel %s -o misconfigs.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
 		{"nuclei_auth_scan", fmt.Sprintf("nuclei -l alive.txt -tags jwt,auth-bypass,default-login %s -o auth_results.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
 		// GraphQL templates are maintained across multiple directories in nuclei-templates.
-		// Filter by tag instead of a layout-dependent path (the old
-		// http/exposed-panels/graphql path no longer exists in current releases).
 		{"nuclei_graphql_scan", fmt.Sprintf("nuclei -l alive.txt -tags graphql %s -o graphql_exposed.txt", nucleiOptimized), "default", []string{"httpx_probe"}},
-		{"katana_crawl", "katana -list alive.txt -jc -kf all -d 3 -fs rdn -o katana_urls.txt", "default", []string{"httpx_probe"}},
+		{"katana_crawl", "[ -s alive.txt ] && katana -list alive.txt -jc -kf all -d 3 -fs rdn -o katana_urls.txt || touch katana_urls.txt", "default", []string{"httpx_probe"}},
 		{"clean_urls", fmt.Sprintf("grep -Ei '^https?://([a-zA-Z0-9-]+\\.)*%s' katana_urls.txt | grep -Ev '\\.(css|js|png|jpg|jpeg|gif|pdf|svg|ico)($|\\?)' | sed 's/\\\\$//' | sort -u > clean_katana_urls.txt", domainEscaped), "grep", []string{"katana_crawl"}},
 		{"trufflehog_scan", "trufflehog filesystem clean_katana_urls.txt --only-verified > trufflehog_results.txt", "default", []string{"clean_urls"}},
 		{"grep_secrets", "grep -Ei \"api_key|apikey|secret|token|password|aws_key|bearer\" clean_katana_urls.txt | sort -u > potential_secrets.txt", "grep", []string{"clean_urls"}},
-		{"gau_urls", "cat live_subs.txt | gau --threads 5 --subs | tee gau_urls.txt", "default", []string{"dnsx_resolve"}},
-		{"wayback_urls", "cat live_subs.txt | waybackurls | tee wayback_urls.txt", "default", []string{"dnsx_resolve"}},
-		{"merge_all_urls", "cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt | sort -u > all_urls.txt", "default", []string{"gau_urls", "wayback_urls", "clean_urls"}},
+		{"gau_urls", "[ -s live_subs.txt ] && cat live_subs.txt | gau --threads 5 --subs | tee gau_urls.txt || touch gau_urls.txt", "default", []string{"dnsx_resolve"}},
+		{"wayback_urls", "[ -s live_subs.txt ] && cat live_subs.txt | waybackurls | tee wayback_urls.txt || touch wayback_urls.txt", "default", []string{"dnsx_resolve"}},
+		{"merge_all_urls", "touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt; cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt | sort -u > all_urls.txt", "default", []string{"gau_urls", "wayback_urls", "clean_urls"}},
 
 		// URL dedup. all_urls.txt can balloon to 100k+ entries from
 		// gau + wayback + katana; uro collapses the noise down to unique
@@ -120,13 +111,11 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		// feeding those to sqlmap/dalfox/nuclei wastes time and produces
 		// false-positive "Parameter might be injectable" noise from timeouts.
 		// httpx -mc 200 keeps only endpoints that respond OK at scan time.
-		// manual_review_queue below deliberately keeps the full stream so the
-		// hunter can see *all* historically-interesting paths, not just live ones.
 		{"url_filter_alive", "httpx -l all_urls.txt -silent -status-code -mc 200 -o all_urls_200.txt", "grep", []string{"uro_dedup"}},
 		{"sqli_targets", fmt.Sprintf("{ gf sqli all_urls_200.txt; grep -Ei '%s' all_urls_200.txt; } | sort -u | head -n %d > sqli_targets.txt", sqlmapHighSignalParams, sqlmapTargetCap), "grep", []string{"url_filter_alive"}},
-		{"sqlmap_scan", "sqlmap -m sqli_targets.txt --batch --random-agent --flush-session --technique=BEUSTQ --level=3 --risk=1 --output-dir=./sqlmap_results", "default", []string{"sqli_targets"}},
+		{"sqlmap_scan", "[ -s sqli_targets.txt ] && sqlmap -m sqli_targets.txt --batch --random-agent --flush-session --technique=BEUSTQ --level=3 --risk=1 --output-dir=./sqlmap_results || mkdir -p sqlmap_results", "default", []string{"sqli_targets"}},
 		{"xss_targets", "{ gf xss all_urls_200.txt; grep -Ei \"q=|search|query|keyword|text|name|email|msg|redirect|url=\" all_urls_200.txt; } | sort -u > xss_targets.txt", "grep", []string{"url_filter_alive"}},
-		{"xss_scan", "cat xss_targets.txt | Gxss -p khXSS | dalfox pipe --output xss_vulnerabilities.txt", "default", []string{"xss_targets"}},
+		{"xss_scan", "[ -s xss_targets.txt ] && cat xss_targets.txt | Gxss -p khXSS | dalfox pipe --output xss_vulnerabilities.txt || touch xss_vulnerabilities.txt", "default", []string{"xss_targets"}},
 		{"rce_targets", fmt.Sprintf("{ gf rce all_urls_200.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' all_urls_200.txt; } | sort -u | head -n %d > rce_targets.txt", maxScanTargets), "grep", []string{"url_filter_alive"}},
 		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -tags rce -severity high,critical %s -o nuclei_rce_rce.txt", nucleiOptimized), "default", []string{"rce_targets"}},
 		{"idor_targets", fmt.Sprintf("{ gf idor all_urls_200.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' all_urls_200.txt; } | sort -u | head -n %d > idor_targets.txt", maxScanTargets), "grep", []string{"url_filter_alive"}},
@@ -138,45 +127,21 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"lfi_targets", "gf lfi all_urls_200.txt > lfi_targets.txt; sort -u lfi_targets.txt -o lfi_targets.txt", "grep", []string{"url_filter_alive"}},
 		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiOptimized), "default", []string{"lfi_targets"}},
 		{"cors_check", "while read -r url; do curl -s -H \"Origin: https://evil.com\" -I \"$url\" | grep -qi \"access-control-allow-origin: https://evil.com\" && echo \"[VULN] $url\"; done < alive.txt > cors_findings.txt", "grep", []string{"httpx_probe"}},
-		// Fast ffuf pass. Per-host bash loop is gone — a single ffuf invocation
-		// with two wordlists (-w hosts.txt:HOST, -w words.txt:WORD) fans out
-		// across all hosts in one process, shares ffuf's internal connection
-		// pool, and respects -t/-maxtime globally. Discovery accepts
-		// 200/301/302/403 so admin panels + .git/.env behind 403 aren't
-		// dropped; the verify step below prunes to 200-only for downstream
-		// use. Recursion depth 2 catches /admin/FUZZ → /admin/login/FUZZ.
-		{"dirbrute_ffuf", fmt.Sprintf("mkdir -p ffuf_results; if [ -n \"%s\" ]; then ffuf -w alive.txt:HOST -w %s:WORD -u \"HOST/CODE:WORD\" -mc 200,301,302,403 -ac -t 50 -maxtime 600 -recursion -recursion-depth 2 -o ffuf_results/all.json -of json -s; jq -r '.results[]? | .url' ffuf_results/all.json 2>/dev/null | sort -u > ffuf_dirs_raw.txt; else : > ffuf_dirs_raw.txt; fi", wordlist, wordlist), "default", []string{"httpx_probe"}},
+		// Fast ffuf pass. Single ffuf invocation with two wordlists.
+		{"dirbrute_ffuf", fmt.Sprintf("mkdir -p ffuf_results; if [ -n \"%s\" ] && [ -s alive.txt ]; then ffuf -w alive.txt:HOST -w %s:WORD -u \"HOST/WORD\" -mc 200,301,302,403 -ac -t 50 -maxtime 600 -recursion -recursion-depth 2 -o ffuf_results/all.json -of json -s; jq -r '.results[]? | .url' ffuf_results/all.json 2>/dev/null | sort -u > ffuf_dirs_raw.txt; else : > ffuf_dirs_raw.txt; fi", wordlist, wordlist), "default", []string{"httpx_probe"}},
 
-		// 200-only verification of ffuf hits. ffuf above accepts 200/301/302/403
-		// for discovery coverage, but downstream scanners (sqlmap, dalfox, etc.)
-		// only test endpoints that actually respond 200 — verifying here keeps
-		// the dashboard's ffuf_dirs_200.txt count trustworthy.
+		// 200-only verification of ffuf hits.
 		{"dirbrute_verify_200", "if [ -s ffuf_dirs_raw.txt ]; then httpx -l ffuf_dirs_raw.txt -silent -status-code -mc 200 -o ffuf_dirs_200.txt; else : > ffuf_dirs_200.txt; fi", "grep", []string{"dirbrute_ffuf"}},
 		{"manual_review_queue", "grep -Ei \"checkout|price|payment|coupon|book|cart|fare\" all_urls.txt | sort -u > manual_business_logic_review.txt", "grep", []string{"merge_all_urls"}},
 
 		// === Modern methodology additions (bb-methodology + security-arsenal) ===
-		// Each new stage is gated on its tool being present on PATH, so a
-		// missing binary skips cleanly instead of failing the pipeline.
-
-		// WAF fingerprinting — know what you're dealing with before tuning
-		// payloads. Output is plain text, one WAF vendor per detected host.
 		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then wafw00f -i alive.txt -o waf_detections.txt || true; else : > waf_detections.txt; fi", "grep", []string{"httpx_probe"}},
-
-		// Port scan (top-1000) on the live host set. We cap rate and top
-		// ports so this stays fast even on large subdomain sets.
 		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt || true; else : > naabu_ports.txt; fi", "grep", []string{"httpx_probe"}},
 
-		// Hidden parameter discovery (arjun). Cheap POST/GET brute over
-		// a built-in param wordlist — surfaces undocumented query params
-		// that the developer never documented and probably never secured.
-		// Skipped gracefully when arjun isn't installed.
-		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1; then mkdir -p arjun_results; while read -r host; do safe_name=$(echo \"$host\" | sed 's|https\\?://||; s|[/:]|_|g'); arjun -u \"$host\" -oT arjun_results/${safe_name}.txt -t 5 2>/dev/null || true; done < alive.txt; cat arjun_results/*.txt 2>/dev/null | sort -u > hidden_params.txt; else : > hidden_params.txt; fi", "grep", []string{"httpx_probe"}},
+		// Hidden parameter discovery (arjun). Optimized to use batch input.
+		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then arjun -i alive.txt -oT hidden_params.txt -t 10 --rate-limit 10 || touch hidden_params.txt; else : > hidden_params.txt; fi", "grep", []string{"httpx_probe"}},
 
-		// Modern blind SQLi. Methodology prefers ghauri over sqlmap for
-		// ID-like parameters; sqlmap still runs in the batch stage
-		// above for broad coverage. We only run ghauri against a
-		// capped target list (sqlmap would have already chewed
-		// through the noisy hits).
+		// Modern blind SQLi.
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt || true; else : > ghauri_results.txt; fi", "grep", []string{"sqli_targets"}},
 	}
 }

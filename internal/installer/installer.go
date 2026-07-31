@@ -143,9 +143,9 @@ func GetRequiredTools(goBin string) []Tool {
 		// on these tools gracefully no-op when the binary is missing, so
 		// a pip install failure never blocks the pipeline.
 		{"naabu", "go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest", "naabu"},
-		{"wafw00f", "command -v pipx >/dev/null 2>&1 && pipx install wafw00f || (command -v pip3 >/dev/null 2>&1 && pip3 install --user wafw00f) || pip install --user wafw00f", "wafw00f"},
-		{"arjun", "command -v pipx >/dev/null 2>&1 && pipx install arjun || (command -v pip3 >/dev/null 2>&1 && pip3 install --user arjun) || pip install --user arjun", "arjun"},
-		{"ghauri", "command -v pipx >/dev/null 2>&1 && pipx install ghauri || (command -v pip3 >/dev/null 2>&1 && pip3 install --user ghauri) || pip install --user ghauri", "ghauri"},
+			{"wafw00f", "pipx install wafw00f || pip3 install --break-system-packages wafw00f || pip3 install --user wafw00f", "wafw00f"},
+			{"arjun", "pipx install arjun || pip3 install --break-system-packages arjun || pip3 install --user arjun", "arjun"},
+			{"ghauri", "pipx install git+https://github.com/r0oth3x49/ghauri.git || pip3 install --break-system-packages git+https://github.com/r0oth3x49/ghauri.git", "ghauri"},
 	}
 }
 
