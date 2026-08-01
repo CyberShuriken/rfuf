@@ -29,7 +29,7 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
 | `cmd/rfuf` | CLI flags: `-d`, `-resume`, `-v`, `-h`, `install` subcommand |
 | `internal/config` | Resolves work dir, GOPATH/bin, nuclei templates, seclists wordlist |
 | `internal/installer` | Auto-installs missing Go/apt tools and GF patterns |
-| `internal/pipeline` | **Single source of truth** for all 39 stage definitions |
+| `internal/pipeline` | **Single source of truth** for all 46 stage definitions |
 | `internal/executor` | Runs `bash -c`, logs to `.rfuf/rfuf.log`, handles Ctrl+C |
 | `internal/checkpoint` | Persists completed step IDs for `-resume` |
 | `internal/summary` | Writes `SUMMARY.md` with line counts |
@@ -44,6 +44,8 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
    - `"default"` — exit code 0 = success
    - `"grep"` — exit code 0 or 1 = success (no matches is OK)
 5. **Dashboard Consistency** — The UI uses ANSI escapes to maintain a fixed multi-stage dashboard at the top of the terminal.
+6. **Never use serial shell loops against alive.txt** — `while read; do curl; done < alive.txt` with no timeout against thousands of hosts will stall the pipeline for hours. Use `xargs -P N` for parallelism and always add `--max-time`/`--connect-timeout` to every `curl` invocation. This is why `cors_check` was completely rewritten.
+7. **Cap large-host stages** — any stage that performs one-request-per-host must cap its input (`head -n N`) to a safe ceiling. Current limits: CORS=500, WAF=200, Arjun=100.
 
 ## Data Flow
 
@@ -144,12 +146,12 @@ Rules for `*_targets` steps:
 37. redirect_scan  
 38. lfi_targets  
 39. lfi_scan  
-40. cors_check  
+40. cors_check (**xargs -P 20 parallel, top 500 hosts, --max-time 5 --connect-timeout 3** — serial loop was removed, it caused terminal hang on large targets)  
 41. dirbrute_ffuf (two-wordlist, recursion depth 2, maxtime 600)  
 42. dirbrute_verify_200 (httpx -mc 200 on raw ffuf hits)  
-43. waf_detect  
+43. waf_detect (capped to top 200 hosts)  
 44. port_scan_naabu  
-45. hidden_params_arjun  
+45. hidden_params_arjun (capped to top 100 hosts)  
 46. manual_review_queue  
 
 ## Safe Change Checklist for Agents
@@ -160,7 +162,41 @@ Rules for `*_targets` steps:
 - [ ] Nuclei list scans use `-tags`, not `-t` directories
 - [ ] Target lists capped when sourced from `all_urls.txt`
 - [ ] `"grep"` type set if step uses grep and empty results are OK
+- [ ] **No serial shell loop over alive.txt without a per-request timeout** — use `xargs -P` and `--max-time`
+- [ ] **Input capped** for any one-request-per-host tool
 - [ ] Run `go build ./cmd/rfuf` after changes
+
+## Hang-Prevention Design
+
+A recon pipeline against a target with thousands of alive hosts has a systemic
+failure mode: a stage that iterates hosts serially with no per-request timeout
+stalls indefinitely. The executor's global `-step-timeout` is the last-resort
+backstop (default: 2h), but the real fix is at the stage level.
+
+**Rules applied to every host-iterating stage:**
+
+| Tool | Mechanism | Cap | Per-request timeout |
+|------|-----------|-----|---------------------|
+| `curl` (CORS check) | `xargs -P 20` | 500 hosts | `--max-time 5 --connect-timeout 3` |
+| `wafw00f` | `head -n N` before tool invocation | 200 hosts | tool's internal timeout |
+| `arjun` | `head -n N` before tool invocation | 100 hosts | tool's internal timeout |
+
+**Anti-pattern (removed):**
+```bash
+# BAD — no timeout, serial, blocks the pipeline on the first stalled host
+while read -r url; do
+  curl -s -H "Origin: https://evil.com" -I "$url" | grep -qi "access-control-allow-origin: https://evil.com" && echo "[VULN] $url"
+done < alive.txt > cors_findings.txt
+```
+
+**Fixed pattern:**
+```bash
+# GOOD — 20-way parallel, 5-second max per request, capped to 500 hosts
+head -n 500 alive.txt | xargs -P 20 -I{} sh -c \
+  'curl -sk --max-time 5 --connect-timeout 3 -H "Origin: https://evil.com" -I "{}" 2>/dev/null \
+   | grep -qi "access-control-allow-origin: https://evil.com" && echo "[VULN] {}"' \
+  > cors_findings.txt 2>/dev/null; true
+```
 
 ## Logs & Resume
 

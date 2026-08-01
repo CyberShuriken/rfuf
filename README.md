@@ -203,12 +203,12 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 19 | SSRF scan | `gf ssrf` → `nuclei` | `ssrf_vulnerabilities.txt` |
 | 20 | Open redirect scan | `gf redirect` → `nuclei` | `open_redirect_results.txt` |
 | 21 | LFI scan | `gf lfi` → `nuclei` | `lfi_results.txt` |
-| 22 | CORS reflective-origin check | `curl` | `cors_findings.txt` |
+| 22 | CORS reflective-origin check | `curl` via `xargs -P 20` (parallel, top 500 hosts) | `cors_findings.txt` |
 | 23 | Directory brute-force | `ffuf` (small wordlist + recursion) | `ffuf_results/`, `ffuf_dirs_raw.txt` |
 | 24 | 200-only verify (**new**) | `httpx -mc 200` on ffuf hits | `ffuf_dirs_200.txt` |
-| 25 | WAF detection (**new**) | `wafw00f` | `waf_detections.txt` |
+| 25 | WAF detection (**new**) | `wafw00f` (capped to 200 hosts) | `waf_detections.txt` |
 | 26 | Port scan (**new**) | `naabu` | `naabu_ports.txt` |
-| 27 | Hidden params (**new**) | `arjun` | `hidden_params.txt` |
+| 27 | Hidden params (**new**) | `arjun` (capped to 100 hosts) | `hidden_params.txt` |
 | 28 | Manual review queue | `grep` | `manual_business_logic_review.txt` |
 | 29 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
 
@@ -216,6 +216,17 @@ added per the bb-methodology / security-arsenal playbook are marked
 > only endpoints that responded 200 are scanned. Stage 28 (manual review
 > queue) deliberately keeps the unfiltered `all_urls.txt` so the hunter
 > can see all historically-interesting paths, not just live ones.
+
+### Performance notes
+
+Certain stages cap their input to prevent the pipeline from hanging on
+large targets (thousands of alive hosts):
+
+| Stage | Cap | Reason |
+|-------|-----|--------|
+| **CORS check** (#22) | Top 500 hosts from `alive.txt`, 20 parallel `curl` workers, `--max-time 5 --connect-timeout 3` | The old serial `while read; do curl; done` loop had no timeout — one stalled host per connection could lock the stage for hours |
+| **WAF detection** (#25) | Top 200 hosts | wafw00f issues one HTTP request per host with its own timeouts; 200 hosts is enough to fingerprint the WAF vendor(s) in use |
+| **Hidden params** (#27) | Top 100 hosts | arjun fires many requests per host; capping prevents timeout breaches on large target sets |
 
 ## Output Layout
 

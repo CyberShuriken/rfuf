@@ -126,7 +126,24 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"redirect_scan", fmt.Sprintf("nuclei -l redirect_targets.txt -tags redirect %s -o open_redirect_results.txt", nucleiOptimized), "default", []string{"redirect_targets"}},
 		{"lfi_targets", "gf lfi all_urls_200.txt > lfi_targets.txt; sort -u lfi_targets.txt -o lfi_targets.txt", "grep", []string{"url_filter_alive"}},
 		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiOptimized), "default", []string{"lfi_targets"}},
-		{"cors_check", "while read -r url; do curl -s -H \"Origin: https://evil.com\" -I \"$url\" | grep -qi \"access-control-allow-origin: https://evil.com\" && echo \"[VULN] $url\"; done < alive.txt > cors_findings.txt", "grep", []string{"httpx_probe"}},
+		// cors_check: parallel CORS origin-reflection test.
+		//
+		// The previous implementation used a serial `while read; do curl; done`
+		// loop with no per-request timeout. Against a large target (thousands of
+		// alive hosts) each curl can stall on a slow/unresponsive server for the
+		// OS default TCP timeout (minutes), causing the stage to run for hours
+		// and lock the entire pipeline. The fix:
+		//
+		//   1. Cap the input to 500 hosts (alive.txt is already deduplicated and
+		//      sorted by httpx; the top 500 are the most-recently-probed and
+		//      therefore the most likely to respond quickly).
+		//   2. Feed the capped list to xargs -P 20 so 20 curl requests run in
+		//      parallel (bounded, won't exhaust file descriptors).
+		//   3. Add --max-time 5 --connect-timeout 3 so a single stalled server
+		//      burns at most 5 s instead of minutes.
+		//   4. Keep the one-liner self-contained — no GNU parallel dependency,
+		//      xargs is POSIX and present on every Linux distro.
+		{"cors_check", "head -n 500 alive.txt | xargs -P 20 -I{} sh -c 'curl -sk --max-time 5 --connect-timeout 3 -H \"Origin: https://evil.com\" -I \"{}\" 2>/dev/null | grep -qi \"access-control-allow-origin: https://evil.com\" && echo \"[VULN] {}\"' > cors_findings.txt 2>/dev/null; true", "grep", []string{"httpx_probe"}},
 		// Fast ffuf pass. Single ffuf invocation with two wordlists.
 		{"dirbrute_ffuf", fmt.Sprintf("mkdir -p ffuf_results; if [ -n \"%s\" ] && [ -s alive.txt ]; then ffuf -w alive.txt:HOST -w %s:WORD -u \"HOST/WORD\" -mc 200,301,302,403 -ac -t 50 -maxtime 600 -recursion -recursion-depth 2 -o ffuf_results/all.json -of json -s; jq -r '.results[]? | .url' ffuf_results/all.json 2>/dev/null | sort -u > ffuf_dirs_raw.txt; else : > ffuf_dirs_raw.txt; fi", wordlist, wordlist), "default", []string{"httpx_probe"}},
 
@@ -135,11 +152,17 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		{"manual_review_queue", "grep -Ei \"checkout|price|payment|coupon|book|cart|fare\" all_urls.txt | sort -u > manual_business_logic_review.txt", "grep", []string{"merge_all_urls"}},
 
 		// === Modern methodology additions (bb-methodology + security-arsenal) ===
-		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then wafw00f -i alive.txt -o waf_detections.txt || true; else : > waf_detections.txt; fi", "grep", []string{"httpx_probe"}},
+		// waf_detect: cap to 200 hosts to keep wafw00f runtime bounded.
+		// wafw00f issues one HTTP request per host; at 5k hosts with default
+		// socket timeouts this becomes a 30-min+ serial scan. 200 hosts is
+		// enough to fingerprint the WAF vendor(s) in the target's infrastructure.
+		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then head -n 200 alive.txt > waf_targets_tmp.txt; wafw00f -i waf_targets_tmp.txt -o waf_detections.txt || true; rm -f waf_targets_tmp.txt; else : > waf_detections.txt; fi", "grep", []string{"httpx_probe"}},
 		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt || true; else : > naabu_ports.txt; fi", "grep", []string{"httpx_probe"}},
 
-		// Hidden parameter discovery (arjun). Optimized to use batch input.
-		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then arjun -i alive.txt -oT hidden_params.txt -t 10 --rate-limit 10 || touch hidden_params.txt; else : > hidden_params.txt; fi", "grep", []string{"httpx_probe"}},
+		// Hidden parameter discovery (arjun). Cap to 100 hosts — arjun's
+		// batch mode sends many requests per host; beyond 100 the runtime
+		// easily exceeds the step timeout and yields diminishing returns.
+		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -oT hidden_params.txt -t 10 --rate-limit 10 || touch hidden_params.txt; rm -f arjun_targets_tmp.txt; else : > hidden_params.txt; fi", "grep", []string{"httpx_probe"}},
 
 		// Modern blind SQLi.
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt || true; else : > ghauri_results.txt; fi", "grep", []string{"sqli_targets"}},
