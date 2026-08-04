@@ -1,0 +1,31 @@
+id: rfuf-host-header-injection
+info:
+  name: RFUF — Host header injection
+  author: rfuf
+  severity: high
+  description: |
+    The target reflects a custom Host header value in the response body
+    or Location header. This is the canonical Host-header-injection bug —
+    exploitable for password-reset poisoning (host in reset email link),
+    cache poisoning, and open-redirect chains.
+  reference:
+    - https://portswigger.net/web-security/host-header
+  tags: rfuf,hostheader,injection,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      X-Forwarded-Host: rfufhh.attacker.example
+      X-Host: rfufhh.attacker.example
+    matchers-condition: or
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "rfufhh.attacker.example"
+      - type: word
+        part: header
+        words:
+          - "rfufhh.attacker.example"

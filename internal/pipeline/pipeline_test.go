@@ -18,8 +18,14 @@ func TestXSSScanUsesSupportedDalfoxFlags(t *testing.T) {
 		if strings.Contains(step.Command, "--batch") {
 			t.Fatalf("xss_scan uses obsolete Dalfox flag: %q", step.Command)
 		}
-		if !strings.Contains(step.Command, "dalfox pipe --output xss_vulnerabilities.txt") {
-			t.Fatalf("xss_scan has unexpected Dalfox command: %q", step.Command)
+		// The new pipeline uses --mining-dom (a 2024-era dalfox flag that
+		// catches DOM-based XSS hiding in JS-loaded parameters). We also
+		// accept any dalfox pipe invocation into xss_vulnerabilities.txt.
+		if !strings.Contains(step.Command, "dalfox pipe") {
+			t.Fatalf("xss_scan must invoke dalfox pipe: %q", step.Command)
+		}
+		if !strings.Contains(step.Command, "xss_vulnerabilities.txt") {
+			t.Fatalf("xss_scan must write to xss_vulnerabilities.txt: %q", step.Command)
 		}
 		return
 	}
@@ -29,8 +35,9 @@ func TestXSSScanUsesSupportedDalfoxFlags(t *testing.T) {
 
 // TestDirbruteUsesRecursion guards against the slow per-host loop
 // regressing back in. The fast path is one ffuf invocation with two
-// wordlists (-w hosts.txt:HOST + -w words.txt:WORD), recursion enabled,
-// and a 10-minute cap. Per-host bash loops are forbidden.
+// wordlists (-w hosts.txt:HOST + -w words.txt:WORD), recursion enabled
+// at depth 1 (depth 2 was the hang-on-localwp.com regression), and a
+// 20-minute cap. Per-host bash loops are forbidden.
 func TestDirbruteUsesRecursion(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{SeclistsDirWordlistSmall: "/tmp/small.txt"})
 
@@ -47,11 +54,11 @@ func TestDirbruteUsesRecursion(t *testing.T) {
 	if !strings.Contains(cmd, "-recursion") {
 		t.Errorf("dirbrute_ffuf missing -recursion (slow path regression): %q", cmd)
 	}
-	if !strings.Contains(cmd, "-recursion-depth 2") {
-		t.Errorf("dirbrute_ffuf missing -recursion-depth 2: %q", cmd)
+	if !strings.Contains(cmd, "-recursion-depth 1") {
+		t.Errorf("dirbrute_ffuf must use -recursion-depth 1 (depth 2 hangs): %q", cmd)
 	}
-	if !strings.Contains(cmd, "-maxtime 600") {
-		t.Errorf("dirbrute_ffuf missing -maxtime 600 (will hang on big wordlists): %q", cmd)
+	if !strings.Contains(cmd, "-maxtime 1200") {
+		t.Errorf("dirbrute_ffuf must set -maxtime 1200 (20-min ceiling): %q", cmd)
 	}
 	if !strings.Contains(cmd, "alive.txt:HOST") {
 		t.Errorf("dirbrute_ffuf should use two-wordlist mode (-w alive.txt:HOST): %q", cmd)
@@ -61,9 +68,16 @@ func TestDirbruteUsesRecursion(t *testing.T) {
 	}
 }
 
-// TestUrlFilterAliveExists ensures the 200-only filter step is wired
+// TestUrlFilterAliveExists ensures the URL-alive filter step is wired
 // into the pipeline. Without it, downstream vuln scanners (sqlmap,
 // dalfox, nuclei) waste time on dead URLs from gau/wayback.
+//
+// Note: the new policy accepts 200, 301, 302, 401, 403, 405 — not just
+// 200. The previous -mc 200 only filter dropped 8655 of 8740 URLs on
+// localwp.com because Cloudflare's bot detection returned 403 on
+// otherwise-real endpoints. 401/403/405 are testable endpoints requiring
+// auth (or POST on a GET-only endpoint); 301/302 may redirect to a
+// testable path.
 func TestUrlFilterAliveExists(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	var cmd, id string
@@ -78,7 +92,10 @@ func TestUrlFilterAliveExists(t *testing.T) {
 		t.Fatal("url_filter_alive step missing — vuln scans will waste time on 404 URLs")
 	}
 	if !strings.Contains(cmd, "-mc 200") {
-		t.Errorf("url_filter_alive must use httpx -mc 200: %q", cmd)
+		t.Errorf("url_filter_alive must include -mc 200 (and auth-skipping codes): %q", cmd)
+	}
+	if !strings.Contains(cmd, "-mc 200,301,302,401,403,405") {
+		t.Errorf("url_filter_alive must accept 200,301,302,401,403,405 (Cloudflare fronted endpoints 403 legitimately): %q", cmd)
 	}
 	if !strings.Contains(cmd, "all_urls_200.txt") {
 		t.Errorf("url_filter_alive must write to all_urls_200.txt: %q", cmd)
@@ -139,10 +156,18 @@ func TestSqlmapScanHardened(t *testing.T) {
 // TestVulnTargetsSourceFrom200Only ensures every *_targets step sources
 // from all_urls_200.txt (the 200-only filtered stream) rather than
 // all_urls.txt (which contains dead historical URLs).
+//
+// Step-name migration: the SQLi stage was previously a single step
+// (sqli_targets). It is now filter_testable_sqli — a two-stage pipeline
+// that runs the new filter_testable helper first, then applies gf sqli
+// + the legacy high-signal-param regex. The fallback step
+// (sqli_targets_replace) only activates when filter_testable_sqli
+// produced empty output, so it knowingly sources from the filtered
+// intermediate file rather than all_urls_200.txt.
 func TestVulnTargetsSourceFrom200Only(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	scanSteps := []string{
-		"sqli_targets", "xss_targets", "rce_targets",
+		"filter_testable_sqli", "xss_targets", "rce_targets",
 		"idor_targets", "ssrf_targets", "redirect_targets", "lfi_targets",
 	}
 	for _, want := range scanSteps {

@@ -42,8 +42,8 @@ step, and can resume exactly where it stopped.
 
 ## Features
 
-- **Single command, parallel pipeline** — intelligent dependency tracking 
-  allows multiple tools to run simultaneously (e.g., `subfinder`, `assetfinder`, 
+- **Single command, parallel pipeline** — intelligent dependency tracking
+  allows multiple tools to run simultaneously (e.g., `subfinder`, `assetfinder`,
   and `amass` run in parallel) while ensuring data integrity.
 - **Crash-safe checkpoints** — every completed step is written to
   `checkpoint.json`. Kill the process, restart, pick up where you stopped.
@@ -51,7 +51,7 @@ step, and can resume exactly where it stopped.
   `go install` or `apt`. GF patterns are cloned if absent.
 - **One-command system install** — `rfuf install` places the binary in
   `/opt/rfuf/` and auto-configures your shell.
-- **Live Multi-Stage Dashboard** — real-time tracking of all active stages 
+- **Live Multi-Stage Dashboard** — real-time tracking of all active stages
   with a visual progress bar and live vulnerability stats.
 - **Zero configuration** — no API keys, no YAML, no environment file. Pass
   `-d` and go.
@@ -60,6 +60,48 @@ step, and can resume exactly where it stopped.
   hints per vulnerability class and a transparent "what was filtered out"
   appendix. Open this first after a run.
 - **Pure Go** — single static binary, no runtime dependencies.
+
+### High-Signal Methodology Modules (NEW)
+
+The default scanner chain (sqlmap, dalfox, nuclei, ffuf) catches the
+low-hanging fruit but is **quiet on real targets** because modern apps
+use ORMs, CSRF tokens, and CSP headers that block the obvious payloads.
+The wired-up Go finder modules (`internal/findings/*`) cover the bug
+classes those scanners miss:
+
+| Module | Bug class | Severity | Why the existing tools miss it |
+|--------|-----------|----------|--------------------------------|
+| `reflection` | Per-URL reflection-site classification | High | dalfox sends payloads blindly; this tells you exactly which site class each param lands in |
+| `paramshape` | HTTP Parameter Pollution (HPP) | High | No scanner tests the 5 distinct HPP shapes |
+| `authshape` | Cookie / JWT misconfig | High | Nuclei JWT templates catch known patterns; this catches `kid` injection, missing `exp`, etc. |
+| `signup` | Email-verification takeover | High | No scanner probes signup flows for token reusability |
+| `idor` | IDOR surface map | Medium | Requires 2 test accounts; we build the per-param candidate list |
+| `oauth` | redirect_uri bypass | High | Programs ban active auth probing; we emit ready-to-curl candidates |
+| `race` | Race conditions (coupon/transfer/vote) | High | The 20-way concurrent probe is the textbook TOCTOU signal |
+| `buckets` | Public S3/GCS/Azure | Critical | subzy only checks DNS; we HEAD-test permutations |
+| `takeoversvc` | Vercel/Netlify/Fly/AzSWA | High | subzy fingerprints the old services; this catches the 2024-era ones |
+| `jsmine` | Deep JS bundle mining | Critical | trufflehog only verifies signatures; this finds POST endpoints, admin paths, mutations |
+| `secheaders` | Missing CSP/HSTS/X-Frame | Medium | No scanner reports header gaps |
+| `backupscan` | `.env`/`.git`/`db.sql`/`id_rsa` | Critical | The single highest-yield bug class |
+| `businesslogic` | Pricing/coupon/balance surface | Medium | Generic scanner payloads miss logic flaws |
+| `hostheader` | Host-header injection | High | Password-reset poisoning + cache poison class |
+| `cors2` | Credentialed CORS preflight | High | The inline CORS check misses preflight and null-origin |
+
+Plus a `nuclei-templates-rfuf/` overlay with 6 custom templates covering
+debug endpoints, SaaS tokens in HTML, JWT alg:none, host-header, and
+credentialed CORS preflight.
+
+### Auth + WAF Bypass Chaining (NEW)
+
+- **Auth**: pass `-auth-cookie "session=..."` or `-auth-bearer "..."` and
+  every Go finder + every httpx/nuclei stage threads it as the
+  Authorization or Cookie header. Unset = unauthenticated scan (legacy).
+- **WAF bypass**: `waf_detect` runs first; `buildWafTamperSnippet()`
+  reads the output and sets `WAF_SQLMAP_TAMPER` + `WAF_DALFOX_BYPASS`
+  env vars; sqlmap and dalfox stages interpolate these as
+  `--tamper=$WAF_SQLMAP_TAMPER` and `--bypass=$WAF_DALFOX_BYPASS`.
+  Catalog covers Cloudflare, AWS, Imperva, Akamai, F5, Barracuda,
+  Sucuri, Fastly, plus a generic fallback.
 
 ## How It Works
 
@@ -151,12 +193,14 @@ sudo cp bin/rfuf /usr/local/bin/               # any dir already on $PATH
 ## Usage
 
 ```bash
-rfuf install              # one-time system install (places binary in /opt/rfuf)
-rfuf -d example.com       # fresh full scan
-rfuf -d example.com -resume  # continue a previously interrupted scan
+rfuf install                       # one-time system install (places binary in ~/.local/share/rfuf)
+rfuf update                        # rebuild & replace the installed binary from current source
+rfuf -d example.com                # fresh full scan
+rfuf -d example.com -resume        # continue a previously interrupted scan (skips installer)
 rfuf -d example.com -step-timeout 4h  # allow up to four hours per stage
-rfuf -v                   # print version
-rfuf -h                   # show help
+rfuf -d example.com -skip-install  # like -resume, but on a fresh scan (debug / CI)
+rfuf -v                            # print version
+rfuf -h                            # show help
 ```
 
 By default all output is written to:
@@ -168,10 +212,56 @@ By default all output is written to:
 Override the working directory or target list is intentionally not
 exposed — the tool is opinionated by design.
 
-Each pipeline stage has a two-hour wall-clock limit by default. This keeps a
-single unresponsive upstream tool from leaving the dashboard stuck indefinitely.
-Use `-step-timeout <duration>` to adjust it, or `-step-timeout 0` only when you
-explicitly want to permit unlimited stage runtime.
+Each pipeline stage has a 30-minute wall-clock limit by default. Tightening
+this from the previous 2-hour default means a single hung tool can't pin the
+dashboard indefinitely — the step gets killed and the orchestrator continues
+with whatever output was produced. Use `-step-timeout <duration>` to raise it
+on big targets, or `-step-timeout 0` only when you explicitly want unlimited
+stage runtime. Stages with known-bounded runtime (gau, waybackurls) additionally
+carry their own per-stage cap (10 minutes); see the stage table below.
+
+### `-resume` implies `-skip-install`
+
+Re-running the full dependency installer on every resume was the source of the
+**fanbox.cc hang** (Aug 2026). On a stopped pipeline:
+
+1. `EnsureTools` was triggered, which detected `naabu` (genuinely missing) and
+   queued a `go install` for it. Good.
+2. But it also queued `sudo dnf install git ...` on Fedora, which silently
+   failed because there is no interactive TTY in a non-interactive terminal —
+   and the install step ran for minutes before falling through to PATH checks.
+3. In parallel, `pipx install wafw00f` and `pipx install ghauri` were attempted,
+   triggering Python dependency resolution that takes 5–10 minutes each.
+
+Net effect: every `-resume` wasted ~15 minutes *before any pipeline work resumed*.
+
+As of this release, `-resume` and the explicit `-skip-install` flag both call
+the lightweight `VerifyToolsPresent` instead: every required binary is looked
+up on `$PATH` and the run aborts with a clear message ("missing naabu, wafw00f,
+ghauri — drop -resume to install") if anything is gone. Drop the flag once
+to run the installer; subsequent resumes stay fast.
+
+### After rebuilding from source: `rfuf update`
+
+`rfuf install` places the binary at `~/.local/share/rfuf/rfuf` and wires
+the `~/.local/bin/rfuf` symlink. Once installed, the binary is **frozen
+on disk** — subsequent `git pull` + `go build` invocations update the
+source tree and the `./rfuf` binary in your workdir, but leave the
+installed binary untouched. A stale installed binary means the
+`-resume` you just kicked off is using the *old* executor / pipeline /
+stage list (e.g., the old serial `while read; do ffuf; done` loop and
+the old `sqlmap --level=2 --risk=2` flags on Aug 2026 builds).
+
+The fix is one command:
+
+```bash
+rfuf update        # rebuilds and replaces ~/.local/share/rfuf/rfuf
+```
+
+`update` is `install` without the interactive shell prompt and without
+the rc-file patch — strictly the "I just rebuilt from source and want
+the new code on PATH" verb. Re-running `rfuf install` does the same
+thing but prompts you first.
 
 ## Pipeline Stages
 
@@ -210,7 +300,23 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 26 | Port scan (**new**) | `naabu` | `naabu_ports.txt` |
 | 27 | Hidden params (**new**) | `arjun` (capped to 100 hosts) | `hidden_params.txt` |
 | 28 | Manual review queue | `grep` | `manual_business_logic_review.txt` |
-| 29 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
+| 29 | Reflection finder (**new**) | `go run ./cmd/findings-runner reflection` | `reflection_findings.txt` |
+| 30 | Param-shape / HPP (**new**) | `go run ./cmd/findings-runner paramshape` | `paramshape_findings.txt` |
+| 31 | Cookie/JWT misconfig (**new**) | `go run ./cmd/findings-runner authshape` | `authshape_findings.txt` |
+| 32 | Signup / email-verify takeover (**new**) | `go run ./cmd/findings-runner signup` | `signup_takeover_findings.txt` |
+| 33 | IDOR surface map (**new**) | `go run ./cmd/findings-runner idor` | `idor_surface.txt`, `idor_surface.csv` |
+| 34 | OAuth redirect_uri bypass (**new**) | `go run ./cmd/findings-runner oauth` | `oauth_findings.txt` |
+| 35 | Race-condition scan (**new**) | `go run ./cmd/findings-runner race` | `race_candidates.txt`, `race_results.txt` |
+| 36 | Public bucket guess (**new**) | `go run ./cmd/findings-runner buckets` | `bucket_findings.txt` |
+| 37 | Service takeover fingerprints (**new**) | `go run ./cmd/findings-runner takeoversvc` | `takeover_v2_findings.txt` |
+| 38 | Deep JS bundle mining (**new**) | `go run ./cmd/findings-runner jsmine` | `js_mine_findings.txt` |
+| 39 | Security headers analysis (**new**) | `go run ./cmd/findings-runner secheaders` | `secheaders_findings.txt` |
+| 40 | Backup / sensitive-file scan (**new**) | `go run ./cmd/findings-runner backupscan` | `backupscan_findings.txt` |
+| 41 | Business-logic surface (**new**) | `go run ./cmd/findings-runner businesslogic` | `business_logic_findings.txt` |
+| 42 | Host-header injection (**new**) | `go run ./cmd/findings-runner hostheader` | `hostheader_findings.txt` |
+| 43 | Credentialed CORS preflight (**new**) | `go run ./cmd/findings-runner cors2` | `cors2_findings.txt` |
+| 44 | Custom nuclei template pass (**new**) | `nuclei -t nuclei-templates-rfuf/` | `nuclei_rfuf_pass.txt` |
+| 45 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
 
 > Stages 14, 15, 16, 17, 18, 19, 20, 21 source from `all_urls_200.txt` —
 > only endpoints that responded 200 are scanned. Stage 28 (manual review
@@ -227,6 +333,8 @@ large targets (thousands of alive hosts):
 | **CORS check** (#22) | Top 500 hosts from `alive.txt`, 20 parallel `curl` workers, `--max-time 5 --connect-timeout 3` | The old serial `while read; do curl; done` loop had no timeout — one stalled host per connection could lock the stage for hours |
 | **WAF detection** (#25) | Top 200 hosts | wafw00f issues one HTTP request per host with its own timeouts; 200 hosts is enough to fingerprint the WAF vendor(s) in use |
 | **Hidden params** (#27) | Top 100 hosts | arjun fires many requests per host; capping prevents timeout breaches on large target sets |
+| **sqlmap_scan** (#14) | 15-minute wall-clock cap via shell `timeout --foreground 15m`; sqlmap input capped to 300 targets via `head -n` | The time-based blind and stacked queries that `--level=3` enables can pin sqlmap against a slow target for 20+ min; the shell-level `timeout --foreground` + `\|\| true` aborts cleanly so the checkpoint records it as completed. Any partial `sqlmap_results/` is preserved on disk. |
+| **xss_scan** (#16) | 10-minute wall-clock cap via shell `timeout --foreground 10m`; Gxss amplification bounded by the 200-target ceiling enforced upstream | Gxss expands each XSS candidate into multiple param variants before dalfox even starts; on a 200+ URL list the combined stage can exceed 30 min. The same `timeout --foreground … \|\| true` pattern guarantees no single stage blocks the dashboard. |
 
 ## Output Layout
 
@@ -266,18 +374,32 @@ large targets (thousands of alive hosts):
 
 ## Resume vs. Fresh Run
 
-`rfuf` distinguishes between two modes:
+`rfuf` distinguishes between three modes:
 
 - **`rfuf -d target.com`** (no flag) — always starts a fresh scan. If a
   previous `checkpoint.json` exists for the domain, it is **cleared** and
   every stage re-runs from step 1. Existing output files are overwritten
-  in place.
+  in place. The dependency installer *does* run.
 - **`rfuf -d target.com -resume`** — continues from the last completed
-  stage. Stages already recorded in `checkpoint.json` are skipped.
+  stage. Stages already recorded in `checkpoint.json` are skipped, AND the
+  dependency installer is bypassed (the on-disk binaries are trusted).
+  This is the mode to use after a stop / laptop sleep / Wi-Fi drop.
+- **`rfuf -d target.com -skip-install`** — explicit "don't reinstall
+  anything" flag for fresh runs (CI, debugging, custom toolchains).
+  Combine with `-d` + a fresh work dir for a clean test run that still
+  skips the installer.
 
-This is the key behavior fix: previously, a missing `-resume` flag was
-treated as an implicit resume, which made fresh re-runs silently skip
-work. The flag is now an explicit opt-in.
+If a required tool is missing under `-resume` / `-skip-install`, the run
+aborts with the missing-tools list and a hint to drop the flag once:
+```
+[!] missing required tools (run `rfuf -d <domain>` once WITHOUT -resume
+    to install): naabu, wafw00f, ghauri
+```
+
+This three-mode split is the key behavior fix: previously, a fresh run
+silently behaved like a resume (with a missing `-resume` flag treated as
+implicit), and a resume silently re-ran the dependency installer (5–15
+minutes of wasted setup time before the pipeline started doing real work).
 
 ## Tools Orchestrated
 
@@ -293,17 +415,40 @@ licensing. `rfuf` is MIT-licensed glue.
 ```
 rfuf/
 ├── cmd/
-│   └── rfuf/              # CLI entrypoint
-│       └── main.go
+│   ├── rfuf/              # CLI entrypoint (main.go)
+│   ├── filter-testable/   # package main wrapper for internal/filter
+│   └── findings-runner/   # package main wrapper that dispatches to every internal/findings/<name>.Run()
 ├── internal/
 │   ├── checkpoint/        # persistent resume state
+│   ├── cli/               # live alt-screen dashboard renderer
 │   ├── config/            # path resolution (home, gopath, wordlists)
-│   ├── executor/          # bash command runner + log writer
+│   ├── executor/          # bash command runner + log writer + auth/env threading
+│   ├── filter/            # "is this URL testable?" library
 │   ├── installer/         # tool installation & verification
 │   │   └── sysinstall/    # one-time system install of the rfuf binary itself
 │   ├── pipeline/          # stage definitions + orchestrator
-│   └── summary/           # SUMMARY.md generator
-├── go.mod
+│   ├── summary/           # SUMMARY.md / findings.md generators
+│   └── findings/
+│       ├── reflection/    # per-URL reflection-site classification
+│       ├── paramshape/    # HTTP Parameter Pollution (HPP)
+│       ├── authshape/     # cookie + JWT misconfig
+│       ├── takeover/      # signup / email-verify flows
+│       ├── idor/          # IDOR surface map (per-param roll-up)
+│       ├── oauth/         # redirect_uri bypass payloads
+│       ├── race/          # concurrent-request race probes
+│       ├── buckets/       # S3 / GCS / Azure bucket guess
+│       ├── takeoversvc/   # Vercel / Netlify / Fly / AzSWA fingerprints
+│       ├── jsmine/        # deep JS-bundle mining (secrets, POSTs, mutations)
+│       ├── secheaders/    # CSP / HSTS / X-Frame / Referrer / Permissions
+│       ├── backupscan/    # .env / .git / wp-config.bak / db.sql
+│       ├── businesslogic/ # pricing / coupon / balance / payment surface
+│       ├── hostheader/    # Host-header injection probe
+│       ├── cors2/         # credentialed preflight + null-origin
+│       └── internal/
+│           ├── iohelp/    # ReadLines / WriteLines / BuildAuthHeaders / ApplyAuth
+│           └── wafbypass/ # per-WAF tamper catalog (Cloudflare/AWS/Imperva/Akamai/...)
+├── nuclei-templates-rfuf/ # custom nuclei overlay (debug, saas tokens, JWT, host-header, CORS)
+├── ARCHITECTURE.md        # deep dive into the pipeline / executor / findings layout
 ├── INSTALL.md             # detailed install / uninstall / fallback guide
 ├── Makefile
 ├── LICENSE
@@ -311,7 +456,10 @@ rfuf/
 ```
 
 Internal packages are deliberately kept under `internal/` so they are
-not importable by other modules.
+not importable by other modules. The `cmd/findings-runner` wrapper is
+the single `package main` target the pipeline invokes — `go run`
+cannot execute library packages, so every finder is reached through
+this dispatcher.
 
 ## Roadmap
 

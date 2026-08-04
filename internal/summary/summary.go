@@ -43,6 +43,50 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	hiddenParams := getFileContent(filepath.Join(workDir, "hidden_params.txt"))
 	ghauri := getFileContent(filepath.Join(workDir, "ghauri_results.txt"))
 
+	// === Tech-aware findings (Discourse / Laravel / WordPress / cache poison) ===
+	// These come from the new tech_fingerprint-driven stages. Each
+	// surface is explicitly targeted at a known stack — generic vuln
+	// scanners miss most of these because their templates don't know
+	// about forum/framework-specific endpoints.
+	discourse := getFileContent(filepath.Join(workDir, "discourse_findings.txt"))
+	laravel := getFileContent(filepath.Join(workDir, "laravel_findings.txt"))
+	wordpress := getFileContent(filepath.Join(workDir, "wordpress_findings.txt"))
+	cachePoison := getFileContent(filepath.Join(workDir, "cache_poison_findings.txt"))
+
+	// === JS bundle artifacts ===
+	// Endpoint and key extraction from .js bundles that the crawler
+	// couldn't reach via direct links (loaded via JS navigation).
+	jsEndpoints := getFileContent(filepath.Join(workDir, "js_endpoints.txt"))
+	jsSecrets := getFileContent(filepath.Join(workDir, "js_secrets.txt"))
+	jsEndpointFindings := getFileContent(filepath.Join(workDir, "js_endpoint_findings.txt"))
+
+	// === Tech fingerprint rollup ===
+	// Per-host stack signal. Used by both the dashboard and the report
+	// so the hunter can see which hosts ran which tech-specific probes.
+	techFingerprint := getFileContent(filepath.Join(workDir, "tech_fingerprint.txt"))
+
+	// === Phase 1 finder outputs (10 modules wired in pipeline.go) ===
+	reflectionFindings := getFileContent(filepath.Join(workDir, "reflection_findings.txt"))
+	paramshapeFindings := getFileContent(filepath.Join(workDir, "paramshape_findings.txt"))
+	authshapeFindings := getFileContent(filepath.Join(workDir, "authshape_findings.txt"))
+	signupTakeoverFindings := getFileContent(filepath.Join(workDir, "signup_takeover_findings.txt"))
+	idorSurfaceFindings := getFileContent(filepath.Join(workDir, "idor_surface.txt"))
+	oauthFindings := getFileContent(filepath.Join(workDir, "oauth_findings.txt"))
+	raceResults := getFileContent(filepath.Join(workDir, "race_results.txt"))
+	bucketFindings := getFileContent(filepath.Join(workDir, "bucket_findings.txt"))
+	takeoverV2Findings := getFileContent(filepath.Join(workDir, "takeover_v2_findings.txt"))
+	jsMineFindings := getFileContent(filepath.Join(workDir, "js_mine_findings.txt"))
+
+	// === Phase 2 new-finder outputs (5 new modules) ===
+	secheadersFindings := getFileContent(filepath.Join(workDir, "secheaders_findings.txt"))
+	backupscanFindings := getFileContent(filepath.Join(workDir, "backupscan_findings.txt"))
+	businesslogicFindings := getFileContent(filepath.Join(workDir, "business_logic_findings.txt"))
+	hostheaderFindings := getFileContent(filepath.Join(workDir, "hostheader_findings.txt"))
+	cors2Findings := getFileContent(filepath.Join(workDir, "cors2_findings.txt"))
+
+	// === Phase 3 custom nuclei pass ===
+	nucleiRfufPass := getFileContent(filepath.Join(workDir, "nuclei_rfuf_pass.txt"))
+
 	// SQLi is filtered through a confidence gate so the dashboard's
 	// SQLi count reflects only payload-confirmed folders — not the
 	// "Parameter appears to be injectable" header that sqlmap writes
@@ -71,9 +115,45 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 		FFUF:            ffuf,
 		ManualReview:    getFileContent(filepath.Join(workDir, "manual_business_logic_review.txt")),
 
+		// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
+		DiscourseFindings:   discourse,
+		LaravelFindings:     laravel,
+		WordPressFindings:   wordpress,
+		CachePoisonFindings: cachePoison,
+
+		// JS bundle artifacts.
+		JSEndpoints:        jsEndpoints,
+		JSSecrets:          jsSecrets,
+		JSEndpointFindings: jsEndpointFindings,
+
+		// Tech fingerprint rollup.
+		TechFingerprint: techFingerprint,
+
 		// Filtered-out appendix.
 		DroppedSQLiCandidates: sqlmapDropped,
 		DroppedURLTotal:       countLines(filepath.Join(workDir, "all_urls.txt")) - countLines(filepath.Join(workDir, "all_urls_200.txt")),
+
+		// Phase 1 wired-up finders.
+		ReflectionFindings:    reflectionFindings,
+		ParamShapeFindings:    paramshapeFindings,
+		AuthShapeFindings:     authshapeFindings,
+		SignupTakeoverFindings: signupTakeoverFindings,
+		IdorSurfaceFindings:   idorSurfaceFindings,
+		OAuthFindings:         oauthFindings,
+		RaceResults:           raceResults,
+		BucketFindings:        bucketFindings,
+		TakeoverV2Findings:    takeoverV2Findings,
+		JSMineFindings:        jsMineFindings,
+
+		// Phase 2 new finders.
+		SecHeadersFindings:    secheadersFindings,
+		BackupScanFindings:    backupscanFindings,
+		BusinessLogicFindings: businesslogicFindings,
+		HostHeaderFindings:    hostheaderFindings,
+		CORS2Findings:         cors2Findings,
+
+		// Phase 3 nuclei custom pass.
+		NucleiRfufPass: nucleiRfufPass,
 	})
 
 	if err := os.WriteFile(filepath.Join(workDir, "findings.md"), []byte(findings), 0644); err != nil {
@@ -91,6 +171,7 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **Total Subdomains:** %d
 - **Live Subdomains (DNS):** %d
 - **Alive HTTP Hosts:** %d
+- **Hosts Tech-Fingerprinted:** %d
 
 ## Vulnerability Overview
 - **RCE:** %d
@@ -101,6 +182,10 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **SQLi (sqlmap, confirmed only):** %d   *(raw candidate folders: %d)*
 - **SQLi (ghauri, modern blind):** %d
 - **Secrets:** %d
+- **Backup / sensitive files exposed:** %d
+- **Host header injection:** %d
+- **Security header gaps:** %d
+- **Credentialed CORS (preflight):** %d
 - **Auth/JWT:** %d
 - **CORS:** %d
 - **FFUF (200-only verified):** %d
@@ -108,16 +193,46 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **Open Ports:** %d
 - **Hidden Params:** %d
 
+## Tech-Aware Findings
+- **Discourse:** %d
+- **Laravel / Livewire:** %d
+- **WordPress:** %d
+- **Cache Poisoning:** %d
+- **JS Endpoints Discovered:** %d
+- **JS Secrets Found:** %d
+- **JS Endpoint Nuclei Hits:** %d
+
+## High-Signal Methodology Modules
+- **Reflection sites (html-body/attr-unquoted):** %d
+- **HTTP Parameter Pollution divergence:** %d
+- **Cookie / JWT misconfig:** %d
+- **Signup email-verification flows:** %d
+- **IDOR surface (per-param roll-up):** %d
+- **OAuth redirect_uri bypass candidates:** %d
+- **Race-condition candidates:** %d
+- **Public buckets discovered:** %d
+- **Service-specific takeovers (Vercel/Netlify/Fly/AzSWA):** %d
+- **Deep JS bundle findings:** %d
+- **Business-logic surface:** %d
+- **Custom nuclei template hits:** %d
+
 ## Detailed report
 Open [findings.md](./findings.md) — every URL to retest, grouped by
 severity, with false-positive filtering transparent.
 `, cp.Domain, cp.StartedAt.Format(time.RFC822), cp.LastUpdated.Format(time.RFC822), duration,
-		subdomains, liveSubs, aliveHosts,
+		subdomains, liveSubs, aliveHosts, len(techFingerprint),
 		len(rce), len(takeovers), len(lfi), len(ssrf), len(xss),
 		len(sqlmapConfirmed), countFolders(filepath.Join(workDir, "sqlmap_results")),
 		len(ghauri),
 		len(secrets)+len(potentialSecrets), len(auth), len(cors), len(ffuf),
-		len(waf), len(ports), len(hiddenParams))
+		len(waf), len(ports), len(hiddenParams),
+		len(discourse), len(laravel), len(wordpress), len(cachePoison),
+		len(jsEndpoints), len(jsSecrets), len(jsEndpointFindings),
+		len(reflectionFindings), len(paramshapeFindings), len(authshapeFindings),
+		len(signupTakeoverFindings), len(idorSurfaceFindings), len(oauthFindings),
+		len(raceResults), len(bucketFindings), len(takeoverV2Findings),
+		len(jsMineFindings), len(businesslogicFindings), len(nucleiRfufPass),
+		len(backupscanFindings), len(hostheaderFindings), len(secheadersFindings), len(cors2Findings))
 
 	return os.WriteFile(filepath.Join(workDir, "SUMMARY.md"), []byte(summary), 0644)
 }
@@ -145,9 +260,45 @@ type FindingsBuckets struct {
 	FFUF            []string
 	ManualReview    []string
 
+	// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
+	DiscourseFindings   []string
+	LaravelFindings     []string
+	WordPressFindings   []string
+	CachePoisonFindings []string
+
+	// JS bundle artifacts.
+	JSEndpoints        []string
+	JSSecrets          []string
+	JSEndpointFindings []string
+
+	// Tech fingerprint rollup (per-host stack signal).
+	TechFingerprint []string
+
 	// Filtered-out appendix.
 	DroppedSQLiCandidates []string
 	DroppedURLTotal       int
+
+	// Phase 1 wired-up finders (10 modules).
+	ReflectionFindings     []string
+	ParamShapeFindings     []string
+	AuthShapeFindings      []string
+	SignupTakeoverFindings []string
+	IdorSurfaceFindings    []string
+	OAuthFindings          []string
+	RaceResults            []string
+	BucketFindings         []string
+	TakeoverV2Findings     []string
+	JSMineFindings         []string
+
+	// Phase 2 new finders (5 modules).
+	SecHeadersFindings    []string
+	BackupScanFindings    []string
+	BusinessLogicFindings []string
+	HostHeaderFindings    []string
+	CORS2Findings         []string
+
+	// Phase 3 custom nuclei template pass.
+	NucleiRfufPass []string
 }
 
 // buildFindingsReport returns the full findings.md body. Sections are
@@ -161,6 +312,11 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 	sb.WriteString("> SQLi counts only payload-confirmed results — see the appendix for what was filtered out and why.\n\n")
 
 	// ─── CRITICAL ────────────────────────────────────────────────────────
+	addSection(&sb, "Critical: Laravel / Livewire Findings", b.LaravelFindings,
+		"Exposed Laravel endpoints: /.env, /horizon, /telescope, /livewire/update CSRF bypass, debug mode, APP_KEY leak.",
+		"If .env is exposed, read it directly — DB creds, mail creds, AWS keys are the report. APP_KEY leak = full RCE via `php artisan`. "+
+			"Debug mode (Whoops/Stack trace) discloses full stack + env vars to anyone hitting a 404.")
+
 	addSection(&sb, "Critical: Remote Code Execution", b.RCE,
 		"Potential Remote Code Execution detected by Nuclei templates (CVE-driven).",
 		"Open each URL with a debugger proxy. Look for evidence of `system()`, `Runtime.exec`, `ProcessBuilder`, "+
@@ -181,6 +337,16 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 		"Potential Server Side Request Forgery detected by Nuclei.",
 		"Test the param with `http://169.254.169.254/latest/meta-data/` (AWS), `http://metadata.google.internal` (GCP), "+
 			"`http://127.0.0.1:PORT`. If you see a 200 with metadata, escalate to a takeover; otherwise, file as a normal SSRF.")
+
+	addSection(&sb, "High: Discourse Findings", b.DiscourseFindings,
+		"Discourse forum-specific exposures: publicly accessible /admin, /sidekiq, vulnerable version, Onebox SSRF, missing API auth.",
+		"If /admin or /sidekiq returns 200, the impact ranges from RCE (Sidekiq eval console) to full forum compromise. "+
+			"Cross-check version against https://github.com/discourse/discourse/security/advisories — known CVEs often don't require auth.")
+
+	addSection(&sb, "High: Cache Poisoning", b.CachePoisonFindings,
+		"Cache poisoning via unkeyed headers (X-Forwarded-Host, X-Original-URL, X-Host, X-Forwarded-Server) on CDN-fronted hosts.",
+		"Confirm: re-fetch the poisoned URL from a different IP/region (or via a different egress proxy) and verify the malicious content is cached and served to other users. "+
+			"Local-only reflection is not enough — the cache must be poisoned globally for the report to land.")
 
 	addSection(&sb, "High: Verified Secrets", b.Secrets,
 		"Secrets verified by TruffleHog (only-verified mode).",
@@ -218,6 +384,11 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 		"Replace `?url=//attacker.com` and confirm the response is a 30x with `Location: //attacker.com`. "+
 			"Open redirects only matter when chained (e.g. as the OAuth `redirect_uri`); a bare open redirect is usually Out-of-Scope on modern programs.")
 
+	addSection(&sb, "Medium: WordPress Findings", b.WordPressFindings,
+		"WordPress-specific misconfigs: xmlrpc enabled, wp-config.php.bak exposed, user enumeration via /?author=, exposed /wp-json.",
+		"xmlrpc enabled + brute force = mass credential stuffing. wp-config backup = DB creds in plaintext. "+
+			"User enumeration reveals admin usernames — combine with credential stuffing for a chain.")
+
 	// ─── LOW ─────────────────────────────────────────────────────────────
 	addSection(&sb, "Low: GraphQL Exposure", b.GraphQL,
 		"Exposed GraphQL endpoint found.",
@@ -231,9 +402,11 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 
 	// ─── INFO ────────────────────────────────────────────────────────────
 	addSection(&sb, "Info: WAF Detections", b.WAF,
-		"WAF vendor fingerprinting — useful for tuning bypass payloads later.",
-		"Use the detected WAF to pick payloads: Cloudflare/Cloudfront → use `cloacked` style bypass; AWS WAF → use case-mixed; "+
-			"Imperva → use chunked transfer.")
+		"WAF vendor fingerprinting — drives the auto-applied tamper for sqlmap and dalfox (see buildWafTamperSnippet).",
+		"Detected WAF auto-applies a tamper catalog: Cloudflare/Cloudfront → between,randomcase,space2comment (sqlmap) + wasm (dalfox); "+
+			"AWS → randomcase,space2plus + utf-8; Imperva → randomcase,between,space2comment + html; Akamai → + versionedkeywords; "+
+			"F5 → space2mysqldash; Barracuda → unionalltounion; Sucuri → modsecurityversioned; Fastly → between,randomcase. "+
+			"Unknown vendor → between + html (mild default). Override the catalog in internal/findings/internal/wafbypass.")
 
 	addSection(&sb, "Info: Exposed Ports", b.Ports,
 		"Top-1000 TCP ports exposed on live hosts (from naabu).",
@@ -260,10 +433,123 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 		"Authenticate and walk through each one. Look for: race conditions on coupon application, "+
 			"price manipulation on negative-quantity, currency confusion, missing server-side total recalculation.")
 
+	addSection(&sb, "Info: JS Endpoint Nuclei Hits", b.JSEndpointFindings,
+		"Nuclei hits against endpoints discovered in JS bundles (token-spray, exposure, misconfig tags).",
+		"JS bundles often contain API endpoints the crawler can't reach directly. Each nuclei hit here came from an endpoint found only via static JS analysis. "+
+			"Re-run the nuclei template manually to confirm the hit, then verify it's in scope before reporting.")
+
+	addSection(&sb, "Info: Tech Fingerprint", b.TechFingerprint,
+		"Per-host technology stack fingerprint — drives tech-specific probes.",
+		"Drives the Discourse / Laravel / WordPress / cache-poison stages. Use this to prioritize manual review of hosts with deeper attack surface "+
+			"(Laravel debug-mode hosts, Discourse forum hosts with /admin accessible, CDN-fronted hosts).")
+
+	addSection(&sb, "Info: JS Endpoints Discovered", b.JSEndpoints,
+		"API endpoints extracted from JS bundles and source maps — not reachable via direct crawl.",
+		"These endpoints were not crawled by katana (they're behind JS loading). Each is a candidate for manual IDOR / auth / input-validation testing. "+
+			"Prioritize endpoints under /api/, /admin/, /internal/ — they're the most likely to lack auth checks.")
+
+	addSection(&sb, "Info: JS Bundle Secrets", b.JSSecrets,
+		"API keys, tokens, or credentials embedded in JS bundles / source maps.",
+		"Verify the key authenticates against the relevant service (do not assume — many are stale or test keys). "+
+			"DO NOT paste the secret in your report — disclose via the platform's secure form. Common false positives: Google API keys with referrer restrictions.")
+
+	// ====================================================================
+	// === Phase 1: wired-up high-signal methodology modules ================
+	// ====================================================================
+
+	// ─── CRITICAL ────────────────────────────────────────────────────────
+	addSection(&sb, "Critical: Backup / Sensitive File Exposure", b.BackupScanFindings,
+		"Sensitive files exposed via direct URL (.env, .git/HEAD, wp-config.php.bak, db.sql, id_rsa, .aws/credentials, ...).",
+		"Each hit is the file's *contents* — that's the report. Read the file directly with curl. "+
+			"For .env: DB creds, mail creds, AWS keys, signed-cookie salts. For .git/HEAD: use git-dumper to clone the repo. "+
+			"For db.sql: full DB dump. NEVER paste the contents in your report — disclose via the platform's secure form.")
+
+	addSection(&sb, "Critical: Public Cloud Buckets", b.BucketFindings,
+		"S3/GCS/Azure bucket exists and is publicly listable.",
+		"Open the bucket URL in a browser. The file listing IS the report. Note: public-listable ≠ public-write; "+
+			"public-write is critical RCE risk if the bucket backs a static site or Lambda deployment.")
+
+	addSection(&sb, "Critical: Deep JS Bundle Findings", b.JSMineFindings,
+		"Hardcoded secrets, internal POST endpoints, admin paths, S3 URLs, GraphQL mutations extracted from JS bundles.",
+		"Secrets: verify the key authenticates against the relevant service. POST endpoints: each is a manual-retest target for IDOR/auth-bypass. "+
+			"GraphQL mutations (e.g. `deleteUser`, `updateBilling`) are higher-impact than queries.")
+
+	// ─── HIGH ────────────────────────────────────────────────────────────
+	addSection(&sb, "High: Reflection Sites (html-body / attr-unquoted)", b.ReflectionFindings,
+		"Per-URL classification of where query parameters are reflected. html-body / attr-unquoted sites are practically XSS-confirmed.",
+		"Open each URL with the marker in the URL bar. The site classification tells you which dalfox payload will land. "+
+			"For attr-unquoted: `><svg onload=alert(1)>` (no quote escape needed). For html-body: standard `<script>alert(1)</script>`.")
+
+	addSection(&sb, "High: Signup Email-Verification Flows", b.SignupTakeoverFindings,
+		"Sites exposing signup endpoints with email-verification URL patterns.",
+		"Sign up with a controlled email (use mailtrap or your own domain). Intercept the verification email. "+
+			"Test: (1) is the token sequential / guessable? (2) is the same token reusable for any other email address? "+
+			"A reusable token is a full account-takeover class on most programs.")
+
+	addSection(&sb, "High: HTTP Parameter Pollution", b.ParamShapeFindings,
+		"Same param submitted in different shapes (?id=1, ?id[]=1, ?id=1&id=2, mixed case, null byte) yields different responses.",
+		"HPP = the backend reads a different value than the frontend sends. Common in PHP/ASP/J2EE. "+
+			"Test: change the duplicate value and see if the action mutates the state. Often combined with privilege escalation.")
+
+	addSection(&sb, "High: Cookie / JWT Misconfigurations", b.AuthShapeFindings,
+		"Missing HttpOnly/Secure/SameSite on session cookies; alg:none or missing exp in JWTs.",
+		"For alg:none: re-issue the same token with header `{\"alg\":\"none\"}` and empty signature. If the server accepts it, "+
+			"forging tokens is trivial. For HttpOnly missing: combine with a stored XSS to steal the session cookie.")
+
+	addSection(&sb, "High: Host Header Injection", b.HostHeaderFindings,
+		"Server reflects attacker-controlled Host / X-Forwarded-Host / X-Original-URL in body or Location.",
+		"Exploitable for: (1) password-reset poisoning — trigger a reset, intercept the email, see if your host is in the link. "+
+			"(2) cache poisoning — re-fetch the URL from a different egress IP to confirm global cache. "+
+			"(3) SSRF — sometimes the Host is used to build a callback URL.")
+
+	addSection(&sb, "High: Credentialed CORS (preflight)", b.CORS2Findings,
+		"OPTIONS preflight allows attacker origin + credentials; or null-origin reflected with credentials.",
+		"Drop a credentialed XHR from a controlled origin to the target endpoint. If the request succeeds AND the response is readable, "+
+			"you have cross-origin data exfil. Modern browsers enforce this less strictly than you think — null-origin alone via sandboxed iframe is a real bug.")
+
+	addSection(&sb, "High: Service-Specific Takeovers", b.TakeoverV2Findings,
+		"Vercel/Netlify/Fly.io/Azure Static Web Apps fingerprints indicating the underlying service has been deleted.",
+		"Register the deleted service with the same name. If the CNAME is still pointing to it, you control the subdomain. "+
+			"Cookie-bite the parent domain before reporting — most programs want the parent+sub chain, not just the dangling CNAME.")
+
+	addSection(&sb, "High: OAuth redirect_uri Bypass Candidates", b.OAuthFindings,
+		"Per-host authorize endpoint with 5 ready-to-curl bypass payloads per allowlist entry.",
+		"Each candidate row includes a curl one-liner. Run the request with a fresh client_id; a 302 to the attacker's domain with the auth code is the report. "+
+			"Most common: subdomain-bypass and path-traversal. Note: most programs prohibit active probing of the auth flow — disclose the candidate list, not the exploit.")
+
+	addSection(&sb, "High: Race-Condition Candidates", b.RaceResults,
+		"URLs matching business-logic keywords where 20 concurrent requests with unique markers succeeded (TOCTOU signal).",
+		"Repeat the test with a setup where the action has visible state (coupon balance, vote count, withdrawal amount). "+
+			"For payment: time the requests within the same TCP/TLS connection (single-connection multiplex). "+
+			"For coupon: race 50 requests; report the count of times the coupon was applied N times to a single balance.")
+
+	// ─── MEDIUM ──────────────────────────────────────────────────────────
+	addSection(&sb, "Medium: IDOR Surface Map", b.IdorSurfaceFindings,
+		"Per-param roll-up of object-reference parameters (id, user_id, account_id, ...) across hosts.",
+		"Set up two test accounts (A and B). For each param in this list, replay the URL as A, capture the response, "+
+			"then replay as B. If B sees A's data → IDOR. High-yield params: user_id, account_id, order_id, doc_id, "+
+			"profile_id, reservation_id, invoice_id. The roll-up tells you which params are worth setting up two accounts for.")
+
+	addSection(&sb, "Medium: Business-Logic Surface", b.BusinessLogicFindings,
+		"URLs matching pricing/coupon/balance/vote/gift/payment/currency/points keywords, sorted by suspicious-param shape.",
+		"Authenticate, then for each URL: try negative quantity, zero price, currency mismatch (USD-priced-but-EUR-charged), "+
+			"role/admin param swap. Each is a manual-retest candidate — auto-pivots on this surface are too noisy to run safely.")
+
+	addSection(&sb, "Medium: Security Header Gaps", b.SecHeadersFindings,
+		"Missing or weak CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP/COEP/CORP.",
+		"Missing CSP on a site with user content is XSS-class. Missing HSTS on HTTPS is MITM-class. "+
+			"For each gap: prioritize hosts that handle auth or PII. Headers are often scoped to a single endpoint pattern — re-fetch the actual auth page, not just the homepage.")
+
+	// ─── INFO ────────────────────────────────────────────────────────────
+	addSection(&sb, "Info: Custom Nuclei Template Hits", b.NucleiRfufPass,
+		"Custom nuclei templates run against alive.txt — debug endpoints, SaaS tokens, JWT alg:none, host-header, CORS.",
+		"Each hit has a template id (`rfuf-*`). Re-run with `nuclei -t nuclei-templates-rfuf/ -id <template-id> -l <host> -debug` to confirm.")
+
 	// ─── APPENDIX: WHAT WAS FILTERED OUT ─────────────────────────────────
 	sb.WriteString("---\n\n## What was filtered out (false positives removed)\n\n")
-	sb.WriteString(fmt.Sprintf("- **URLs pruned for not responding 200:** %d endpoints from gau/wayback/katana "+
-		"were dropped before the vuln scanners. They couldn't be tested — only 200-responding endpoints were tested.\n",
+	sb.WriteString(fmt.Sprintf("- **URLs pruned for not responding testable:** %d endpoints from gau/wayback/katana "+
+		"were dropped before the vuln scanners. The filter accepts 200, 301, 302, 401, 403, 405; everything else (404, 500, timeouts) is excluded. "+
+		"401/403/405 are kept because they represent real endpoints that simply require auth or only respond to other methods.\n",
 		b.DroppedURLTotal))
 	sb.WriteString(fmt.Sprintf("- **sqlmap candidate folders dropped (not confirmed):** %d folders were excluded from the SQLi count above. "+
 		"A folder is excluded unless its `log` file contains both a real technique id (e.g. `boolean-based blind`) AND a non-empty `Payload:` line. "+

@@ -137,6 +137,40 @@ func buildSelf() (string, error) {
 	return tmp.Name(), nil
 }
 
+// RebuildBinary builds the current source tree and replaces the
+// binary that `Install()` previously placed at ~/.local/share/rfuf/rfuf.
+// No prompts, no rc-file patching, no symlink tinkering — strictly the
+// "I just rebuilt from source and want the new code on PATH" verb.
+//
+// Used by the `rfuf update` subcommand. Idempotent: calling it on top
+// of an unchanged tree is a no-op (the file copy just overwrites with
+// identical bytes).
+func RebuildBinary() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("could not resolve home directory: %w", err)
+	}
+	absInstallBin := filepath.Join(home, installBin)
+
+	// Ensure the install dir exists — first-ever `rfuf update` on a
+	// machine that has never run `rfuf install` will hit this path.
+	if err := os.MkdirAll(filepath.Dir(absInstallBin), 0755); err != nil {
+		return fmt.Errorf("could not create %s: %w", filepath.Dir(absInstallBin), err)
+	}
+
+	srcPath, err := buildSelf()
+	if err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+	defer os.Remove(srcPath)
+
+	if err := copyFile(srcPath, absInstallBin); err != nil {
+		return fmt.Errorf("could not install binary: %w", err)
+	}
+	fmt.Printf("[+] Updated binary at %s\n", absInstallBin)
+	return nil
+}
+
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {

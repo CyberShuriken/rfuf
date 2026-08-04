@@ -1,0 +1,39 @@
+id: rfuf-saas-tokens-in-html
+info:
+  name: RFUF — SaaS API tokens exposed in HTML / inline JS
+  author: rfuf
+  severity: high
+  description: |
+    Detects SaaS provider tokens (Intercom, Segment, Mixpanel, Datadog,
+    Hotjar, Amplitude) embedded in served HTML pages or inline `<script>`
+    blocks. Each hit means the token is harvestable by any visitor via
+    View Source — and many of these services default to allowing read-
+    only access from any IP that presents the key.
+  tags: rfuf,exposure,token-spray,credentials
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers-condition: or
+    matchers:
+      - type: regex
+        part: body
+        regex:
+          - 'intercomSettings[^"]*"[a-z0-9_]+"\s*:\s*"([a-zA-Z0-9_-]{20,})"'
+          - 'analytics\.load\("([a-zA-Z0-9_-]{10,})"\)'
+          - 'mixpanel\.init\("([a-zA-Z0-9_-]{20,})"\)'
+          - 'DD_RUM\s*[\'"]\s*([a-zA-Z0-9_-]{20,})\s*[\'"]'
+          - 'hjid\s*=\s*([0-9]{6,})'
+          - 'amplitude\.init\("([a-zA-Z0-9_-]{20,})"\)'
+          - 'sentry\.init\(\s*\{[^}]*dsn:\s*[\'"]([^\'"]+)[\'"]'
+          - 'gtag\([\'"]js[\'"],\s*new Date\(\)\s*\),\s*\{\s*[\'"]send_page_view[\'"]:\s*false\s*\}\s*\)\s*;\s*window\.dataLayer\s*=\s*window\.dataLayer\s*\|\|\s*\[\s*\]\s*;\s*function\s+gtag\(\)\s*\{\s*dataLayer\.push\(arguments\)\s*;\s*\}\s*gtag\([\'"]js[\'"],\s*new Date\(\)\s*\);\s*gtag\([\'"]config[\'"],\s*[\'"]([a-zA-Z0-9_-]+)[\'"]'
+        condition: or
+    extractors:
+      - type: regex
+        name: token
+        part: body
+        group: 1
+        regex:
+          - 'intercomSettings[^"]*"[a-z0-9_]+"\s*:\s*"([a-zA-Z0-9_-]{20,})"'
+          - 'mixpanel\.init\("([a-zA-Z0-9_-]{20,})"\)'

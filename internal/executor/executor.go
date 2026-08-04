@@ -36,6 +36,30 @@ var throttledLineCounter uint64
 // dashboard above them. When nil, child output goes only to the log file.
 var LineCallback func(line string)
 
+// AuthEnv holds authentication values that should be injected into every
+// shell command's environment. Populated from the `-auth-cookie` and
+// `-auth-bearer` CLI flags. Empty map means unauthenticated scan.
+//
+// The keys are env-var names; values are the raw strings to set. Shell
+// stage commands reference these via ${RFUF_AUTH_COOKIE}, ${RFUF_AUTH_HEADER}
+// and translate them into per-tool flags (httpx -H, nuclei -H, sqlmap
+// --cookie/--headers, etc).
+//
+// Why env vars instead of string substitution into commands: avoids quoting
+// nightmares when the cookie contains characters like ';' or '&' that bash
+// would otherwise interpret. Each tool reads RFUF_AUTH_* directly.
+var AuthEnv = map[string]string{}
+
+// OOBURL is the interactsh callback URL allocated at pipeline boot.
+// Empty string means no OOB is wired. Stage commands substitute this
+// into blind SSRF/RCE/XSS payloads via ${RFUF_OOB_URL}.
+//
+// OOBToken is the interactsh auth token (optional, depends on server).
+var (
+	OOBURL   string
+	OOBToken string
+)
+
 // Result holds the captured stdout/stderr and exit info for a single
 // completed step. The pipeline normally uses ExitCode (and Duration for
 // logging); Stdout/Stderr are populated for callers that want to parse
@@ -73,8 +97,33 @@ func RunCommand(parent context.Context, cmdStr string, workDir string, logFile *
 	cmd := exec.CommandContext(ctx, "bash", "-c", cmdStr)
 	cmd.Dir = workDir
 
+	// Inject rfuf-managed env vars (RFUF_AUTH_*, RFUF_OOB_*) into the
+	// child process's environment. Stage commands reference these to
+	// thread auth headers and OOB callback URLs through per-tool flags.
+	// We append to os.Environ() rather than replacing it so PATH, HOME,
+	// and the rest of the user's shell environment still flow through.
+	cmd.Env = append(os.Environ(), rfufEnv()...)
+
 	// Ensure child processes are killed when the parent is killed.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Soft cancellation: when the per-step deadline fires, send SIGTERM
+	// to the outer bash (not SIGKILL) and let it run the trailing
+	// `; true` fallback. Default exec.CommandContext cancels with
+	// cmd.Process.Kill() which is SIGKILL — that kills bash before
+	// `; touch xss_vulnerabilities.txt ; true` ever runs, the wrapper
+	// never produces exit code 0, and the timeout surfaces as a hard
+	// failure. SIGTERM + WaitDelay lets bash exit cleanly with status 0
+	// so the orchestrator's `; true` wrapper does its job. The
+	// process-group SIGKILL below is still the hard backstop if bash
+	// ignores SIGTERM (e.g. wedged dalfox browser pool).
+	cmd.WaitDelay = 10 * time.Second
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return cmd.Process.Signal(syscall.SIGTERM)
+		}
+		return nil
+	}
 
 	// Log the command start.
 	header := fmt.Sprintf("\n--- [%s] COMMAND START: %s ---\n", time.Now().Format(time.RFC3339), cmdStr)
@@ -156,11 +205,33 @@ func RunCommand(parent context.Context, cmdStr string, workDir string, logFile *
 	footer := fmt.Sprintf("\n--- [%s] COMMAND END: EXIT %d DURATION %v ---\n", time.Now().Format(time.RFC3339), exitCode, duration)
 	logFile.WriteString(footer)
 
+	// Context timeout handling. Two cases to disambiguate:
+	//
+	//   (a) The shell `timeout --foreground N` killed the process *and* the
+	//       command returned non-zero. The orchestrator wraps the call in
+	//       `... ; true` so exitCode is 0 anyway — record this as success.
+	//
+	//   (b) The executor's `context.WithTimeout` SIGTERMed the process group
+	//       (race with shell `timeout`; same wall-clock cap). The cmd.Wait()
+	//       returned an *exec.ExitError with non-zero code (signal exit).
+	//       exitCode is -1 in that branch.
+	//
+	// Treat any per-step deadline as a soft success regardless of exit
+	// code: the orchestrator's `; true` was *meant* to make the timeout
+	// path exit 0, and honoring that intent — even when SIGTERM raced
+	// with the wrapper and bash exited via signal — keeps the pipeline
+	// moving and preserves partial output. Only signal user-initiated
+	// cancellation as an error so Ctrl-C still aborts cleanly.
 	if ctx.Err() != nil {
 		if parent.Err() != nil {
 			return nil, fmt.Errorf("command interrupted")
 		}
-		return nil, fmt.Errorf("command timed out after %s", timeout)
+		return &Result{
+			Stdout:   stdoutBuf.String(),
+			Stderr:   stderrBuf.String(),
+			ExitCode: 0,
+			Duration: duration,
+		}, nil
 	}
 
 	return &Result{
@@ -206,4 +277,36 @@ func GetLogFile(workDir string) (*os.File, error) {
 // runs so a resumed scan doesn't inherit counters from the previous run.
 func ResetLogThrottle() {
 	atomic.StoreUint64(&throttledLineCounter, 0)
+}
+
+// rfufEnv returns the rfuf-managed env vars as KEY=VALUE strings ready to
+// pass to exec.Cmd.Env. Always includes RFUF_OOB_URL and RFUF_OOB_TOKEN
+// (empty strings when not set, so shell `${RFUF_OOB_URL:+...}` expansions
+// safely evaluate to empty). Auth vars are only present when set.
+func rfufEnv() []string {
+	env := []string{
+		"RFUF_OOB_URL=" + OOBURL,
+		"RFUF_OOB_TOKEN=" + OOBToken,
+	}
+	// Stable ordering for predictable test logs.
+	keys := []string{}
+	for k := range AuthEnv {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	for _, k := range keys {
+		env = append(env, k+"="+AuthEnv[k])
+	}
+	return env
+}
+
+// sortStrings is a tiny local sort.Strings wrapper kept inline to avoid an
+// extra import at the top of this file (sort is in the stdlib but pulling
+// it just for this is heavy). For <=10 keys it's fine.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }

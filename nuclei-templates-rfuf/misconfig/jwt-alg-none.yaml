@@ -1,0 +1,35 @@
+id: rfuf-jwt-alg-none
+info:
+  name: RFUF — JWT alg:none signature bypass
+  author: rfuf
+  severity: critical
+  description: |
+    Detects JWTs in responses where the `alg` header is `none` (case-
+    insensitive) or empty. Servers that trust this header value skip
+    signature verification, allowing any attacker to forge a valid
+    token by submitting `{"alg":"none"}` and a payload.
+  reference:
+    - https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
+    - https://portswigger.net/web-security/jwt
+  tags: rfuf,jwt,auth-bypass
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers-condition: or
+    matchers:
+      - type: regex
+        part: body
+        regex:
+          - '"alg"\s*:\s*"none"'
+          - '"alg"\s*:\s*"None"'
+          - '"alg"\s*:\s*"NONE"'
+          - '"alg"\s*:\s*""'
+    extractors:
+      - type: regex
+        name: jwt
+        part: body
+        group: 0
+        regex:
+          - 'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'

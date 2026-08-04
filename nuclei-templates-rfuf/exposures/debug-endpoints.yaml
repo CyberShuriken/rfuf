@@ -1,0 +1,70 @@
+id: rfuf-debug-endpoints
+info:
+  name: RFUF — Debug / introspection endpoint exposed
+  author: rfuf
+  severity: medium
+  description: |
+    Detects debug / introspection endpoints across common stacks. Each
+    hit leaks stack internals (server version, env vars, source paths,
+    request data) and is frequently a stepping stone for RCE-class bugs.
+  reference:
+    - https://owasp.org/www-community/Improper_Error_Handling
+  tags: rfuf,exposure,debug,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.env"
+      - "{{BaseURL}}/.env.local"
+      - "{{BaseURL}}/.env.production"
+      - "{{BaseURL}}/.env.backup"
+      - "{{BaseURL}}/phpinfo.php"
+      - "{{BaseURL}}/info.php"
+      - "{{BaseURL}}/server-status"
+      - "{{BaseURL}}/server-info"
+      - "{{BaseURL}}/nginx_status"
+      - "{{BaseURL}}/elmah.axd"
+      - "{{BaseURL}}/trace.axd"
+      - "{{BaseURL}}/_debug"
+      - "{{BaseURL}}/debug"
+      - "{{BaseURL}}/wp-content/debug.log"
+      - "{{BaseURL}}/actuator"
+      - "{{BaseURL}}/actuator/env"
+      - "{{BaseURL}}/actuator/health"
+      - "{{BaseURL}}/actuator/beans"
+      - "{{BaseURL}}/.git/HEAD"
+      - "{{BaseURL}}/.git/config"
+      - "{{BaseURL}}/.svn/entries"
+      - "{{BaseURL}}/.DS_Store"
+    stop-at-first-match: true
+    matchers-condition: or
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "PHP Version"
+          - "phpinfo"
+          - "APP_KEY"
+          - "DB_PASSWORD"
+          - "AWS_SECRET"
+          - "ref: refs/"
+          - "[core]"
+          - "Apache Server Status"
+          - "Active connections"
+          - "ELMAH"
+          - "JVM"
+          - "gitdir:"
+        condition: or
+    extractors:
+      - type: regex
+        part: body
+        group: 1
+        regex:
+          - 'DB_PASSWORD[=:\s]+([^\s"<]+)'
+          - 'APP_KEY[=:\s]+([^\s"<]+)'
+          - 'AWS_SECRET_ACCESS_KEY[=:\s]+([^\s"<]+)'
+        # We mask the value; the hunter re-runs the template with
+        # `-debug` to see the full extracted value.

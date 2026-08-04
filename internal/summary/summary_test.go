@@ -110,7 +110,7 @@ func TestFindingsContainsFilteredOutAppendix(t *testing.T) {
 	if !strings.Contains(text, "What was filtered out") {
 		t.Errorf("findings.md missing 'What was filtered out' appendix:\n%s", text)
 	}
-	if !strings.Contains(text, "URLs pruned for not responding 200:") {
+	if !strings.Contains(text, "URLs pruned for not responding testable:") {
 		t.Errorf("findings.md should report the URL prune count")
 	}
 	if !strings.Contains(text, "sqlmap candidate folders dropped") {

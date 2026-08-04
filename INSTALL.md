@@ -44,6 +44,32 @@ After it finishes, open a new terminal (or `source ~/.zshrc` /
 
 ---
 
+## Updating
+
+After `git pull` (or any local rebuild), the binary at
+`~/.local/share/rfuf/rfuf` is **not** refreshed automatically — you
+must run one of:
+
+```bash
+rfuf update                # silent, no prompts — preferred
+./rfuf install             # interactive (asks which shell to patch)
+```
+
+`rfuf update` rebuilds the current source tree and copies the new
+binary over `~/.local/share/rfuf/rfuf`. It does **not** touch your
+shell rc file or the `~/.local/bin/rfuf` symlink (those were already
+set up by the first `install`). Run it after every `git pull` so your
+next `rfuf -d <domain> -resume` actually uses the latest pipeline /
+executor code.
+
+> Without `rfuf update`, the binary on your `$PATH` can be weeks
+> behind the source tree, and you'll be running the old executor logic
+> (serial `while read; do ffuf` loops, slow `sqlmap` flags, no per-step
+> timeouts) against your latest target. This is the single most common
+> reason "I pulled the new fixes but they didn't seem to do anything."
+
+---
+
 ## Verify the install
 
 ```bash

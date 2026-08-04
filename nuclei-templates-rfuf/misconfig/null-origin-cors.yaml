@@ -1,0 +1,31 @@
+id: rfuf-null-origin-cors
+info:
+  name: RFUF — null origin reflected with credentials
+  author: rfuf
+  severity: high
+  description: |
+    The target reflects `Origin: null` in `Access-Control-Allow-Origin` AND
+    sets `Access-Control-Allow-Credentials: true`. Sandboxed iframes (sandbox=
+    allow-forms) and `file://` pages have a null origin and can issue
+    credentialed cross-origin requests against this target.
+  reference:
+    - https://portswigger.net/web-security/cors
+  tags: rfuf,cors,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Origin: null
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "Access-Control-Allow-Origin: null"
+      - type: word
+        part: header
+        words:
+          - "Access-Control-Allow-Credentials: true"
+        case-insensitive: true

@@ -146,7 +146,46 @@ func GetRequiredTools(goBin string) []Tool {
 			{"wafw00f", "pipx install wafw00f || pip3 install --break-system-packages wafw00f || pip3 install --user wafw00f", "wafw00f"},
 			{"arjun", "pipx install arjun || pip3 install --break-system-packages arjun || pip3 install --user arjun", "arjun"},
 			{"ghauri", "pipx install git+https://github.com/r0oth3x49/ghauri.git || pip3 install --break-system-packages git+https://github.com/r0oth3x49/ghauri.git", "ghauri"},
+		// interactsh-client: OOB callback server used by the new SSRF/RCE/XSS
+		// stages to catch blind results that don't trip templates. Allocates
+		// a unique *.oast.fun (or self-hosted) URL at pipeline boot that
+		// becomes the substitute target for blind payloads.
+		{"interactsh-client", "go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest", "interactsh-client"},
 	}
+}
+
+// VerifyToolsPresent is the no-install counterpart to EnsureTools. Used on
+// `-resume` so a stopped pipeline can pick up without re-running sudo /
+// `go install` for tools we already have on disk. It returns a clear error
+// if any required binary is missing — the failure message tells the user
+// how to recover (drop -resume to trigger the installer).
+//
+// Why this exists: the previous behavior ran the full installer on every
+// `-resume`. That re-cloned SecLists (multi-hundred-MB git clone), triggered
+// `sudo dnf install git ...` prompts that block forever in non-interactive
+// terminals, and rebuilt Go tools the user already had — wasting minutes
+// before the pipeline even started.
+func VerifyToolsPresent() error {
+	// bash is the universal shell for every pipeline stage; missing-bash
+	// commands would just fail silently inside the executor.
+	if _, err := exec.LookPath("bash"); err != nil {
+		return fmt.Errorf("bash is required but not found on PATH")
+	}
+
+	// Loop over every tool defined in GetRequiredTools and look up the
+	// CheckBinary on PATH. We deliberately don't try to repair anything
+	// here — if something is missing, the user should run the install
+	// path once without -resume.
+	missing := []string{}
+	for _, t := range GetRequiredTools("") {
+		if _, err := exec.LookPath(t.CheckBinary); err != nil {
+			missing = append(missing, t.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required tools (run `rfuf -d <domain>` once WITHOUT -resume to install): %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // EnsureTools is the entry point. It is idempotent: any tool already on PATH
