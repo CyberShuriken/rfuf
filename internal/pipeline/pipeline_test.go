@@ -33,6 +33,27 @@ func TestXSSScanUsesSupportedDalfoxFlags(t *testing.T) {
 	t.Fatal("xss_scan step not found")
 }
 
+// TestAmassFailureDoesNotAbortPipeline covers Kali's packaged Amass builds,
+// which can exit 1 when a passive data source is unavailable. Enumeration
+// still has subfinder and assetfinder, so the Amass stage must preserve any
+// partial output and report success to the scheduler.
+func TestAmassFailureDoesNotAbortPipeline(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, step := range steps {
+		if step.ID != "amass_enum" {
+			continue
+		}
+		if !strings.Contains(step.Command, "if ! amass enum") {
+			t.Fatalf("amass_enum must handle a non-zero Amass exit: %q", step.Command)
+		}
+		if !strings.Contains(step.Command, "touch amass_raw.txt") {
+			t.Fatalf("amass_enum must provide an empty-file fallback: %q", step.Command)
+		}
+		return
+	}
+	t.Fatal("amass_enum step not found")
+}
+
 // TestDirbruteUsesRecursion guards against the slow per-host loop
 // regressing back in. The fast path is one ffuf invocation with two
 // wordlists (-w hosts.txt:HOST + -w words.txt:WORD), recursion enabled

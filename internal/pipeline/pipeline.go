@@ -234,7 +234,12 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		// the data-source APIs, finishing in minutes. -timeout 30 is
 		// defense in depth: even if the global -step-timeout is disabled,
 		// amass still exits in 30 minutes.
-		{"amass_enum", fmt.Sprintf("amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt", domain), "default", []string{"setup_directories"}, 0},
+		// Amass versions packaged by Kali can return exit 1 when a passive
+		// data source is unavailable (for example, an API or TLS issue).
+		// Subfinder and assetfinder are independent sources, so do not throw
+		// away their results or stop the whole pipeline in that case. Keep
+		// any partial Amass output and leave an empty file if it produced none.
+		{"amass_enum", fmt.Sprintf("if ! amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >&2; touch amass_raw.txt; fi", domain), "default", []string{"setup_directories"}, 0},
 		// amass_parse: `amass -o file.txt` writes one subdomain per line.
 		// grep -F treats the domain as a fixed string. Added file check for resilience.
 		{"amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "grep", []string{"amass_enum"}, 0},
