@@ -70,6 +70,20 @@ func Install() error {
 	}
 	fmt.Printf("[+] Installed binary to %s\n", absInstallBin)
 
+	// 3b. Copy the bundled nuclei-templates-rfuf overlay alongside the
+	// binary so `rfuf` can always find its custom templates regardless
+	// of where the source tree lives. The pipeline's resolveNucleiTemplatesRfuf
+	// checks this adjacent location first.
+	templatesSrc := "nuclei-templates-rfuf"
+	if info, err := os.Stat(templatesSrc); err == nil && info.IsDir() {
+		templatesDst := filepath.Join(absInstallDir, "nuclei-templates-rfuf")
+		if err := copyDir(templatesSrc, templatesDst); err != nil {
+			fmt.Printf("[!] Warning: could not copy nuclei-templates-rfuf: %v\n", err)
+		} else {
+			fmt.Printf("[+] Copied nuclei-templates-rfuf to %s\n", templatesDst)
+		}
+	}
+
 	// 4. Create ~/.local/bin and symlink rfuf → the real binary.
 	if err := os.MkdirAll(filepath.Dir(absBinLink), 0755); err != nil {
 		return fmt.Errorf("could not create %s: %w", filepath.Dir(absBinLink), err)
@@ -176,7 +190,68 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0755)
+
+	// Write to a temp file in the same directory as dst, then atomically
+	// rename it into place. This avoids the ETXTBSY ("text file busy") error
+	// that Linux raises when you try to overwrite an executable that is
+	// currently running — which is exactly what `rfuf update` does (it
+	// replaces the binary that is executing the update command). On the
+	// same filesystem, os.Rename is an atomic unlink+rename at the kernel
+	// level and never hits ETXTBSY.
+	tmpFile, err := os.CreateTemp(filepath.Dir(dst), ".rfuf-update-*")
+	if err != nil {
+		// Fallback: if we can't create a temp file, try direct write
+		return os.WriteFile(dst, data, 0755)
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Chmod(0755); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// copyDir recursively copies a directory from src to dst.
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // detectShell reads $SHELL to figure out the user's login shell, and

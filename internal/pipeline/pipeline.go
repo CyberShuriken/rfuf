@@ -262,7 +262,7 @@ exit 0`, "grep", []string{"dnsx_resolve"}, 0},
 
 		{"subzy_takeover", "subzy run --targets live_subs.txt --vuln | tee subzy_vulnerable.txt", "default", []string{"merge_brute_subs"}, 0},
 		{"extract_takeover_targets", fmt.Sprintf("grep \"VULNERABLE\" subzy_vulnerable.txt | grep -oE '[a-zA-Z0-9._-]+\\.%s' | sort -u > takeover_targets.txt", domainEscaped), "grep", []string{"subzy_takeover"}, 0},
-		{"validate_takeovers", fmt.Sprintf("nuclei -l takeover_targets.txt -t %s/http/takeovers/ %s -o validated_takeovers.txt", paths.NucleiTemplates, nucleiOptimized), "default", []string{"extract_takeover_targets"}, 0},
+		{"validate_takeovers", fmt.Sprintf("nuclei -l takeover_targets.txt -t %s/http/takeovers/ %s -o validated_takeovers.txt", paths.NucleiTemplates, nucleiOptimized), "grep", []string{"extract_takeover_targets"}, 0},
 
 		// httpx_probe now injects auth headers (when -auth-cookie/-auth-bearer set)
 		{"httpx_probe", fmt.Sprintf(`%s
@@ -292,11 +292,11 @@ while read HOST; do
 done < alive.txt
 exit 0`, "grep", []string{"httpx_probe"}, 0},
 
-		{"nuclei_exposures", fmt.Sprintf("nuclei -l alive.txt -tags token-spray,exposure,config -severity medium,high,critical %s -o credentials_found.txt", nucleiOptimized), "default", []string{"httpx_probe"}, 0},
-		{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -tags misconfig,exposure,panel %s -o misconfigs.txt", nucleiOptimized), "default", []string{"httpx_probe"}, 0},
-		{"nuclei_auth_scan", fmt.Sprintf("nuclei -l alive.txt -tags jwt,auth-bypass,default-login %s -o auth_results.txt", nucleiOptimized), "default", []string{"httpx_probe"}, 0},
+		{"nuclei_exposures", fmt.Sprintf("nuclei -l alive.txt -tags token-spray,exposure,config -severity medium,high,critical %s -o credentials_found.txt", nucleiOptimized), "grep", []string{"httpx_probe"}, 0},
+		{"nuclei_misconfigs", fmt.Sprintf("nuclei -l alive.txt -tags misconfig,exposure,panel %s -o misconfigs.txt", nucleiOptimized), "grep", []string{"httpx_probe"}, 0},
+		{"nuclei_auth_scan", fmt.Sprintf("nuclei -l alive.txt -tags jwt,auth-bypass,default-login %s -o auth_results.txt", nucleiOptimized), "grep", []string{"httpx_probe"}, 0},
 		// GraphQL templates are maintained across multiple directories in nuclei-templates.
-		{"nuclei_graphql_scan", fmt.Sprintf("nuclei -l alive.txt -tags graphql %s -o graphql_exposed.txt", nucleiOptimized), "default", []string{"httpx_probe"}, 0},
+		{"nuclei_graphql_scan", fmt.Sprintf("nuclei -l alive.txt -tags graphql %s -o graphql_exposed.txt", nucleiOptimized), "grep", []string{"httpx_probe"}, 0},
 
 		// === NEW: Discourse-specific probes (admin, sidekiq, version, Onebox) ===
 		{"discourse_probes", `set +e
@@ -548,14 +548,14 @@ exit 0`, authSnip, buildWafTamperSnippet(), xssScanTargetCap, xssScanTimeout), "
 		{"rce_targets", fmt.Sprintf(`%s . all_urls_200.txt > rce_targets_filtered.txt
 { gf rce rce_targets_filtered.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' rce_targets_filtered.txt; } | sort -u | head -n %d > rce_targets.txt
 exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"url_filter_alive"}, 0},
-		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -tags rce -severity high,critical %s -o nuclei_rce_rce.txt", nucleiOptimized), "default", []string{"rce_targets"}, 0},
+		{"rce_scan", fmt.Sprintf("nuclei -l rce_targets.txt -tags rce -severity high,critical %s -o nuclei_rce_rce.txt", nucleiOptimized), "grep", []string{"rce_targets"}, 0},
 
 		// idor_targets: filter out Discourse public forum URLs (these are
 		// public read-only and can't have IDOR). Same filter logic.
 		{"idor_targets", fmt.Sprintf(`%s . all_urls_200.txt > idor_targets_filtered.txt
 { gf idor idor_targets_filtered.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' idor_targets_filtered.txt; } | sort -u | head -n %d > idor_targets.txt
 exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"url_filter_alive"}, 0},
-		{"idor_scan", fmt.Sprintf("nuclei -l idor_targets.txt -tags idor %s -o idor_vulnerabilities.txt", nucleiOptimized), "default", []string{"idor_targets"}, 0},
+		{"idor_scan", fmt.Sprintf("nuclei -l idor_targets.txt -tags idor %s -o idor_vulnerabilities.txt", nucleiOptimized), "grep", []string{"idor_targets"}, 0},
 
 		// ssrf_targets: filter + dedup
 		{"ssrf_targets", fmt.Sprintf(`%s . all_urls_200.txt > ssrf_targets_filtered.txt
@@ -568,20 +568,20 @@ exit 0`, filterTestableRef), "grep", []string{"url_filter_alive"}, 0},
 else
   nuclei -l ssrf_targets.txt -tags ssrf %s -o ssrf_vulnerabilities.txt
 fi
-exit 0`, nucleotidesOptimizedAuth(), nucleiOptimized), "default", []string{"ssrf_targets"}, 0},
+exit 0`, nucleotidesOptimizedAuth(), nucleiOptimized), "grep", []string{"ssrf_targets"}, 0},
 
 		// redirect_targets: filter + dedup + cap
 		{"redirect_targets", fmt.Sprintf(`%s . all_urls_200.txt > redirect_targets_filtered.txt
 gf redirect redirect_targets_filtered.txt | sort -u | head -n %d > redirect_targets.txt
 exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"url_filter_alive"}, 0},
-		{"redirect_scan", fmt.Sprintf("nuclei -l redirect_targets.txt -tags redirect %s -o open_redirect_results.txt", nucleiOptimized), "default", []string{"redirect_targets"}, 0},
+		{"redirect_scan", fmt.Sprintf("nuclei -l redirect_targets.txt -tags redirect %s -o open_redirect_results.txt", nucleiOptimized), "grep", []string{"redirect_targets"}, 0},
 
 		// lfi_targets: filter + dedup
 		{"lfi_targets", fmt.Sprintf(`%s . all_urls_200.txt > lfi_targets_filtered.txt
 gf lfi lfi_targets_filtered.txt > lfi_targets.txt
 sort -u lfi_targets.txt -o lfi_targets.txt
 exit 0`, filterTestableRef), "grep", []string{"url_filter_alive"}, 0},
-		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiOptimized), "default", []string{"lfi_targets"}, 0},
+		{"lfi_scan", fmt.Sprintf("nuclei -l lfi_targets.txt -tags lfi %s -o lfi_results.txt", nucleiOptimized), "grep", []string{"lfi_targets"}, 0},
 
 		// cors_check: now credentialed — checks both ACAO and ACAC.
 		{"cors_check", `set +e
@@ -614,7 +614,7 @@ exit 0`, wordlist, wordlist), "default", []string{"httpx_probe"}, 0},
 		{"dirbrute_verify_200", "if [ -s ffuf_dirs_raw.txt ]; then httpx -l ffuf_dirs_raw.txt -silent -status-code -mc 200 -o ffuf_dirs_200.txt; else : > ffuf_dirs_200.txt; fi", "grep", []string{"dirbrute_ffuf"}, 0},
 
 		// NEW: scan JS-discovered endpoints against nuclei token-spray/misconfig
-		{"js_endpoints_scan", fmt.Sprintf("nuclei -l js_endpoints.txt -tags exposure,token-spray,misconfig %s -o js_endpoint_findings.txt", nucleiOptimized), "default", []string{"jsmap_scrape"}, 0},
+		{"js_endpoints_scan", fmt.Sprintf("nuclei -l js_endpoints.txt -tags exposure,token-spray,misconfig %s -o js_endpoint_findings.txt", nucleiOptimized), "grep", []string{"jsmap_scrape"}, 0},
 
 		{"manual_review_queue", "grep -Ei \"checkout|price|payment|coupon|book|cart|fare\" all_urls.txt | sort -u > manual_business_logic_review.txt", "grep", []string{"merge_all_urls"}, 0},
 
@@ -763,7 +763,13 @@ exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		// Runs last so all preceding stages have populated alive.txt +
 		// tech_fingerprint.txt. Capped to ~5 templates × alive.txt hosts
 		// → bounded runtime.
-		{"nuclei_rfuf_pass", fmt.Sprintf("nuclei -l alive.txt -t nuclei-templates-rfuf/ %s -o nuclei_rfuf_pass.txt", nucleiOptimized), "grep", []string{"httpx_probe"}, 0},
+		{"nuclei_rfuf_pass", fmt.Sprintf(`if [ -n "%s" ] && [ -d "%s" ]; then
+  nuclei -l alive.txt -t "%s" %s -o nuclei_rfuf_pass.txt || true
+else
+  echo "[!] nuclei-templates-rfuf overlay not found — skipping custom template pass"
+  : > nuclei_rfuf_pass.txt
+fi
+exit 0`, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, nucleiOptimized), "grep", []string{"httpx_probe"}, 0},
 	}
 }
 

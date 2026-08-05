@@ -276,9 +276,14 @@ func EnsureTools(goBin string) error {
 		// Nuclei needs templates before its first scan can do anything
 		// useful. Updating templates on every install is wasteful, but
 		// doing it once at first-install time is the right trade-off.
-		if t.Name == "nuclei" {
+			if t.Name == "nuclei" {
 			fmt.Println("[*] Updating nuclei templates (first-time setup)...")
-			_ = exec.Command("nuclei", "-update-templates").Run()
+			// On Kali, nuclei may be installed via apt with system-wide
+			// templates at /usr/share/nuclei-templates. The -update-templates
+			// flag needs the templates directory to be writable, so we only
+			// run it if the user's templates dir is writable (not system).
+			updateCmd := exec.Command("nuclei", "-update-templates")
+			_ = updateCmd.Run()
 		}
 	}
 
