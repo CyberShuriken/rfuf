@@ -510,46 +510,53 @@ cat endpoints_found/*.txt 2>/dev/null | sort -u | head -2000 > js_endpoints.txt
 cat js_secrets/*.txt 2>/dev/null | sort -u > js_secrets.txt
 exit 0`, "grep", []string{"httpx_probe"}, 0},
 
-		// trufflehog_scan: previous version ran `trufflehog filesystem
-		// clean_katana_urls.txt` which is invalid — `trufflehog filesystem`
-		// expects a directory, not a URL list. The correct invocations for
-		// URL/JS-bundle content are `trufflehog file <path>` (scans raw
-		// bytes for embedded credentials) or `trufflehog --file <path>`
-		// (auto-detects format). We do both: scan the cleaned URL file for
-		// embedded creds, and scan every JS bundle we previously downloaded.
+		// trufflehog_scan: TruffleHog has NO `trufflehog file` or
+		// `trufflehog directory` subcommand — the real subcommands are git /
+		// github / gitlab / filesystem / s3 / gcs / syslog / docker / ... .
+		// `trufflehog filesystem <path>` accepts a file OR a directory, so we
+		// point it at every local artifact that can contain embedded creds:
+		// the URL list (grep for inline keys), every downloaded JS bundle,
+		// the js_secrets/ and endpoints_found/ scratch dirs, and any API spec
+		// bodies (openapi.json frequently ships example credentials).
 		{"trufflehog_scan", `set +e
 : > trufflehog_results.txt
 if command -v trufflehog >/dev/null 2>&1; then
   if [ -s clean_katana_urls.txt ]; then
-    trufflehog file clean_katana_urls.txt --only-verified >> trufflehog_results.txt 2>/dev/null || true
+    trufflehog filesystem clean_katana_urls.txt --results=verified,unknown >> trufflehog_results.txt 2>/dev/null || true
   fi
   if [ -d js_bundles ] && [ -n "$(ls -A js_bundles 2>/dev/null)" ]; then
-    trufflehog directory js_bundles --only-verified >> trufflehog_results.txt 2>/dev/null || true
+    trufflehog filesystem js_bundles --results=verified,unknown >> trufflehog_results.txt 2>/dev/null || true
   fi
-  if [ -s endpoints_found ] || [ -s js_endpoints.txt ]; then
-    trufflehog file js_endpoints.txt --only-verified >> trufflehog_results.txt 2>/dev/null || true
+  if [ -s js_endpoints.txt ]; then
+    trufflehog filesystem js_endpoints.txt --results=verified,unknown >> trufflehog_results.txt 2>/dev/null || true
+  fi
+  if [ -d js_secrets ] && [ -n "$(ls -A js_secrets 2>/dev/null)" ]; then
+    trufflehog filesystem js_secrets --results=verified,unknown >> trufflehog_results.txt 2>/dev/null || true
+  fi
+  if [ -d api_specs ] && [ -n "$(ls -A api_specs 2>/dev/null)" ]; then
+    trufflehog filesystem api_specs --results=verified,unknown >> trufflehog_results.txt 2>/dev/null || true
   fi
 fi
 # Sort + dedup so duplicate matches across files collapse
 sort -u trufflehog_results.txt -o trufflehog_results.txt 2>/dev/null || true
-exit 0`, "grep", []string{"clean_urls", "jsmap_scrape"}, 0},
+exit 0`, "grep", []string{"clean_urls", "jsmap_scrape", "api_discovery"}, 0},
 
 		// TIGHTER secrets regex: requires real key=value patterns with hex/b64
-		// values, NOT just substring `token`/`secret`. The previous version
-		// matched every Next.js route name containing the word `token`
-		// (plaid_link_token, refresh-token, etc.). Now we require either:
-		//   - AWS/GCP/GitHub/Slack/OpenAI/Google API key shapes (fixed prefix)
-		//   - JWT (`eyJ...eyJ...sig`)
-		//   - Bearer <value>
-		//   - Quoted key="value" with ≥16 hex/b64 chars
-		// We also explicitly EXCLUDE common Next.js / Django REST framework
-		// route names by post-filtering.
+		// values, NOT just a substring `token`/`secret`/`key` appearing in a
+		// route name. Every branch now demands an ASSIGNMENT shape (key = value
+		// or key: value) where the value side is a real hex / base64 / prefix-
+		// anchored token of ≥16 chars. Fixed-prefix detector shapes (AKIA,
+		// ghp_, xoxb-, sk-, AIza, eyJ JWT) are still matched bare since they
+		// are near-zero-FP on their own. We also post-filter known Next.js /
+		// Django / Plaid ROUTE names that the regex can still catch inside
+		// query strings or path fragments — this is what previously produced
+		// 22 false positives per run (plaid_link_token, refresh-token, ...).
 		{"grep_secrets", `: > potential_secrets.txt
-grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{32,}|sk_live_[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]{50,}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|Bearer\s+[A-Za-z0-9_-]{20,}|["'"'"']?api[_-]?key["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,}|["'"'"']?secret["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,}|["'"'"']?token["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,})' clean_katana_urls.txt 2>/dev/null \
-  | grep -Ev '(_next/static/chunks|pages/lib|/holdings/plaid|/holdings/exchange|ReactPropTypesSecret|auth/refresh-token|password-reset|/authentication/v1/|/static/js/.*refresh-token)' \
+grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(test_|live_)?[A-Za-z0-9]{24,}|sk_live_[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]{50,}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|Bearer\s+[A-Za-z0-9._=-]{20,}|["'"'"'\]](api[_-]?key|apikey|secret[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["'"'"']?\s*[=:]\s*["'"'"']?[A-Za-z0-9+/=_-]{20,}|[?&](api[_-]?key|apikey|secret|token|access_token|client_secret)=[A-Za-z0-9+/=_-]{20,})' clean_katana_urls.txt 2>/dev/null \
+  | grep -Ev '(plaid[_-]?link[_-]?token|_next/static/chunks|pages/lib|/holdings/plaid|/holdings/exchange|ReactPropTypesSecret|auth/refresh[-_]?token|password[-_]?reset|/authentication/v1/|/static/js/.*refresh[-_]?token|exchange[-_]?plaid[-_]?token)' \
   | sort -u > potential_secrets.txt
 # Also scan JS bundles for embedded secrets (no URL false positives here)
-[ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|xox[baprs]-[A-Za-z0-9-]{10,})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
+[ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-(test_|live_)?[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|xox[baprs]-[A-Za-z0-9-]{10,}|sk_live_[A-Za-z0-9]{24,}|ya29\.[0-9A-Za-z_-]{50,})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
 exit 0`, "grep", []string{"clean_urls", "jsmap_scrape"}, 0},
 
 		// gau_urls / wayback_urls: wrap in the shell `timeout` builtin so
@@ -760,11 +767,11 @@ while read HOST; do
     fi
   done
 
-  # 2. Plaid endpoint probe. The Plaid Link flow exposes these paths.
-  for ENDPOINT in /plaid/link/token/create /plaid/exchange_public_token /api/plaid/link/token/create /api/plaid/exchange_public_token; do
+	  # 2. Plaid endpoint probe. The Plaid Link flow exposes these paths.
+  for ENDPOINT in /plaid/link/token/create /plaid/exchange_public_token /api/plaid/link/token/create /api/plaid/exchange_public_token /plaid_link_token /api/plaid_link_token /auth/refresh-token /api/auth/refresh-token /auth/refresh_token /api/auth/refresh_token /exchange_plaid_token /api/exchange_plaid_token; do
     CODE=$(curl -sk --max-time 6 -X POST -H "Content-Type: application/json" -d '{}' -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
     if [ "$CODE" = "200" ]; then
-      echo "[HIGH] $HOST$ENDPOINT — Plaid endpoint returns 200 unauthenticated" >> nextjs_plaid_jwt_findings.txt
+      echo "[HIGH] $HOST$ENDPOINT — Plaid/auth-token endpoint returns 200 unauthenticated" >> nextjs_plaid_jwt_findings.txt
     fi
   done
 
@@ -786,6 +793,55 @@ while read HOST; do
 done <<< "$NEXTJS_HOSTS"
 exit 0`, "grep", []string{"httpx_probe"}, 0},
 
+		// === NEW: Django REST Framework probe ===
+		// consumerapi.saytechnologies.com is DRF (jQuery REST framework bundle
+		// present). DRF is a high-yield IDOR/BOLA target: list endpoints under
+		// /api/v{1,2,3}/ routinely accept any caller's object IDs when the
+		// permission class is IsAuthenticated instead of per-object checks.
+		// Detection: DRF returns a distinctive browsable-API HTML footer
+		// ("Django REST framework"), X-Frame-Options: SAMEORIGIN + the
+		// canonical OPTIONS 405 on GET-only endpoints. Probe:
+		//   1. Detect DRF hosts from the JSON response body / Content-Type
+		//      application/json on /api/v3/ style prefixes + DRF footer
+		//   2. Enumerate list endpoints found in all_urls.txt under /api/vN/
+		//   3. For each list endpoint, record the object-ID-bearing detail URL
+		//      so idor_scan + the hunter's two-account test can swap IDs
+		// Output: drf_findings.txt (detection lines) + drf_idor_targets.txt
+		{"drf_probe", `set +e
+: > drf_findings.txt
+: > drf_idor_targets.txt
+
+# Detect DRF hosts: the browsable API footer is near-unique to DRF.
+DRF_HOSTS=$( (grep -E "django|drf|djangorest" tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; curl -sk --max-time 8 "$(head -1 alive.txt 2>/dev/null)/api/v3/" 2>/dev/null | grep -q "Django REST framework" && echo "" ; true) | grep -v '^$' | sort -u )
+
+# Broaden detection: any alive host whose /api/v3/ (or /api/ /api/v1/ /api/v2/)
+# JSON response carries DRF's signature pagination/links keys, or whose
+# OPTIONS response mentions DRF.
+while read HOST; do
+  [ -z "$HOST" ] && continue
+  echo "$DRF_HOSTS" | grep -qxF "$HOST" && continue
+  for PREFIX in /api/v3/ /api/v2/ /api/v1/ /api/; do
+    # DRF fingerprint: browsable-API footer (HTML) or the DRF pagination +
+    # response-envelope JSON shapes ("next":..., "previous":..., "results":[,
+    # "detail": "Not found.") on a JSON response. A bare "drf" substring is
+    # dropped — it FP'd on unrelated tokens.
+    BODY=$(curl -sk --max-time 8 "$HOST$PREFIX" 2>/dev/null | head -c 30000)
+    if echo "$BODY" | grep -qiE "Django REST framework|rest_framework|\"next\"\s*:\s*\"https?://|\"detail\"\s*:\s*\"Not found|Not found."; then
+      echo "$HOST  django-rest-framework," >> drf_findings.txt
+      continue 2
+    fi
+  done
+done < alive.txt
+sort -u drf_findings.txt -o drf_findings.txt 2>/dev/null
+
+# Enumerate IDOR-prone detail endpoints under /api/vN/ on DRF hosts.
+# List endpoints discovered in all_urls.txt that look like collection roots
+# (no trailing id) are recorded; the hunter tests ID-swaps manually.
+awk '/\/api\/v[0-9]+\// {print}' all_urls.txt 2>/dev/null \
+  | grep -Ei '/(accounts|users|profiles|orders|invoices|payments|cards|loans|holdings|transactions|events|companies|merchants)/' \
+  | sort -u | head -n 1000 > drf_idor_targets.txt
+exit 0`, "grep", []string{"httpx_probe", "merge_all_urls"}, 0},
+
 		// === NEW: DRF / BOLA surface mapping ===
 		// Django REST Framework + similar JSON-API backends frequently have
 		// BOLA (Broken Object Level Authorization) on UUID-shaped query
@@ -799,6 +855,7 @@ exit 0`, "grep", []string{"httpx_probe"}, 0},
 		{"bola_surface_run", `set +e
 : > bola_targets.txt
 : > bola_curl.txt
+: > bola_permutations.txt
 # Match UUIDs in URLs like ?company=<uuid> or /<uuid>/. Capture host, path, param, value.
 grep -oE 'https?://[^ ?&]+\?[a-z_]+=[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' all_urls.txt 2>/dev/null \
   | while read -r LINE; do
@@ -817,6 +874,31 @@ grep -oE 'https?://[^ ?&]+\?[a-z_]+=[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]
     echo "" >> bola_curl.txt
 done
 sort -u bola_targets.txt -o bola_targets.txt 2>/dev/null
+
+# === Subdomain-aware UUID permutations ===
+# A UUID seen on host-A with param P should also be tested on every OTHER
+# host that accepts the same param P. If the API validates ownership per-
+# company rather than per-session, passing host-B's UUID to host-A's endpoint
+# (or vice versa) is the classic cross-tenant BOLA test. Permutations are
+# bounded: at most 3 foreign UUIDs per (param, host) pair to keep the curl
+# list runnable.
+# Shell implementation: one file per param of all UUIDs seen for it,
+# then emit curl commands for each host+url using up to 3 OTHER UUIDs.
+TMP=$(mktemp -d)
+while IFS="$(printf '\t')" read -r URL PARAM UUID; do
+  echo "$UUID" >> "$TMP/p_$PARAM"
+done < bola_targets.txt
+while IFS="$(printf '\t')" read -r URL PARAM UUID; do
+  OTHERS=$(grep -vxF "$UUID" "$TMP/p_$PARAM" 2>/dev/null | shuf -n 3)
+  [ -z "$OTHERS" ] && continue
+  echo "# cross-tenant: $URL?$PARAM=<foreign-uuid> (original uuid=$UUID)" >> bola_permutations.txt
+  echo "$OTHERS" | while read -r FOREIGN; do
+    echo "curl -sk --max-time 10 \"$URL?$PARAM=$FOREIGN\" -o /dev/null -w \"  foreign=$FOREIGN -> %{http_code} %{size_download}B\\n\"" >> bola_permutations.txt
+  done
+  echo "" >> bola_permutations.txt
+done < bola_targets.txt
+rm -rf "$TMP"
+sort -u bola_permutations.txt -o bola_permutations.txt 2>/dev/null
 exit 0`, "grep", []string{"merge_all_urls"}, 0},
 
 		// manual_review_queue: keyword list tightened so it doesn't false-positive

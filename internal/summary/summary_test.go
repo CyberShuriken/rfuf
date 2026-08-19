@@ -118,6 +118,77 @@ func TestFindingsContainsFilteredOutAppendix(t *testing.T) {
 	}
 }
 
+// TestSummaryFormatArgOrder ensures SUMMARY.md's format string never ends
+// up misaligned with its arguments (the previous version appended the
+// backupscan/hostheader/secheaders/cors2 counts at the END of the arg list
+// while their labels sat mid-document, producing %!d(MISSING) markers and
+// wrong numbers next to the labels). The test fills every findings file
+// the report reads with N lines and asserts the printed counts are all N.
+func TestSummaryFormatArgOrder(t *testing.T) {
+	workDir := t.TempDir()
+	cp := &checkpoint.Checkpoint{Domain: "example.com"}
+
+	// Any file the SUMMARY template %d-labels gets the same distinct line
+	// count so a misplaced argument becomes visible as a wrong number.
+	writeN := func(name string, n int) {
+		lines := make([]string, n)
+		for i := range lines {
+			lines[i] = "https://example.com/finding-" + name + "-" + string(rune('a'+i))
+		}
+		_ = os.WriteFile(filepath.Join(workDir, name), []byte(strings.Join(lines, "\n")), 0644)
+	}
+
+	// One findings line each for every file Generate reads (empty files are
+	// fine for the format-order check — we only assert the counters that
+	// are wired through the template).
+	for _, name := range []string{
+		"subs.txt", "live_subs.txt", "alive.txt", "tech_fingerprint.txt",
+		"naabu_ports.txt", "hidden_params.txt",
+		"nuclei_rce_rce.txt", "validated_takeovers.txt", "lfi_results.txt",
+		"ssrf_vulnerabilities.txt", "xss_vulnerabilities.txt",
+		"trufflehog_results.txt", "potential_secrets.txt", "auth_results.txt",
+		"cors_findings.txt", "idor_vulnerabilities.txt", "open_redirect_results.txt",
+		"graphql_exposed.txt", "ffuf_dirs_200.txt",
+		"discourse_findings.txt", "laravel_findings.txt", "wordpress_findings.txt",
+		"cache_poison_findings.txt", "js_endpoints.txt", "js_secrets.txt",
+		"js_endpoint_findings.txt", "waf_detections.txt", "ghauri_results.txt",
+		"api_specs.txt", "bola_targets.txt", "bola_permutations.txt",
+		"nextjs_plaid_jwt_findings.txt", "drf_findings.txt", "drf_idor_targets.txt",
+		"reflection_findings.txt", "paramshape_findings.txt", "authshape_findings.txt",
+		"signup_takeover_findings.txt", "idor_surface.txt", "oauth_findings.txt",
+		"race_results.txt", "bucket_findings.txt", "takeover_v2_findings.txt",
+		"js_mine_findings.txt", "business_logic_findings.txt", "nuclei_rfuf_pass.txt",
+		"backupscan_findings.txt", "hostheader_findings.txt",
+		"secheaders_findings.txt", "cors2_findings.txt",
+	} {
+		writeN(name, 7)
+	}
+	if err := Generate(workDir, cp); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(workDir, "SUMMARY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Contains(text, "%!") {
+		t.Errorf("SUMMARY.md contains leftover format markers — label/arg order is broken:\n%s", text)
+	}
+	// sanity: every labeled counter must show the seeded count (7) or the
+	// sqlmap-derived counts — mismatched labels would show a different number
+	// or a missing marker.
+	for _, label := range []string{
+		"**Backup / sensitive files exposed:** 7", "**Host header injection:** 7",
+		"**Security header gaps:** 7", "**Credentialed CORS (preflight):** 7",
+		"**DRF hosts detected:** 7", "**BOLA cross-tenant permutations:** 7",
+		"**DRF IDOR targets (/api/vN/):** 7",
+	} {
+		if !strings.Contains(text, label) {
+			t.Errorf("SUMMARY.md missing or misnumbered label %q", label)
+		}
+	}
+}
+
 // TestConfirmedSqlmapResults splits sqlmap_results/ into confirmed vs
 // dropped using the same heuristic the report relies on.
 func TestConfirmedSqlmapResults(t *testing.T) {

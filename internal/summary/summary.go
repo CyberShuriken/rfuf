@@ -63,9 +63,12 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	// katana+gau+wayback return empty scanner target lists.
 	apiSpecs := getFileContent(filepath.Join(workDir, "api_specs.txt"))
 	bolaTargets := getFileContent(filepath.Join(workDir, "bola_targets.txt"))
+	bolaPermutations := getFileContent(filepath.Join(workDir, "bola_permutations.txt"))
 	nextjsPlaidJWT := getFileContent(filepath.Join(workDir, "nextjs_plaid_jwt_findings.txt"))
 	jsSecrets := getFileContent(filepath.Join(workDir, "js_secrets.txt"))
 	jsEndpointFindings := getFileContent(filepath.Join(workDir, "js_endpoint_findings.txt"))
+	drfFindings := getFileContent(filepath.Join(workDir, "drf_findings.txt"))
+	drfIdorTargets := getFileContent(filepath.Join(workDir, "drf_idor_targets.txt"))
 
 	// === Tech fingerprint rollup ===
 	// Per-host stack signal. Used by both the dashboard and the report
@@ -121,9 +124,12 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 		PotentialSecrets: potentialSecrets,
 		FFUF:            ffuf,
 		ManualReview:    getFileContent(filepath.Join(workDir, "manual_business_logic_review.txt")),
-		APISpecs:        apiSpecs,
-		BOLATargets:     bolaTargets,
-		NextjsPlaidJWT:  nextjsPlaidJWT,
+		APISpecs:         apiSpecs,
+		BOLATargets:      bolaTargets,
+		BOLAPermutations: bolaPermutations,
+		NextjsPlaidJWT:   nextjsPlaidJWT,
+		DRFFindings:      drfFindings,
+		DRFIdorTargets:   drfIdorTargets,
 
 		// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
 		DiscourseFindings:   discourse,
@@ -211,6 +217,8 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **JS Endpoints Discovered:** %d
 - **JS Secrets Found:** %d
 - **JS Endpoint Nuclei Hits:** %d
+- **DRF hosts detected:** %d
+- **BOLA cross-tenant permutations:** %d
 
 ## High-Signal Methodology Modules
 - **Reflection sites (html-body/attr-unquoted):** %d
@@ -218,6 +226,7 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **Cookie / JWT misconfig:** %d
 - **Signup email-verification flows:** %d
 - **IDOR surface (per-param roll-up):** %d
+- **DRF IDOR targets (/api/vN/):** %d
 - **OAuth redirect_uri bypass candidates:** %d
 - **Race-condition candidates:** %d
 - **Public buckets discovered:** %d
@@ -234,15 +243,18 @@ severity, with false-positive filtering transparent.
 		len(rce), len(takeovers), len(lfi), len(ssrf), len(xss),
 		len(sqlmapConfirmed), countFolders(filepath.Join(workDir, "sqlmap_results")),
 		len(ghauri),
-		len(secrets)+len(potentialSecrets), len(auth), len(cors), len(ffuf),
+		len(secrets)+len(potentialSecrets),
+		len(backupscanFindings), len(hostheaderFindings),
+		len(secheadersFindings), len(cors2Findings),
+		len(auth), len(cors), len(ffuf),
 		len(waf), len(ports), len(hiddenParams),
 		len(discourse), len(laravel), len(wordpress), len(cachePoison),
 		len(jsEndpoints), len(jsSecrets), len(jsEndpointFindings),
+		len(drfFindings), len(bolaPermutations),
 		len(reflectionFindings), len(paramshapeFindings), len(authshapeFindings),
-		len(signupTakeoverFindings), len(idorSurfaceFindings), len(oauthFindings),
+		len(signupTakeoverFindings), len(idorSurfaceFindings), len(drfIdorTargets), len(oauthFindings),
 		len(raceResults), len(bucketFindings), len(takeoverV2Findings),
-		len(jsMineFindings), len(businesslogicFindings), len(nucleiRfufPass),
-		len(backupscanFindings), len(hostheaderFindings), len(secheadersFindings), len(cors2Findings))
+		len(jsMineFindings), len(businesslogicFindings), len(nucleiRfufPass))
 
 	return os.WriteFile(filepath.Join(workDir, "SUMMARY.md"), []byte(summary), 0644)
 }
@@ -271,7 +283,10 @@ type FindingsBuckets struct {
 	ManualReview    []string
 	APISpecs        []string
 	BOLATargets     []string
+	BOLAPermutations []string
 	NextjsPlaidJWT  []string
+	DRFFindings     []string
+	DRFIdorTargets  []string
 
 	// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
 	DiscourseFindings   []string
@@ -329,6 +344,18 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 		"API specs, OpenID configuration, and health endpoints discovered on alive hosts. Each [200] is the master endpoint list for the host's API — every downstream scanner (sqlmap, dalfox, nuclei) can be re-targeted at the spec's path list with templated UUIDs/IDs replaced.",
 		"Download each spec into api_specs/<host>.* and `jq '.paths | keys'`. Probe every path with `httpx -mc 200` to see what's reachable unauthenticated. Any path that returns 200 without auth is the actual bug surface — the SPA hides these from the crawler but the spec exposes them. "+
 			"[401-auth] entries indicate the spec EXISTS but is auth-walled — these are also high-value because they prove an internal API surface that you can attack once you have an authenticated session.")
+
+	addSection(&sb, "Critical: BOLA Cross-Tenant Permutations (?param=<foreign-uuid>)", b.BOLAPermutations,
+		"Cross-tenant BOLA tests: each UUID seen on ANY host with a given param is re-tested against every endpoint that takes the same param on OTHER hosts. Pre-built curl commands — run them with two authenticated sessions.",
+		"A 200 + real data with a foreign UUID = Broken Object Level Authorization across tenants. This is the direct IDOR/BOLA path on the DRF API surface.")
+
+	addSection(&sb, "Critical: Django REST Framework (DRF) Detection + IDOR Targets", b.DRFFindings,
+		"Hosts fingerprinted as Django REST Framework (browsable-API footer or DRF JSON response shapes) plus /api/vN/ collection endpoints ripe for ID-order-swap testing.",
+		"DRF's default IsAuthenticated permission protects LIST but not per-object access — any authenticated caller can typically read any object by ID. Set up two accounts and swap IDs on every drf_idor_targets.txt URL. Also try ?company=<other_company_uuid> permutations from bola_permutations.txt.")
+
+	addSection(&sb, "Critical: DRF IDOR Targets (/api/vN/ collection roots)", b.DRFIdorTargets,
+		"DRF API endpoints under /api/v1..v3/ that look like object collections (accounts, orders, invoices, cards, holdings, ...).",
+		"These are the IDOR/BOLA worklist. For each: GET as user A, record the response; GET the same URL with user B's cookie and, where IDs appear, with IDs swapped. Differences in access = reportable IDOR.")
 
 	addSection(&sb, "Critical: BOLA Surface (UUID/object-reference params)", b.BOLATargets,
 		"Endpoints with UUID-shaped query params (e.g. ?company=<uuid>, ?event=<uuid>) found in katana/gau output. Each is a candidate Broken Object Level Authorization (BOLA/IDOR) — the canonical 'change the ID, get someone else's data' bug. bola_curl.txt contains pre-built adjacent-UUID curl commands.",
