@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -1443,11 +1444,35 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 	return RunForScope(parsed, resume, paths, stepTimeout)
 }
 
+func validateResumeScope(workDir string, expected scope.Scope) error {
+	data, err := os.ReadFile(filepath.Join(workDir, "scope.json"))
+	if err != nil {
+		return fmt.Errorf("cannot resume: scope metadata is missing; rerun without -resume to establish %s mode", expected.Mode)
+	}
+	var recorded struct {
+		Input      string     `json:"input"`
+		RootDomain string     `json:"root_domain"`
+		Mode       scope.Mode `json:"mode"`
+	}
+	if err := json.Unmarshal(data, &recorded); err != nil {
+		return fmt.Errorf("cannot resume: invalid scope.json: %w", err)
+	}
+	if recorded.RootDomain != expected.RootDomain || recorded.Mode != expected.Mode {
+		return fmt.Errorf("cannot resume: existing scan is %s mode for %s, but this command requested %s mode for %s; rerun without -resume for a new scope", recorded.Mode, recorded.RootDomain, expected.Mode, expected.RootDomain)
+	}
+	return nil
+}
+
 func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTimeout time.Duration) error {
 	domain := scanScope.RootDomain
 	cp, err := checkpoint.Load(paths.WorkDir, domain)
 	if err != nil {
 		return err
+	}
+	if resume {
+		if err := validateResumeScope(paths.WorkDir, scanScope); err != nil {
+			return err
+		}
 	}
 
 	startTime := cp.StartedAt

@@ -12,6 +12,7 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
 	"github.com/CyberShuriken/rfuf/internal/config"
 	"github.com/CyberShuriken/rfuf/internal/coverage"
+	"github.com/CyberShuriken/rfuf/internal/scope"
 )
 
 func TestXSSScanUsesSupportedDalfoxFlags(t *testing.T) {
@@ -96,6 +97,27 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestValidateResumeScopeRequiresMatchingMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "scope.json"), []byte(`{"input":"*.example.com","root_domain":"example.com","mode":"wildcard"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exact, err := scope.Parse("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResumeScope(dir, exact); err == nil || !strings.Contains(err.Error(), "existing scan is wildcard mode") {
+		t.Fatalf("expected exact/wildcard mismatch, got %v", err)
+	}
+	wildcard, err := scope.Parse("*.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateResumeScope(dir, wildcard); err != nil {
+		t.Fatalf("matching wildcard scope rejected: %v", err)
+	}
 }
 
 // TestDirbruteUsesRecursion guards against the slow per-host loop

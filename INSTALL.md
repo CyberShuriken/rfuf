@@ -161,6 +161,8 @@ The supplied session is propagated to HTTP probing, crawling, API discovery, Jav
 
 The `-d` value controls the mode: `example.com` is exact-only, while `*.example.com` includes the root and proper subdomains. RFUF v2.4.0 is the first release that preserves this distinction throughout the pipeline. Both use the same normalized root output directory, but `scope.json` records the original input and selected mode. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results; wildcard input is not permission to scan third-party assets.
 
+A resumed run must use the same mode as the original run. To change from `example.com` to `*.example.com`, start a fresh run without `-resume`; RFUF rejects the mismatch to prevent accidental scope expansion.
+
 ### Program attribution and scope exclusions
 
 For programs that require researcher attribution, pass the program-provided values explicitly:

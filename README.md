@@ -230,6 +230,8 @@ Both modes use the normalized root for the output directory, while `scope.json` 
 
 A wildcard is not permission to scan every related asset. Run RFUF only against assets explicitly authorized by the program or asset owner, and review `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before relying on the results.
 
+Resume operations must use the same scope mode as the original run. If a scan was started with `example.com`, changing to `*.example.com` requires a fresh run without `-resume`; RFUF rejects a mode mismatch instead of silently expanding the old scan.
+
 ### Authenticated testing
 
 RFUF does not create accounts, guess credentials, or automatically submit a
