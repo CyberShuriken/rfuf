@@ -406,7 +406,7 @@ func TestScopeFilterIsFinalBoundary(t *testing.T) {
 
 func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
 	var command string
-	for _, step := range GetSteps("example.com", &config.Paths{}) {
+	for _, step := range GetSteps("*.example.com", &config.Paths{}) {
 		if step.ID == "scope_filter" {
 			command = step.Command
 			break

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version = "2.3.0"
+	version = "2.4.0"
 )
 
 func main() {
@@ -49,7 +49,7 @@ func main() {
 		}
 	}
 
-	domain := flag.String("d", "", "Target domain for recon")
+	domain := flag.String("d", "", "Target domain or explicit wildcard scope; bare domain is exact-only")
 	resume := flag.Bool("resume", false, "Resume a previous scan (skips already-completed steps AND the installer — trust on-disk binaries)")
 	stepTimeout := flag.Duration("step-timeout", 30*time.Minute, "Maximum runtime for each pipeline step (0 disables the limit). Default lowered from 2h so a single hung tool can't block the dashboard; bump to 2h on big targets with `rfuf -d X -step-timeout 2h`.")
 	maxTargets := flag.Int("max-targets", 10000, "Maximum URLs retained in the final scoped target streams.")
@@ -126,17 +126,18 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	normalizedDomain, err := scope.NormalizeDomain(*domain)
+	parsedScope, err := scope.Parse(*domain)
 	if err != nil {
 		fmt.Printf("Error: invalid domain scope: %v\n", err)
 		os.Exit(1)
 	}
+	normalizedDomain := parsedScope.RootDomain
 	if *maxTargets <= 0 || *maxStageRequests <= 0 {
 		fmt.Println("Error: -max-targets and -max-stage-requests must be positive")
 		os.Exit(1)
 	}
 
-	fmt.Printf("[*] RFUF v%s | target: %s | scope: %s\n", version, *domain, normalizedDomain)
+	fmt.Printf("[*] RFUF v%s | target: %s | scope: %s (%s)\n", version, *domain, normalizedDomain, parsedScope.Mode)
 
 	// 1. Resolve Paths using the normalized root so wildcard and non-wildcard
 	// invocations resume into the same per-domain work directory.
@@ -175,6 +176,8 @@ func main() {
 	}
 	buildAuthEnv(cookieValue, bearerValue, *bugBountyUsername, *testAccountEmail)
 	executor.AuthEnv["RFUF_DOMAIN"] = normalizedDomain
+	executor.AuthEnv["RFUF_SCOPE_INPUT"] = parsedScope.Input
+	executor.AuthEnv["RFUF_SCOPE_MODE"] = string(parsedScope.Mode)
 	if err := writeValidationInputsMetadata(paths.WorkDir, secondCookieValue != "", secondBearerValue != "", *roleA, *roleB, *repositoryPath, *testAPIBaseURL); err != nil {
 		fmt.Printf("[!] failed to write validation metadata: %v\n", err)
 		os.Exit(1)
@@ -260,7 +263,7 @@ func main() {
 	}
 
 	// 6. Run Pipeline
-	if err := pipeline.Run(normalizedDomain, *resume, paths, *stepTimeout); err != nil {
+	if err := pipeline.RunForScope(parsedScope, *resume, paths, *stepTimeout); err != nil {
 		fmt.Printf("[!] Pipeline failed: %v\n", err)
 		os.Exit(1)
 	}

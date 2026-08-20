@@ -74,7 +74,7 @@ executor code.
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v            # → rfuf version 2.3.0
+rfuf -v            # → rfuf version 2.4.0
 ```
 
 Run a no-op help check from an unrelated directory to confirm:
@@ -157,9 +157,9 @@ rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cook
 
 The file-based forms read a local file and use its trimmed contents as one session value. Keep those files protected with normal filesystem permissions. `-auth-required` prevents a run from silently falling back to public-only coverage when authenticated testing is mandatory.
 
-The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests are still limited to the authorized wildcard scope supplied to RFUF.
+The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests remain limited to the explicit scope supplied to RFUF.
 
-The `-d` value may be `example.com` or `*.example.com`; both normalize to one root scope. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results, because wildcard discovery is not permission to scan third-party assets.
+The `-d` value controls the mode: `example.com` is exact-only, while `*.example.com` includes the root and proper subdomains. RFUF v2.4.0 is the first release that preserves this distinction throughout the pipeline. Both use the same normalized root output directory, but `scope.json` records the original input and selected mode. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results; wildcard input is not permission to scan third-party assets.
 
 ### Program attribution and scope exclusions
 

@@ -38,11 +38,11 @@ func main() {
 		fatal(err)
 	}
 
-	normalized, err := scope.NormalizeDomain(*root)
+	parsedScope, err := scope.Parse(*root)
 	if err != nil {
 		fatal(err)
 	}
-	inScope, rejected, err := scope.FilterLines(lines, normalized)
+	inScope, rejected, err := scope.FilterLines(lines, parsedScope.Input)
 	if err != nil {
 		fatal(err)
 	}
@@ -55,7 +55,7 @@ func main() {
 		}
 	}
 	if *reportPath != "" {
-		report := scope.Report{Input: *root, RootDomain: normalized, GeneratedAt: time.Now().UTC(), InScope: len(inScope), OutOfScope: len(rejected), InScopeFile: filepath.Base(*output), OutFile: filepath.Base(*outOfScope)}
+		report := scope.Report{Input: *root, RootDomain: parsedScope.RootDomain, Mode: parsedScope.Mode, GeneratedAt: time.Now().UTC(), InScope: len(inScope), OutOfScope: len(rejected), InScopeFile: filepath.Base(*output), OutFile: filepath.Base(*outOfScope)}
 		data, err := report.JSON()
 		if err != nil {
 			fatal(err)

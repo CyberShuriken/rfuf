@@ -18,6 +18,7 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/evidence"
 	"github.com/CyberShuriken/rfuf/internal/executor"
 	"github.com/CyberShuriken/rfuf/internal/owasp"
+	"github.com/CyberShuriken/rfuf/internal/scope"
 	"github.com/CyberShuriken/rfuf/internal/summary"
 )
 
@@ -218,9 +219,22 @@ AUTH_HEADERS=()
 // lfi_targets, sqlmap_scan, xss_scan, rce_scan, idor_scan, ssrf_scan,
 // cors_check, dirbrute_ffuf, grep_secrets.
 func GetSteps(domain string, paths *config.Paths) []Step {
+	parsed, err := scope.Parse(domain)
+	if err != nil {
+		parsed = scope.Scope{Input: domain, RootDomain: domain, Mode: scope.ExactMode}
+	}
+	return GetStepsForScope(parsed, paths)
+}
+
+func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
+	domain := scanScope.RootDomain
 	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
 	wordlist := pickWordlist(paths)
 	authSnip := buildAuthHeaderSnippet()
+	wildcardPattern := fmt.Sprintf(`^https?://([^/]+\.)?%s(/|$|[[:space:]])`, domainEscaped)
+	if scanScope.Mode == scope.ExactMode {
+		wildcardPattern = fmt.Sprintf(`^https?://%s(/|$|[[:space:]])`, domainEscaped)
+	}
 
 	// oobSubstitute is a one-liner that writes a target file with
 	// ${OOB} placeholders expanded to the actual interactsh URL. Used by
@@ -257,13 +271,15 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		// DNS/HTTP probing. The raw rejected stream is retained for review.
 		{"scope_guard", `set -e
 ROOT=$(printf '%s' "$RFUF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+WILDCARD=0
+[ "$RFUF_SCOPE_MODE" = "wildcard" ] && WILDCARD=1
 : > in_scope_hosts.txt
 : > out_of_scope_hosts.txt
-awk -v root="$ROOT" '
+awk -v root="$ROOT" -v wildcard="$WILDCARD" '
   function lower(s) { return tolower(s) }
   {
     host=lower($0); sub(/\.$/, "", host)
-    if (host == root || (length(host) > length(root)+1 && substr(host, length(host)-length(root), length(root)+1) == "." root)) print host > "in_scope_hosts.txt"
+    if (host == root || (wildcard == 1 && length(host) > length(root)+1 && substr(host, length(host)-length(root), length(root)+1) == "." root)) print host > "in_scope_hosts.txt"
     else print $0 > "out_of_scope_hosts.txt"
   }
 ' subs.txt
@@ -273,12 +289,15 @@ sort -u out_of_scope_hosts.txt -o out_of_scope_hosts.txt 2>/dev/null || :
 cat in_scope_hosts.txt > scoped_subs.txt 2>/dev/null || :
 IN=$(wc -l < scoped_subs.txt | tr -d ' ')
 OUT=$(wc -l < out_of_scope_hosts.txt | tr -d ' ')
-printf '{"input":"%s","root_domain":"%s","in_scope":%s,"out_of_scope":%s,"policy":"exact_root_or_subdomain"}\n' "$RFUF_DOMAIN" "$ROOT" "${IN:-0}" "${OUT:-0}" > scope.json`, "default", []string{"merge_subs"}, 0},
+printf '{"input":"%s","root_domain":"%s","mode":"%s","in_scope":%s,"out_of_scope":%s,"policy":"%s"}\n' "$RFUF_SCOPE_INPUT" "$ROOT" "$RFUF_SCOPE_MODE" "${IN:-0}" "${OUT:-0}" "$RFUF_SCOPE_MODE" > scope.json`, "default", []string{"merge_subs"}, 0},
 		{"dnsx_resolve", "dnsx -l scoped_subs.txt -silent -o live_subs.txt", "default", []string{"scope_guard"}, 0},
 
 		// === NEW: Subdomain brute (catches staging/dev that CT logs miss) ===
 		{"subdomain_brute", `set +e
 : > brute_subs.txt
+if [ "$RFUF_SCOPE_MODE" != "wildcard" ]; then
+  exit 0
+fi
 SUBS="www mail smtp pop pop3 imap ftp sftp webmail email mx mx1 mx2 remote vpn admin administrator dashboard panel cpanel whm webdisk ns ns1 ns2 ns3 ns4 dns dns1 dns2 api api2 api3 api-v1 api-v2 backend back backoffice internal intranet staging stage stg dev develop development test testing qa uat sandbox demo preview pre prod production live old legacy beta alpha v1 v2 v3 new blog blogs forum forums community help helpdesk support docs documentation wiki kb faq status monitor monitoring jenkins gitlab github bitbucket jira confluence crm erp hr portal gateway auth login sso saml oauth id identity accounts account user users member members customer customers client clients partner partners vendor vendors billing invoice invoices payment payments pay shop store checkout cart order orders search find cdn cdn1 cdn2 static assets img images media files upload uploads download downloads data db database mysql postgres postgresql mongo redis elastic elasticsearch sentry newrelic app application apps web web1 web2 web3 web4 web5 mobile m mobi android ios push notification notifications events stream analytics track tracking tag tags pixel redirect proxy cache edge lb loadbalancer"
 for sub in $SUBS; do
   if getent hosts "${sub}.${RFUF_DOMAIN}" >/dev/null 2>&1; then
@@ -723,7 +742,7 @@ httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405
 	  else
 	    cp "$IN" "$TMP"
 	  fi
-	  grep -E '^https?://([^/]+\.)?%s(/|$|[[:space:]])' "$TMP" > "$OUT" || :
+	  grep -E '%s' "$TMP" > "$OUT" || :
 	  rm -f "$TMP"
 	}
 	filter_stream all_urls.txt all_urls_scannable.txt
@@ -736,7 +755,7 @@ httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405
 	cp all_urls_200_scannable.txt all_urls_200.txt 2>/dev/null || :
 	cp js_endpoints_scannable.txt js_endpoints.txt 2>/dev/null || :
 	printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt
-	exit 0`, domain), "grep", []string{"merge_js_endpoints"}, 0},
+	exit 0`, wildcardPattern), "grep", []string{"merge_js_endpoints"}, 0},
 
 		// Canonical target stream for host-and-endpoint nuclei passes. Keep
 
@@ -1417,6 +1436,15 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 }
 
 func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Duration) error {
+	parsed, err := scope.Parse(domain)
+	if err != nil {
+		return err
+	}
+	return RunForScope(parsed, resume, paths, stepTimeout)
+}
+
+func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTimeout time.Duration) error {
+	domain := scanScope.RootDomain
 	cp, err := checkpoint.Load(paths.WorkDir, domain)
 	if err != nil {
 		return err
@@ -1451,7 +1479,7 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 		cancel()
 	}()
 
-	steps := GetSteps(domain, paths)
+	steps := GetStepsForScope(scanScope, paths)
 	stepMap := make(map[string]Step)
 	for _, s := range steps {
 		stepMap[s.ID] = s

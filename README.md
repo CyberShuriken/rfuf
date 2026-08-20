@@ -56,7 +56,7 @@ step, and can resume exactly where it stopped.
 - **Zero configuration** — no API keys, no YAML, no environment file. Pass
   `-d` and go.
 - **Per-domain output directory** — clean separation between targets.
-- **Wildcard scope guard** — accepts `example.com` or `*.example.com`, normalizes both to one root scope, and filters discovered hosts before active DNS/HTTP probing.
+- **Explicit scope modes** — bare `example.com` scans only that exact host; explicit `*.example.com` scans the root and proper subdomains. Both use one stable root-domain output directory while preserving the selected mode.
 - **OWASP Top 10:2025 coverage report** — maps completed stages and candidate evidence to A01–A10 without claiming that black-box scanning proves every category.
 - **Exact manual test plan** — writes candidate-specific identity, control, evidence, and stop-condition guidance for tests that require two accounts, source, deployment, workflow, or logging access.
 - **Auto-generated `findings.md`** — severity-grouped report with retest
@@ -174,7 +174,7 @@ Open a new shell, then verify:
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v           # → rfuf version 2.3.0
+rfuf -v           # → rfuf version 2.4.0
 ```
 
 For full details, troubleshooting, and uninstall instructions see
@@ -198,8 +198,8 @@ sudo cp bin/rfuf /usr/local/bin/               # any dir already on $PATH
 ```bash
 rfuf install                       # one-time system install (places binary in ~/.local/share/rfuf)
 rfuf update                        # rebuild from the clone and replace the installed binary
-rfuf -d example.com                # fresh full scan
-rfuf -d '*.example.com'             # wildcard scope; normalized to example.com
+rfuf -d example.com                # exact host only
+rfuf -d '*.example.com'             # explicit wildcard: root + subdomains
 rfuf -d example.com -resume        # continue a previously interrupted scan (skips installer)
 rfuf -d example.com -step-timeout 4h  # allow up to four hours per stage
 rfuf -d example.com -skip-install  # like -resume, but on a fresh scan (debug / CI)
@@ -222,11 +222,13 @@ By default all output is written to:
 Override the working directory or target list is intentionally not
 exposed — the tool is opinionated by design.
 
-### Wildcard scope and authorization
+### Domain scope modes and authorization
 
-`-d` accepts either a root domain (`example.com`) or a wildcard scope (`*.example.com`). RFUF normalizes both forms to the same output directory and active-scan boundary. Exact-root and proper subdomains are in scope; lookalikes such as `example.com.evil.test` and third-party assets discovered through redirects, scripts, or history are retained as rejected evidence and are not actively probed.
+`-d example.com` means **exact mode**: RFUF actively probes only `example.com`. `-d '*.example.com'` means **explicit wildcard mode**: RFUF actively probes `example.com` and proper subdomains such as `api.example.com`. A bare domain never expands to subdomains implicitly.
 
-Wildcard input is not permission to scan every related asset. Run RFUF only against assets explicitly authorized by the program or asset owner, and review `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before relying on the results.
+Both modes use the normalized root for the output directory, while `scope.json` records the original input and selected mode. Lookalikes such as `example.com.evil.test` and third-party assets discovered through redirects, scripts, or history are retained as rejected evidence and are not actively probed.
+
+A wildcard is not permission to scan every related asset. Run RFUF only against assets explicitly authorized by the program or asset owner, and review `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before relying on the results.
 
 ### Authenticated testing
 

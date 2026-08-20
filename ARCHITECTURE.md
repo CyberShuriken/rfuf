@@ -55,7 +55,7 @@ Output root: `~/Desktop/Bug_Bounty/<normalized-root-domain>/`. Both `example.com
 The dependency installer uses `GOTOOLCHAIN=local` for Go-based tools and pins Nuclei to `v3.3.10`, compatible with the supported Go 1.22 toolchain. It must not silently download a future Go release or trap a manual scan in an unbounded bootstrap. If a tool is unavailable, the operator should install it explicitly and rerun with `-skip-install` only after `VerifyToolsPresent` succeeds.
 
 1. **Dependency Integrity** — stages run as soon as their `Deps` (dependencies) are met. Endpoint scanners depend on the enriched target stream, not only on `alive.txt`.
-2. **Scope Integrity** — `-d example.com` and `-d '*.example.com'` normalize to one root. `scope_guard` filters all discovered hosts before DNS/HTTP probing; lookalike and third-party names are retained only in the rejected evidence stream.
+2. **Scope Integrity** — `-d example.com` is exact-only, while `-d '*.example.com'` explicitly permits the root and proper subdomains. Both use one normalized root directory, and `scope_guard` filters all discovered hosts before DNS/HTTP probing; lookalike and third-party names are retained only in the rejected evidence stream.
 3. **OWASP Honesty** — coverage output distinguishes `covered`, `partial`, `blocked`, and completed-empty. A candidate is never treated as a confirmed vulnerability without manual reproduction.
 4. **Secret Redaction** — evidence and manual plans contain metadata and redacted targets only; cookie, bearer, API-key, password, and response-body secrets must not be written.
 5. **Thread-Safe Checkpointing** — `checkpoint.json` is updated via a mutex-protected process.
@@ -73,7 +73,7 @@ The dependency installer uses `GOTOOLCHAIN=local` for Go-based tools and pins Nu
 ## Data Flow
 
 ```
-subfinder/assetfinder/amass → subs.txt → scope_guard → scoped_subs.txt + scope.json
+subfinder/assetfinder/amass → subs.txt → scope_guard (exact or wildcard mode) → scoped_subs.txt + scope.json
 dnsx → live_subs.txt
 subzy + nuclei takeovers → validated_takeovers.txt
 httpx → alive.txt

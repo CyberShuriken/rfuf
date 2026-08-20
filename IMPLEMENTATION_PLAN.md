@@ -10,7 +10,7 @@ The implementation deliberately does **not** claim that a black-box scan proves 
 
 | Capability | Implementation | Output |
 |---|---|---|
-| Wildcard normalization | `internal/scope.NormalizeDomain` accepts `example.com` and `*.example.com`, lowercases and validates the root, and shares one stable work directory. | Normalized domain in CLI output and checkpoint path |
+| Scope mode parsing | `internal/scope.Parse` preserves exact mode for `example.com` and wildcard mode for `*.example.com`, validates the root, and shares one stable work directory. | Mode and normalized root in CLI output, `scope.json`, and checkpoint path |
 | Active scope enforcement | `scope_guard` filters discovery results to the exact root or proper subdomains before DNS and HTTP probing. | `scope.json`, `in_scope_hosts.txt`, `out_of_scope_hosts.txt`, `scoped_subs.txt` |
 | Standalone scope utility | `cmd/scope-filter` filters host/URL files and emits a JSON report for local workflows and fixture tests. | Filtered file plus optional report |
 | Redacted evidence | Existing evidence indexing is extended to newer finder artifacts; credentials and response bodies are not copied. | `evidence.jsonl` |
@@ -21,7 +21,7 @@ The implementation deliberately does **not** claim that a black-box scan proves 
 
 ## Current pipeline order
 
-The current dependency graph performs subdomain enumeration, then `scope_guard`, then DNS and HTTP probing. Endpoint enrichment and scanner stages run only from bounded, in-scope streams. Finalization loads stage-health records and redacted evidence before generating the OWASP coverage and manual-plan artifacts.
+The current dependency graph performs discovery, then `scope_guard`, then DNS and HTTP probing. In exact mode only the supplied host continues; in wildcard mode the root and proper subdomains continue. Endpoint enrichment and scanner stages run only from bounded, in-scope streams. Finalization loads stage-health records and redacted evidence before generating the OWASP coverage and manual-plan artifacts.
 
 ```text
 subfinder / assetfinder / amass

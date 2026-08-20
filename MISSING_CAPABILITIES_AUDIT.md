@@ -7,8 +7,8 @@
 
 | Capability | Current behavior | Evidence or output |
 |---|---|---|
-| Wildcard scope normalization | `-d example.com` and `-d '*.example.com'` normalize to one validated root domain and one work directory. | `internal/scope`, CLI validation, scope tests |
-| Active scope boundary | `scope_guard` filters the discovered host stream before DNS and HTTP probing. Exact-root and proper subdomains are retained; lookalikes and third-party names are rejected. | `scope.json`, `in_scope_hosts.txt`, `out_of_scope_hosts.txt`, `scoped_subs.txt` |
+| Scope mode parsing | `-d example.com` is exact-only; `-d '*.example.com'` is explicit wildcard mode. Both share one validated root directory while preserving mode. | `internal/scope`, CLI validation, scope tests |
+| Active scope boundary | `scope_guard` filters the discovered host stream before DNS and HTTP probing. Exact mode retains only the supplied host; wildcard mode retains the root and proper subdomains. Lookalikes and third-party names are rejected. | `scope.json`, `in_scope_hosts.txt`, `out_of_scope_hosts.txt`, `scoped_subs.txt` |
 | Stage integrity | RFUF persists lifecycle records with status, timeout, exit code, input/output metrics, and dependency context. | `.rfuf/stages/*.json`, `.rfuf/coverage_report.json`, `CoverageReport.md` |
 | Completion gate | `COMPLETE` is reserved for required stages that are `completed` or `completed_empty`; failures, timeouts, blocks, and skips remain visible. | Coverage evaluator and pipeline finalization |
 | Evidence normalization | Candidate artifacts are indexed as redacted JSONL metadata with category, source, target, severity, confidence, and validation state. | `evidence.jsonl`, `candidate_index.jsonl` |

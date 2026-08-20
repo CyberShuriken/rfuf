@@ -12,7 +12,7 @@ The work is complete when the following are true:
 
 | Area | Completion requirement | Status |
 |---|---|---|
-| Wildcard input | `-d example.com` and `-d '*.example.com'` normalize to the same root scope; discovered hosts are filtered before active probing. | ✅ |
+| Scope modes | `-d example.com` scans only the exact host; `-d '*.example.com'` explicitly scans the root and proper subdomains. Both preserve mode while sharing a normalized output root. | ✅ |
 | Scope evidence | The run writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` with normalization and filtering metadata. | ✅ |
 | Recon pipeline | Reconnaissance completes before vulnerability-oriented stages and retains the existing request caps, timeouts, and checkpoints. | ✅ |
 | OWASP mapping | The run writes a complete A01–A10 coverage matrix with `covered`, `partial`, `blocked`, and completed-empty states; unavailable inputs are explained. | ✅ |
@@ -22,14 +22,14 @@ The work is complete when the following are true:
 | Validation | `gofmt`, `go vet ./...`, `go test ./...`, `go build ./cmd/rfuf`, and `git diff --check` pass. | ✅ |
 | Delivery | Changes are committed and pushed to the selected GitHub repository branch. | ✅ |
 
-## Phase 1 — Normalize and enforce wildcard scope
+## Phase 1 — Parse and enforce exact or wildcard scope
 
 | Task | Description | Status |
 |---|---|---|
-| 1.1 | Add a small `internal/scope` package that trims an optional `*.` prefix, lowercases and validates the root domain, and matches exact-root and subdomain hosts without accepting lookalikes such as `example.com.evil.test`. | ✅ |
+| 1.1 | Add a small `internal/scope` package that preserves exact mode for bare domains and wildcard mode for an explicit `*.` prefix, lowercases and validates the root domain, and rejects lookalikes such as `example.com.evil.test`. | ✅ |
 | 1.2 | Add a `cmd/scope-filter` wrapper that filters newline-delimited candidate hosts or URLs and writes a JSON scope report. | ✅ |
 | 1.3 | Add CLI validation and help text explaining wildcard input, authorization, and scope boundaries. | ✅ |
-| 1.4 | Add a `scope_guard` pipeline stage between discovery and DNS/HTTP probing. It must write `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt`; downstream active stages must consume only the in-scope stream. | ✅ |
+| 1.4 | Add a `scope_guard` pipeline stage between discovery and DNS/HTTP probing. Exact mode retains only the supplied host; wildcard mode retains the root and proper subdomains. Write `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt`; downstream active stages must consume only the in-scope stream. | ✅ |
 | 1.5 | Pass the normalized root domain to stage environments as `RFUF_DOMAIN` so brute-force and shell stages never operate on the raw wildcard string. | ✅ |
 | 1.6 | Add unit tests for wildcard normalization, URL/host parsing, ports, mixed case, trailing dots, IDN-like invalid input, and lookalike domains. | ✅ |
 
