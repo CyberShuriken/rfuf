@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version = "2.2.0"
+	version = "2.3.0"
 )
 
 func main() {
@@ -136,7 +136,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("[*] Starting RFUF for %s (normalized scope: %s)\n", *domain, normalizedDomain)
+	fmt.Printf("[*] RFUF v%s | target: %s | scope: %s\n", version, *domain, normalizedDomain)
 
 	// 1. Resolve Paths using the normalized root so wildcard and non-wildcard
 	// invocations resume into the same per-domain work directory.
@@ -221,7 +221,8 @@ func main() {
 		if *interactshTimeout <= 0 {
 			fmt.Println("[*] OOB startup wait disabled; proceeding without interactsh")
 		} else if err := startInteractsh(*interactshServer, *interactshTimeout); err != nil {
-			fmt.Printf("[!] interactsh start failed: %v — proceeding without OOB\n", err)
+			fmt.Printf("[!] OOB callbacks unavailable: %v\n", err)
+			fmt.Println("    Continuing without OOB detection; use -disable-interactsh to suppress this check.")
 		}
 		defer stopInteractsh()
 	}

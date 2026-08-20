@@ -51,11 +51,11 @@ After `git pull` (or any local rebuild), the binary at
 must run one of:
 
 ```bash
-rfuf update                # silent, no prompts — preferred
+rfuf update                # rebuilds from the RFUF clone and updates the installed binary
 ./rfuf install             # interactive (asks which shell to patch)
 ```
 
-`rfuf update` rebuilds the current source tree and copies the new
+`rfuf update` locates the RFUF clone from the current directory, standard clone locations, or `RFUF_SOURCE_DIR`, then rebuilds and copies the new
 binary over `~/.local/share/rfuf/rfuf`. It does **not** touch your
 shell rc file or the `~/.local/bin/rfuf` symlink (those were already
 set up by the first `install`). Run it after every `git pull` so your
@@ -74,7 +74,7 @@ executor code.
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v            # → rfuf version 2.2.0
+rfuf -v            # → rfuf version 2.3.0
 ```
 
 Run a no-op help check from an unrelated directory to confirm:

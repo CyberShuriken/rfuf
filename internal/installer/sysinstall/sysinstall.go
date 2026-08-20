@@ -130,11 +130,17 @@ func Install() error {
 	return printSummary(true, chosen, absInstallBin, absBinLink)
 }
 
-// buildSelf runs `go build` against the current package and returns the
-// path to the produced binary. We build into a tmp file because the
-// caller may be running from inside the source tree — writing to
-// ./bin/rfuf would race with the running process on some filesystems.
+// buildSelf runs `go build` against the RFUF source tree and returns the
+// path to the produced binary. The source tree may be supplied through
+// RFUF_SOURCE_DIR or discovered from the current directory and common
+// user-owned clone locations.
 func buildSelf() (string, error) {
+	sourceDir, err := resolveSourceDir()
+	if err != nil {
+		return "", err
+	}
+	fmt.Printf("[*] Building RFUF from %s\n", sourceDir)
+
 	tmp, err := os.CreateTemp("", "rfuf-build-*.bin")
 	if err != nil {
 		return "", err
@@ -142,6 +148,7 @@ func buildSelf() (string, error) {
 	tmp.Close()
 
 	cmd := exec.Command("go", "build", "-o", tmp.Name(), "./cmd/rfuf")
+	cmd.Dir = sourceDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -149,6 +156,44 @@ func buildSelf() (string, error) {
 		return "", err
 	}
 	return tmp.Name(), nil
+}
+
+func resolveSourceDir() (string, error) {
+	candidates := []string{}
+	if configured := strings.TrimSpace(os.Getenv("RFUF_SOURCE_DIR")); configured != "" {
+		candidates = append(candidates, configured)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for dir := cwd; ; dir = filepath.Dir(dir) {
+			candidates = append(candidates, dir)
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, "rfuf"),
+			filepath.Join(home, "src", "rfuf"),
+			filepath.Join(home, "projects", "rfuf"),
+			filepath.Join(home, "github", "CyberShuriken", "rfuf"),
+		)
+	}
+	seen := make(map[string]bool)
+	for _, candidate := range candidates {
+		absolute, err := filepath.Abs(candidate)
+		if err != nil || seen[absolute] {
+			continue
+		}
+		seen[absolute] = true
+		if info, err := os.Stat(filepath.Join(absolute, "go.mod")); err == nil && !info.IsDir() {
+			if _, err := os.Stat(filepath.Join(absolute, "cmd", "rfuf")); err == nil {
+				return absolute, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("RFUF source tree not found; run `rfuf update` from the clone or set RFUF_SOURCE_DIR=/path/to/rfuf")
 }
 
 // RebuildBinary builds the current source tree and replaces the

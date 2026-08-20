@@ -174,7 +174,7 @@ Open a new shell, then verify:
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v           # → rfuf version 2.0.0
+rfuf -v           # → rfuf version 2.3.0
 ```
 
 For full details, troubleshooting, and uninstall instructions see
@@ -197,7 +197,7 @@ sudo cp bin/rfuf /usr/local/bin/               # any dir already on $PATH
 
 ```bash
 rfuf install                       # one-time system install (places binary in ~/.local/share/rfuf)
-rfuf update                        # rebuild & replace the installed binary from source
+rfuf update                        # rebuild from the clone and replace the installed binary
 rfuf -d example.com                # fresh full scan
 rfuf -d '*.example.com'             # wildcard scope; normalized to example.com
 rfuf -d example.com -resume        # continue a previously interrupted scan (skips installer)
@@ -343,6 +343,10 @@ ghauri — drop -resume to install") if anything is gone. Drop the flag once
 to run the installer; subsequent resumes stay fast.
 
 ### After rebuilding from source: `rfuf update`
+
+`rfuf -v` prints the binary version at startup and `rfuf update` prints the source directory it is rebuilding. If the version or startup behavior does not change after an update, the shell is executing a different binary; check `command -v rfuf` and `type -a rfuf`.
+
+`RFUF_SOURCE_DIR=/path/to/rfuf rfuf update` can be used when the command is launched outside the clone. Otherwise run `rfuf update` from the repository or one of the standard clone locations.
 
 `rfuf install` places the binary at `~/.local/share/rfuf/rfuf` and wires
 the `~/.local/bin/rfuf` symlink. Once installed, the binary is **frozen
