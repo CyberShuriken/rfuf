@@ -86,3 +86,15 @@ func TestPushLogLineRingBuffer(t *testing.T) {
 		t.Errorf("expected ring buffer of %d, got %d", maxLogRingLines, len(currentLogRing()))
 	}
 }
+
+func TestSanitizeDashboardLine(t *testing.T) {
+	if got := sanitizeDashboardLine("Templates: 944 | Requests: 0/0 (9223372036854775808)"); !strings.Contains(got, "scanner statistics recorded") {
+		t.Fatalf("scanner stats were not normalized: %q", got)
+	}
+	if got := sanitizeDashboardLine("Authorization: Bearer secret"); !strings.Contains(got, "redacted") {
+		t.Fatalf("sensitive metadata was not redacted: %q", got)
+	}
+	if got := sanitizeDashboardLine("https://example.com/api [200]"); got != "https://example.com/api [200]" {
+		t.Fatalf("ordinary log line changed: %q", got)
+	}
+}

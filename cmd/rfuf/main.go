@@ -3,10 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +52,8 @@ func main() {
 	domain := flag.String("d", "", "Target domain for recon")
 	resume := flag.Bool("resume", false, "Resume a previous scan (skips already-completed steps AND the installer — trust on-disk binaries)")
 	stepTimeout := flag.Duration("step-timeout", 30*time.Minute, "Maximum runtime for each pipeline step (0 disables the limit). Default lowered from 2h so a single hung tool can't block the dashboard; bump to 2h on big targets with `rfuf -d X -step-timeout 2h`.")
+	maxTargets := flag.Int("max-targets", 10000, "Maximum URLs retained in the final scoped target streams.")
+	maxStageRequests := flag.Int("max-stage-requests", 300, "Per-tool request-rate ceiling passed to scanners that support a rate flag.")
 	skipInstall := flag.Bool("skip-install", false, "Skip dependency installation entirely (fastest resume path — use only if you trust your $PATH)")
 
 	// Auth mode — injected as env vars into every shell command. Stage
@@ -68,6 +74,10 @@ func main() {
 		"Dedicated test-account email for the X-Test-Account-Email request header required by some programs.")
 	excludeURLRegex := flag.String("exclude-url-regex", "",
 		"Extended regular expression for URLs to exclude before downstream scans (repeat program exclusions safely).")
+	authCheckURL := flag.String("auth-check-url", "",
+		"Optional URL used to verify that supplied auth material reaches an authenticated surface.")
+	authCheckMarker := flag.String("auth-check-marker", "",
+		"Optional response-text marker expected from -auth-check-url; never printed or stored.")
 
 	// OOB / blind detection. Starts interactsh-client at pipeline boot
 	// and wires $RFUF_OOB_URL into SSRF/RCE/XSS payloads.
@@ -106,6 +116,10 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	if *maxTargets <= 0 || *maxStageRequests <= 0 {
+		fmt.Println("Error: -max-targets and -max-stage-requests must be positive")
+		os.Exit(1)
+	}
 
 	fmt.Printf("[*] Starting RFUF for %s\n", *domain)
 
@@ -134,9 +148,37 @@ func main() {
 		os.Exit(1)
 	}
 	buildAuthEnv(cookieValue, bearerValue, *bugBountyUsername, *testAccountEmail)
+	executor.AuthEnv["RFUF_MAX_TARGETS"] = fmt.Sprintf("%d", *maxTargets)
+	executor.AuthEnv["RFUF_MAX_STAGE_REQUESTS"] = fmt.Sprintf("%d", *maxStageRequests)
 	if strings.TrimSpace(*excludeURLRegex) != "" {
 		executor.AuthEnv["RFUF_EXCLUDE_URL_REGEX"] = strings.TrimSpace(*excludeURLRegex)
 		fmt.Println("[*] URL exclusion regex enabled")
+	}
+	if strings.TrimSpace(*authCheckMarker) != "" && strings.TrimSpace(*authCheckURL) == "" {
+		fmt.Println("[!] -auth-check-marker requires -auth-check-url")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(*authCheckURL) != "" {
+		verified, status, checkErr := verifyAuthSession(*authCheckURL, *authCheckMarker)
+		executor.AuthEnv["RFUF_AUTH_VERIFIED"] = fmt.Sprintf("%t", verified)
+		_ = writeAuthCheckMetadata(paths.WorkDir, true, verified, status, checkErr)
+		if checkErr != nil {
+			fmt.Printf("[!] Auth check failed (HTTP %d): %v\n", status, checkErr)
+			if *authRequired {
+				os.Exit(1)
+			}
+		} else if verified {
+			fmt.Printf("[*] Auth check passed (HTTP %d)\n", status)
+		} else {
+			fmt.Printf("[!] Auth check did not match the expected authenticated response (HTTP %d)\n", status)
+			if *authRequired {
+				os.Exit(1)
+			}
+		}
+	}
+
+	if strings.TrimSpace(*authCheckURL) == "" {
+		_ = writeAuthCheckMetadata(paths.WorkDir, false, false, 0, nil)
 	}
 
 	// 3. Start interactsh-client for OOB / blind detection. The allocated
@@ -213,6 +255,62 @@ func authValue(inline, filePath, label string) (string, error) {
 		return "", fmt.Errorf("auth %s file is empty: %s", label, filePath)
 	}
 	return value, nil
+}
+
+func writeAuthCheckMetadata(workDir string, configured, verified bool, status int, checkErr error) error {
+	metadata := struct {
+		Configured bool   `json:"configured"`
+		Verified   bool   `json:"verified"`
+		StatusCode int    `json:"status_code,omitempty"`
+		Error      string `json:"error,omitempty"`
+	}{Configured: configured, Verified: verified, StatusCode: status}
+	if checkErr != nil {
+		metadata.Error = checkErr.Error()
+	}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(workDir, ".rfuf")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "auth_check.json"), data, 0644)
+}
+
+func verifyAuthSession(checkURL, marker string) (bool, int, error) {
+	req, err := http.NewRequest(http.MethodGet, checkURL, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	if cookie := strings.TrimSpace(executor.AuthEnv["RFUF_AUTH_COOKIE"]); cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	if bearer := strings.TrimSpace(executor.AuthEnv["RFUF_AUTH_HEADER"]); bearer != "" {
+		req.Header.Set("Authorization", bearer)
+	}
+	if username := strings.TrimSpace(executor.AuthEnv["RFUF_BUG_BOUNTY_USERNAME"]); username != "" {
+		req.Header.Set("X-Bug-Bounty", username)
+	}
+	if email := strings.TrimSpace(executor.AuthEnv["RFUF_TEST_ACCOUNT_EMAIL"]); email != "" {
+		req.Header.Set("X-Test-Account-Email", email)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return false, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return false, resp.StatusCode, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return false, resp.StatusCode, fmt.Errorf("unexpected response status")
+	}
+	if marker != "" && !strings.Contains(string(body), marker) {
+		return false, resp.StatusCode, nil
+	}
+	return true, resp.StatusCode, nil
 }
 
 func buildAuthEnv(cookie, bearer, bugBountyUsername, testAccountEmail string) {

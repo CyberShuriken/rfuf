@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -13,6 +14,8 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
 	"github.com/CyberShuriken/rfuf/internal/cli"
 	"github.com/CyberShuriken/rfuf/internal/config"
+	"github.com/CyberShuriken/rfuf/internal/coverage"
+	"github.com/CyberShuriken/rfuf/internal/evidence"
 	"github.com/CyberShuriken/rfuf/internal/executor"
 	"github.com/CyberShuriken/rfuf/internal/summary"
 )
@@ -73,7 +76,7 @@ var (
 	// through 3 attempts × every transient failure × every template.
 	// `-retries 1` keeps the failure as a single attempt and stops the
 	// error counter from dominating the run.
-	nucleiOptimized = " -rl 300 -c 50 -bs 25 -timeout 5 -retries 1 -silent -stats -stats-interval 30"
+	nucleiOptimized = " -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 50 -bs 25 -timeout 5 -retries 1 -silent -stats -stats-interval 30"
 
 	// maxScanTargets caps gf/grep output
 	maxScanTargets = 5000
@@ -683,6 +686,35 @@ httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405
 			printf 'js_endpoints=%s all_urls=%s\n' "$(wc -l < js_endpoints_full.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" > merge_js_endpoints_status.txt
 			exit 0`, "grep", []string{"merge_all_urls", "jsmap_scrape"}, 0},
 
+		// Final scope boundary: URL and JavaScript/API merge stages can
+		// reintroduce paths after the first HTTP filter. Apply the operator's
+		// exclusion expression and same-domain host check again before any
+		// endpoint target stream is consumed downstream.
+		{"scope_filter", fmt.Sprintf(`set +e
+	filter_stream() {
+	  IN="$1"; OUT="$2"; TMP="$OUT.tmp"
+	  : > "$TMP"
+	  [ -f "$IN" ] || { : > "$OUT"; return 0; }
+	  if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
+	    grep -Eiv -- "$RFUF_EXCLUDE_URL_REGEX" "$IN" > "$TMP" || :
+	  else
+	    cp "$IN" "$TMP"
+	  fi
+	  grep -E '^https?://([^/]+\.)?%s(/|$|[[:space:]])' "$TMP" > "$OUT" || :
+	  rm -f "$TMP"
+	}
+	filter_stream all_urls.txt all_urls_scannable.txt
+	filter_stream all_urls_200.txt all_urls_200_scannable.txt
+	filter_stream js_endpoints.txt js_endpoints_scannable.txt
+	head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_scannable.txt > all_urls_scannable.capped 2>/dev/null && mv all_urls_scannable.capped all_urls_scannable.txt || :
+	head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_200_scannable.txt > all_urls_200_scannable.capped 2>/dev/null && mv all_urls_200_scannable.capped all_urls_200_scannable.txt || :
+	head -n "${RFUF_MAX_TARGETS:-10000}" js_endpoints_scannable.txt > js_endpoints_scannable.capped 2>/dev/null && mv js_endpoints_scannable.capped js_endpoints_scannable.txt || :
+	cp all_urls_scannable.txt all_urls.txt 2>/dev/null || :
+	cp all_urls_200_scannable.txt all_urls_200.txt 2>/dev/null || :
+	cp js_endpoints_scannable.txt js_endpoints.txt 2>/dev/null || :
+	printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt
+	exit 0`, domain), "grep", []string{"merge_js_endpoints"}, 0},
+
 		// Canonical target stream for host-and-endpoint nuclei passes. Keep
 
 		// status-bearing httpx output out of the scanner input while retaining
@@ -694,7 +726,7 @@ httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405
   cat js_endpoints.txt 2>/dev/null
 } | grep -E '^https?://' | sed 's/[[:space:]]*$//' | sort -u | head -n %d > nuclei_targets.txt
 printf 'inputs alive=%%s urls=%%s js=%%s targets=%%s\\n' "$(wc -l < alive.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "$(wc -l < nuclei_targets.txt 2>/dev/null || echo 0)" > nuclei_targets_status.txt
-exit 0`, nucleiTargetCap), "grep", []string{"url_filter_alive", "merge_js_endpoints"}, 0},
+exit 0`, nucleiTargetCap), "grep", []string{"scope_filter"}, 0},
 
 		// === NEW: Cleanup drop-reasons report (forensic) ===
 		// === NEW: filter_testable_sqli. The cmd/filter-testable
@@ -706,7 +738,7 @@ exit 0`, nucleiTargetCap), "grep", []string{"url_filter_alive", "merge_js_endpoi
 [ -s sqli_targets_filtered.txt ] && { gf sqli sqli_targets_filtered.txt >> sqli_targets.txt; grep -Ei '%s' sqli_targets_filtered.txt >> sqli_targets.txt; } || true
 [ -s sqli_targets.txt ] && sort -u sqli_targets.txt -o sqli_targets.txt || touch sqli_targets.txt
 [ -s sqli_targets.txt ] && head -n %d sqli_targets.txt > sqli_targets.txt.capped && mv sqli_targets.txt.capped sqli_targets.txt
-exit 0`, filterTestableRef, sqlmapHighSignalParams, sqlmapTargetCap), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef, sqlmapHighSignalParams, sqlmapTargetCap), "grep", []string{"scope_filter"}, 0},
 		{"sqli_targets_replace", `[ -s sqli_targets.txt ] || cp sqli_targets_filtered.txt sqli_targets.txt 2>/dev/null
 exit 0`, "grep", []string{"filter_testable_sqli"}, 0},
 
@@ -733,7 +765,7 @@ exit 0`, buildAuthSqlmapCmd(), buildWafTamperSnippet(), sqlmapTargetCap, sqlmapS
 gf xss xss_targets_filtered.txt >> xss_targets.txt 2>/dev/null || true
 sort -u xss_targets.txt -o xss_targets.txt
 [ -s xss_targets.txt ] && head -n %d xss_targets.txt > xss_targets.txt.capped && mv xss_targets.txt.capped xss_targets.txt
-exit 0`, filterTestableRef, xssScanTargetCap), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef, xssScanTargetCap), "grep", []string{"scope_filter"}, 0},
 
 		// xss_scan: also threads the WAF-detected tamper into dalfox via
 		// `--bypass=$WAF_DALFOX_BYPASS`. Empty when no WAF. Dependency on
@@ -749,20 +781,20 @@ exit 0`, authSnip, buildWafTamperSnippet(), xssScanTargetCap, xssScanTimeout), "
 		// rce_targets: filter + dedup + cap
 		{"rce_targets", fmt.Sprintf(`%s . all_urls_200.txt > rce_targets_filtered.txt
 { gf rce rce_targets_filtered.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' rce_targets_filtered.txt; } | sort -u | head -n %d > rce_targets.txt
-exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
 		{"rce_scan", fmt.Sprintf("%s\nnuclei -l rce_targets.txt -tags rce -severity high,critical %s \"${AUTH_HEADERS[@]}\" -o nuclei_rce_rce.txt", authSnip, nucleiOptimized), "grep", []string{"rce_targets"}, 0},
 
 		// idor_targets: filter out Discourse public forum URLs (these are
 		// public read-only and can't have IDOR). Same filter logic.
 		{"idor_targets", fmt.Sprintf(`%s . all_urls_200.txt > idor_targets_filtered.txt
 { gf idor idor_targets_filtered.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' idor_targets_filtered.txt; } | sort -u | head -n %d > idor_targets.txt
-exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
 		{"idor_scan", fmt.Sprintf("%s\nnuclei -l idor_targets.txt -tags idor %s \"${AUTH_HEADERS[@]}\" -o idor_vulnerabilities.txt", authSnip, nucleiOptimized), "grep", []string{"idor_targets"}, 0},
 
 		// ssrf_targets: filter + dedup
 		{"ssrf_targets", fmt.Sprintf(`%s . all_urls_200.txt > ssrf_targets_filtered.txt
 { gf ssrf ssrf_targets_filtered.txt; grep -Ei "url=|uri=|path=|dest=|redirect=|callback=|webhook=|src=|fetch=|proxy=|target=" ssrf_targets_filtered.txt; } | sort -u > ssrf_targets.txt
-exit 0`, filterTestableRef), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
 		// ssrf_scan: substitute ${OOB}->interactsh URL for blind SSRF detection
 		{"ssrf_scan", fmt.Sprintf(`%s
 if [ -n "$RFUF_OOB_URL" ]; then
@@ -776,14 +808,14 @@ exit 0`, authSnip, nucleiOptimized, nucleiOptimized), "grep", []string{"ssrf_tar
 		// redirect_targets: filter + dedup + cap
 		{"redirect_targets", fmt.Sprintf(`%s . all_urls_200.txt > redirect_targets_filtered.txt
 gf redirect redirect_targets_filtered.txt | sort -u | head -n %d > redirect_targets.txt
-exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
 		{"redirect_scan", fmt.Sprintf("%s\nnuclei -l redirect_targets.txt -tags redirect %s \"${AUTH_HEADERS[@]}\" -o open_redirect_results.txt", authSnip, nucleiOptimized), "grep", []string{"redirect_targets"}, 0},
 
 		// lfi_targets: filter + dedup
 		{"lfi_targets", fmt.Sprintf(`%s . all_urls_200.txt > lfi_targets_filtered.txt
 gf lfi lfi_targets_filtered.txt > lfi_targets.txt
 sort -u lfi_targets.txt -o lfi_targets.txt
-exit 0`, filterTestableRef), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
 		{"lfi_scan", fmt.Sprintf("%s\nnuclei -l lfi_targets.txt -tags lfi %s \"${AUTH_HEADERS[@]}\" -o lfi_results.txt", authSnip, nucleiOptimized), "grep", []string{"lfi_targets"}, 0},
 
 		// cors_check: now credentialed — checks both ACAO and ACAC.
@@ -1030,7 +1062,7 @@ exit 0`, "grep", []string{"merge_all_urls"}, 0},
 		// (no need for dalfox to guess). Depends on url_filter_alive
 		// because we probe all_urls_200.txt.
 		{"reflection_run", fmt.Sprintf(`%s reflection . || true
-exit 0`, findingsRunnerRef), "grep", []string{"url_filter_alive"}, 0},
+exit 0`, findingsRunnerRef), "grep", []string{"scope_filter"}, 0},
 
 		// ParamShape (HTTP Parameter Pollution). Probes candidate
 		// object-reference params with 5 distinct shapes (?id=1,
@@ -1235,6 +1267,123 @@ export WAF_VENDOR WAF_SQLMAP_TAMPER WAF_DALFOX_BYPASS
 `
 }
 
+func stageRequired(stepID string) bool {
+	// Every declared graph node is required. A scanner may legitimately
+	// complete with zero findings, but a skipped, timed-out, failed, or
+	// blocked node must make the final coverage report incomplete.
+	return true
+}
+
+func stageArtifacts(step Step) (inputs, outputs []string) {
+	inputs = coverage.ExtractInputPaths(step.Command)
+	outputs = coverage.ExtractOutputPaths(step.Command)
+	knownInputs := map[string][]string{
+		"jsmap_scrape":         {"alive.txt"},
+		"merge_all_urls":       {"gau_urls.txt", "wayback_urls.txt", "clean_katana_urls.txt", "openapi_paths.txt"},
+		"url_filter_alive":     {"all_urls_scannable.txt"},
+		"merge_js_endpoints":   {"all_urls.txt", "js_endpoints.txt"},
+		"scope_filter":         {"all_urls.txt", "all_urls_200.txt", "js_endpoints.txt"},
+		"nuclei_target_merge":  {"alive.txt", "all_urls_200.txt", "js_endpoints.txt"},
+		"filter_testable_sqli": {"all_urls_200.txt"},
+		"xss_targets":          {"all_urls_200.txt"},
+		"rce_targets":          {"all_urls_200.txt"},
+		"idor_targets":         {"all_urls_200.txt"},
+		"ssrf_targets":         {"all_urls_200.txt"},
+		"redirect_targets":     {"all_urls_200.txt"},
+		"lfi_targets":          {"all_urls_200.txt"},
+	}
+	known := map[string][]string{
+		"subfinder":           {"subs.txt"},
+		"assetfinder":         {"assetfinder.txt"},
+		"amass_enum":          {"amass.txt"},
+		"dnsx_resolve":        {"live_subs.txt"},
+		"httpx_probe":         {"alive.txt"},
+		"jsmap_scrape":        {"js_assets.txt", "js_endpoints.txt"},
+		"merge_all_urls":      {"all_urls.txt"},
+		"url_filter_alive":    {"all_urls_200.txt"},
+		"merge_js_endpoints":  {"all_urls.txt", "js_endpoints_full.txt"},
+		"scope_filter":        {"all_urls.txt", "all_urls_200.txt", "js_endpoints.txt", "scope_filter_status.txt"},
+		"nuclei_target_merge": {"nuclei_targets.txt"},
+		"sqlmap_scan":         {"sqlmap_targets.txt", "sqlmap_status.json"},
+		"trufflehog_scan":     {"trufflehog_status.json", "trufflehog_results.txt"},
+		"nuclei_exposures":    {"nuclei_exposures.txt"},
+		"nuclei_misconfigs":   {"nuclei_misconfigs.txt"},
+		"nuclei_auth_scan":    {"auth_results.txt"},
+		"nuclei_graphql_scan": {"graphql_exposed.txt"},
+		"cors_check":          {"cors_findings.txt"},
+		"dirbrute_verify_200": {"ffuf_dirs_200.txt"},
+		"js_endpoints_scan":   {"js_endpoint_findings.txt"},
+		"ghauri_sqli":         {"ghauri_results.txt"},
+	}
+	inputs = append(inputs, knownInputs[step.ID]...)
+	outputs = append(outputs, known[step.ID]...)
+	return uniquePaths(inputs), uniquePaths(outputs)
+}
+
+func uniquePaths(paths []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
+}
+
+func writeBlockedRecords(workDir string, steps []Step) error {
+	records, err := coverage.LoadStageRecords(workDir)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(records))
+	for _, record := range records {
+		seen[record.StageID] = true
+	}
+	for _, step := range steps {
+		if seen[step.ID] {
+			continue
+		}
+		now := time.Now()
+		if err := coverage.WriteStageRecord(workDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusBlocked, StartedAt: now, FinishedAt: now, SkipReason: "not_started_due_to_previous_stage_failure"}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, steps []Step, startedAt time.Time, runErr error) error {
+	if err := writeBlockedRecords(paths.WorkDir, steps); err != nil && runErr == nil {
+		runErr = err
+	}
+	records, err := coverage.LoadStageRecords(paths.WorkDir)
+	if err != nil && runErr == nil {
+		runErr = err
+	}
+	if err == nil {
+		report := coverage.Evaluate(domain, startedAt, time.Now(), records)
+		if writeErr := coverage.WriteReport(paths.WorkDir, report); writeErr != nil && runErr == nil {
+			runErr = writeErr
+		}
+		if report.Status != "COMPLETE" && runErr == nil {
+			runErr = fmt.Errorf("coverage incomplete: %s", strings.Join(report.RequiredIssues, "; "))
+		}
+	}
+	if records, evidenceErr := evidence.BuildIndex(paths.WorkDir); evidenceErr != nil && runErr == nil {
+		runErr = evidenceErr
+	} else if evidenceErr == nil {
+		if writeErr := evidence.WriteIndex(paths.WorkDir, records); writeErr != nil && runErr == nil {
+			runErr = writeErr
+		}
+	}
+	if summaryErr := summary.Generate(paths.WorkDir, cp); summaryErr != nil && runErr == nil {
+		runErr = summaryErr
+	}
+	return runErr
+}
+
 func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Duration) error {
 	cp, err := checkpoint.Load(paths.WorkDir, domain)
 	if err != nil {
@@ -1242,9 +1391,14 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 	}
 
 	startTime := cp.StartedAt
-	if !resume && len(cp.CompletedSteps) > 0 {
-		if err := cp.Reset(); err != nil {
-			return fmt.Errorf("failed to reset checkpoint: %w", err)
+	if !resume {
+		if len(cp.CompletedSteps) > 0 {
+			if err := cp.Reset(); err != nil {
+				return fmt.Errorf("failed to reset checkpoint: %w", err)
+			}
+		}
+		if err := os.RemoveAll(filepath.Join(paths.WorkDir, ".rfuf", "stages")); err != nil {
+			return fmt.Errorf("failed to reset stage records: %w", err)
 		}
 	}
 
@@ -1335,10 +1489,12 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(steps))
-	stopAndWait := func(err error) error {
+	stopAndWait := func(runErr error) error {
 		cancel()
 		wg.Wait()
-		return err
+		cli.StopDashboard()
+		executor.LineCallback = nil
+		return finalizeRun(domain, paths, cp, steps, startTime, runErr)
 	}
 
 	for {
@@ -1364,6 +1520,8 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 
 			if depsMet {
 				if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" && paths.SeclistsDirWordlistSmall == "" {
+					now := time.Now()
+					_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: s.ID, Required: stageRequired(s.ID), Dependencies: s.Deps, Status: coverage.StatusSkipped, StartedAt: now, FinishedAt: now, SkipReason: "wordlist_missing"})
 					completed[s.ID] = true
 					cp.CompleteStep(s.ID)
 					continue
@@ -1374,9 +1532,15 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 				wg.Add(1)
 				go func(step Step) {
 					defer wg.Done()
+					inputs, outputs := stageArtifacts(step)
+					started := time.Now()
+					_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusRunning, StartedAt: started, InputArtifacts: coverage.MeasureArtifacts(paths.WorkDir, inputs), OutputArtifacts: coverage.MeasureArtifacts(paths.WorkDir, outputs)})
 					select {
+
 					case semaphore <- struct{}{}:
 					case <-ctx.Done():
+						now := time.Now()
+						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusBlocked, StartedAt: started, FinishedAt: now, SkipReason: "cancelled_before_start"})
 						return
 					}
 					defer func() { <-semaphore }()
@@ -1385,7 +1549,11 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 
 					mu.Lock()
 					delete(running, step.ID)
+					inputMetrics := coverage.MeasureArtifacts(paths.WorkDir, inputs)
+					outputMetrics := coverage.MeasureArtifacts(paths.WorkDir, outputs)
 					if err != nil {
+						now := time.Now()
+						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusFailed, StartedAt: started, FinishedAt: now, ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						mu.Unlock()
 						if !strings.Contains(err.Error(), "interrupted") {
 							errChan <- fmt.Errorf("step %s failed: %v", step.ID, err)
@@ -1403,14 +1571,37 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 							success = true
 						}
 					}
+					status := coverage.StatusCompleted
+					missingOutput := false
+					for _, metric := range outputMetrics {
+						if !metric.Exists {
+							missingOutput = true
+							break
+						}
+					}
+					if res.TimedOut {
+						status = coverage.StatusTimedOut
+					} else if missingOutput {
+						status = coverage.StatusFailed
+					} else if coverage.CountMetrics(outputMetrics) == 0 {
+						status = coverage.StatusCompletedEmpty
+					}
 
-					if !success {
+					if !success || res.TimedOut || missingOutput {
+						if !res.TimedOut {
+							status = coverage.StatusFailed
+						}
+
+						now := time.Now()
+						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: now, ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						mu.Unlock()
-						errChan <- fmt.Errorf("step %s failed with exit code %d", step.ID, res.ExitCode)
+						errChan <- fmt.Errorf("step %s incomplete (status=%s exit_code=%d)", step.ID, status, res.ExitCode)
 						return
 					}
 
+					_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 					completed[step.ID] = true
+
 					cp.CompleteStep(step.ID)
 					mu.Unlock()
 				}(s)
@@ -1446,14 +1637,14 @@ func Run(domain string, resume bool, paths *config.Paths, stepTimeout time.Durat
 	cli.DrawDashboard(domain, startTime, stepIDs, completed, "FINISHED", stats)
 	uiLock.Unlock()
 
-	if err := summary.Generate(paths.WorkDir, cp); err != nil {
-		return err
-	}
-
 	// Leave alt-screen BEFORE the final summary banner so the user sees
-	// their real shell prompt on success — alt-screen would mask it.
+	// their real shell prompt on success or incomplete coverage.
 	cli.StopDashboard()
 	executor.LineCallback = nil
+	if err := finalizeRun(domain, paths, cp, steps, startTime, nil); err != nil {
+		fmt.Printf("\n[!] Pipeline incomplete: %v\nOutput saved to %s\n", err, paths.WorkDir)
+		return err
+	}
 
 	fmt.Printf("\n[+] Pipeline complete! Output saved to %s\n", paths.WorkDir)
 	return nil

@@ -338,3 +338,23 @@ head -n 500 alive.txt | xargs -P 20 -I{} sh -c \
 | `SUMMARY.md` | Post-run report |
 
 Resume: `rfuf -d domain -resume` skips steps in checkpoint.
+
+## Coverage integrity and lifecycle records
+
+Every pipeline graph node writes `.rfuf/stages/<stage-id>.json`. Records distinguish `running`, `completed`, `completed_empty`, `failed`, `timed_out`, `blocked`, and `skipped`, and include dependencies, exit code, timeout state, input/output artifact metrics, and error or skip reason. A successful empty result is not treated as a failure, but a missing declared output, non-zero command, timeout, blocked dependency, or skip is not hidden.
+
+Finalization writes `.rfuf/coverage_report.json` and `CoverageReport.md`. The required-stage gate is strict: only `completed` and `completed_empty` satisfy required coverage. The orchestrator preserves partial results, writes the summary and redacted evidence index, and returns an incomplete-coverage error when the gate fails.
+
+## Final target boundary and safety limits
+
+After URL, JavaScript, manifest, and API merging, `scope_filter` applies the configured exclusion expression and same-domain host check to `all_urls.txt`, `all_urls_200.txt`, and `js_endpoints.txt`. It caps these streams with `RFUF_MAX_TARGETS` before canonical nuclei and vulnerability target generation. Nuclei stages use `RFUF_MAX_STAGE_REQUESTS` where the binary supports a rate flag. These are explicit bounds, not a claim that every third-party tool shares one universal request counter.
+
+## Authentication verification and evidence
+
+RFUF can replay operator-supplied cookie or bearer material and optionally verify it using `-auth-check-url` and `-auth-check-marker`. The health check sends program attribution headers when configured and writes only safe metadata to `.rfuf/auth_check.json`. It never stores credentials or marker text. `-auth-required` converts a failed or mismatched check into a pre-scan error.
+
+Finalization builds `evidence.jsonl` from high- and medium-impact artifact categories. Records contain category, source artifact, safely extracted target, severity, candidate confidence, validation state, and line reference. Secret values, cookies, tokens, and response bodies are excluded. Business-logic, BOLA/IDOR, and workflow findings remain manual validation tasks and are never auto-confirmed by RFUF.
+
+## Known limitations
+
+Dependency installation is bounded against Go toolchain switching and Nuclei is pinned, but some upstream tools remain independently versioned by their own release channels. The run-limit flags cannot impose one universal request budget on binaries that do not expose a compatible rate-control interface. Authenticated workflow creation, MFA, cross-account authorization testing, impact confirmation, and HackerOne submission remain intentionally operator-controlled.

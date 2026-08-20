@@ -245,6 +245,24 @@ applied before the canonical HTTP probe and downstream target generation.
 This is intended for exclusions such as contact/support forms, sandbox hosts,
 or other surfaces listed by the program policy.
 
+### Stage integrity and coverage reports
+
+RFUF now records one lifecycle file per stage under `.rfuf/stages/<stage-id>.json`. Each record includes the stage status, dependencies, exit code, timeout state, input/output counts, and declared artifact state. A zero-finding result can be `completed_empty`; it is distinct from `failed`, `timed_out`, `blocked`, or `skipped`.
+
+The final run writes `.rfuf/coverage_report.json`, `CoverageReport.md`, `evidence.jsonl`, and a coverage section in `SUMMARY.md`. RFUF prints `Pipeline complete` only when every declared stage completed or completed empty. If a required stage fails, times out, is blocked, or is skipped, RFUF preserves partial artifacts but exits with an incomplete-coverage error. This prevents a successful-looking orchestration message from hiding scanner gaps.
+
+### Authentication verification and run limits
+
+When a session is supplied, `-auth-check-url` can make a bounded request to an operator-selected authenticated health-check endpoint. Add `-auth-check-marker` when the response must contain a known marker. RFUF records only boolean verification state and HTTP status in `.rfuf/auth_check.json`; it never stores the marker or credential value. With `-auth-required`, a failed or mismatched health check stops the run before active scanning.
+
+Use `-max-targets` to cap final scoped URL streams and `-max-stage-requests` to set the rate ceiling for scanners that support a rate option. These controls are conservative bounds, not a universal request counter for tools that do not expose a compatible budget interface.
+
+The dashboard shows stage health separately from finding counts and redacts noisy scanner statistics and request metadata from the live panel. Raw child output remains in `.rfuf/rfuf.log` for local troubleshooting.
+
+### Evidence index and validation state
+
+`evidence.jsonl` contains redacted candidate metadata for high- and medium-impact artifact categories. Each record identifies the category, source artifact, target when safely extractable, severity, confidence, and `validation_state=candidate`. It does not copy secret values, cookies, bearer tokens, or response bodies. Scanner output remains a lead until manually reproduced and impact-confirmed on an authorized test account.
+
 ### Enriched target streams
 
 The early host probe writes `alive.txt`, but endpoint scanners no longer stop

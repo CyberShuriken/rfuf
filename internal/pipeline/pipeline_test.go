@@ -1,10 +1,17 @@
 package pipeline
 
 import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/CyberShuriken/rfuf/internal/checkpoint"
 	"github.com/CyberShuriken/rfuf/internal/config"
+	"github.com/CyberShuriken/rfuf/internal/coverage"
 )
 
 func TestXSSScanUsesSupportedDalfoxFlags(t *testing.T) {
@@ -203,13 +210,15 @@ func TestVulnTargetsSourceFrom200Only(t *testing.T) {
 			}
 			depOK := false
 			for _, d := range s.Deps {
-				if d == "url_filter_alive" {
+				if d == "scope_filter" {
+
 					depOK = true
 					break
 				}
 			}
 			if !depOK {
-				t.Errorf("%s must depend on url_filter_alive, deps=%v", want, s.Deps)
+				t.Errorf("%s must depend on scope_filter, deps=%v", want, s.Deps)
+
 			}
 			break
 		}
@@ -333,4 +342,98 @@ func TestURLFilterSupportsProgramExclusions(t *testing.T) {
 		return
 	}
 	t.Fatal("url_filter_alive step not found")
+}
+
+func TestScopeFilterIsFinalBoundary(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	var scopeIndex, mergeIndex, targetIndex int
+	for i, step := range steps {
+		switch step.ID {
+		case "merge_js_endpoints":
+			mergeIndex = i
+		case "scope_filter":
+			scopeIndex = i
+			for _, marker := range []string{"RFUF_EXCLUDE_URL_REGEX", "RFUF_MAX_TARGETS", "all_urls_200.txt", "js_endpoints.txt"} {
+				if !strings.Contains(step.Command, marker) {
+					t.Errorf("scope_filter missing %q", marker)
+				}
+			}
+		case "nuclei_target_merge":
+			targetIndex = i
+		}
+	}
+	if scopeIndex <= mergeIndex || targetIndex <= scopeIndex {
+		t.Fatalf("expected merge < scope_filter < nuclei target merge, got merge=%d scope=%d target=%d", mergeIndex, scopeIndex, targetIndex)
+	}
+}
+
+func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("example.com", &config.Paths{}) {
+		if step.ID == "scope_filter" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("scope_filter step not found")
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"all_urls.txt":     "https://app.example.com/api\nhttps://app.example.com/contact/sales\nhttps://evil.example.net/out\n",
+		"all_urls_200.txt": "https://app.example.com/api [200]\nhttps://app.example.com/contact/sales [200]\n",
+		"js_endpoints.txt": "https://app.example.com/api/v1\nhttps://app.example.com/support/ticket\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "RFUF_EXCLUDE_URL_REGEX=(^|/)(contact|support)(/|$)", "RFUF_MAX_TARGETS=100")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("scope_filter failed: %v output=%s", err, output)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "all_urls.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "contact") || strings.Contains(text, "evil.example.net") || !strings.Contains(text, "api") {
+		t.Fatalf("scope filter output=%q", text)
+	}
+}
+
+func TestFinalizeRunWritesIncompleteCoverageArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	cp, err := checkpoint.Load(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []Step{{ID: "required_stage", Deps: nil}}
+	if err := coverage.WriteStageRecord(dir, coverage.StageRecord{StageID: "required_stage", Required: true, Status: coverage.StatusFailed, ExitCode: 1}); err != nil {
+		t.Fatal(err)
+	}
+	paths := &config.Paths{WorkDir: dir}
+	if err := finalizeRun("example.com", paths, cp, steps, time.Now(), errors.New("stage failed")); err == nil {
+		t.Fatal("expected finalization to retain the stage error")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".rfuf", "coverage_report.json"))
+	if err != nil || !strings.Contains(string(data), "INCOMPLETE") {
+		t.Fatalf("coverage report missing or not incomplete: err=%v data=%s", err, data)
+	}
+	for _, name := range []string{"CoverageReport.md", "SUMMARY.md", "findings.md", "evidence.jsonl"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("missing final artifact %s: %v", name, err)
+		}
+	}
+}
+
+func TestNucleiUsesConfiguredRateLimit(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, step := range steps {
+		if strings.Contains(step.Command, "nuclei ") && !strings.Contains(step.Command, "RFUF_MAX_STAGE_REQUESTS") {
+			t.Errorf("nuclei step %s does not use configured request ceiling", step.ID)
+		}
+	}
 }

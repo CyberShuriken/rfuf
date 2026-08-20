@@ -25,8 +25,8 @@ func TestRunCommandStopsProcessGroupAtDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected soft-success on timeout, got %v", err)
 	}
-	if res == nil || res.ExitCode != 0 {
-		t.Fatalf("expected ExitCode 0 on timeout, got %+v", res)
+	if res == nil || res.ExitCode != 0 || !res.TimedOut {
+		t.Fatalf("expected ExitCode 0 with TimedOut=true, got %+v", res)
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("timed out command took too long to stop: %s", elapsed)

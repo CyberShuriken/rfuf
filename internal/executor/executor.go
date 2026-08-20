@@ -69,6 +69,7 @@ type Result struct {
 	Stderr   string
 	ExitCode int
 	Duration time.Duration
+	TimedOut bool
 }
 
 // RunCommand executes a shell command, stopping its entire process group when
@@ -231,6 +232,7 @@ func RunCommand(parent context.Context, cmdStr string, workDir string, logFile *
 			Stderr:   stderrBuf.String(),
 			ExitCode: 0,
 			Duration: duration,
+			TimedOut: true,
 		}, nil
 	}
 

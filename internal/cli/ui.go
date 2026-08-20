@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/CyberShuriken/rfuf/internal/coverage"
 	"github.com/CyberShuriken/rfuf/internal/summary"
 )
 
@@ -17,26 +19,33 @@ import (
 // metric corresponds to an output file the pipeline produces; if the file
 // is missing, the count reads as zero without erroring the dashboard.
 type Stats struct {
-	Subdomains   int
-	LiveSubs     int
-	AliveHosts   int
-	Takeovers    int
-	Secrets      int
-	Auth         int
-	GraphQL      int
-	CORS         int
-	FFUF         int
-	SQLi         int
-	XSS          int
-	RCE          int
-	IDOR         int
-	SSRF         int
-	Redirect     int
-	LFI          int
-	WAFDetected  int
-	OpenPorts    int
-	HiddenParams int
-	GhauriSQLi   int
+	Subdomains      int
+	LiveSubs        int
+	AliveHosts      int
+	Takeovers       int
+	Secrets         int
+	Auth            int
+	GraphQL         int
+	CORS            int
+	FFUF            int
+	SQLi            int
+	XSS             int
+	RCE             int
+	IDOR            int
+	SSRF            int
+	Redirect        int
+	LFI             int
+	WAFDetected     int
+	OpenPorts       int
+	HiddenParams    int
+	GhauriSQLi      int
+	CoverageStatus  string
+	TotalStages     int
+	CompletedStages int
+	FailedStages    int
+	TimedOutStages  int
+	SkippedStages   int
+	BlockedStages   int
 }
 
 // altScreenSupported is computed once on first use (windows console,
@@ -51,7 +60,7 @@ var (
 	altScreenActive atomic.Bool
 	logRing         []string
 	logRingMu       sync.Mutex
-	maxLogRingLines = 6
+	maxLogRingLines           = 6
 	outWriter       io.Writer = os.Stdout
 )
 
@@ -107,10 +116,23 @@ func StopDashboard() {
 // every Nth child-process output line. We keep a tiny ring buffer so the
 // dashboard's "Recent Activity" section can show the last few tool lines
 // without doing file I/O every render.
+func sanitizeDashboardLine(line string) string {
+	line = strings.TrimSpace(line)
+	if strings.Contains(line, "Templates:") && strings.Contains(line, "Requests:") {
+		return "[scanner statistics recorded in .rfuf/rfuf.log]"
+	}
+	for _, marker := range []string{"Authorization:", "Cookie:", "X-Bug-Bounty:", "X-Test-Account-Email:"} {
+		if strings.Contains(line, marker) {
+			return "[redacted request metadata; see stage status files]"
+		}
+	}
+	return line
+}
+
 func PushLogLine(line string) {
 	logRingMu.Lock()
 	defer logRingMu.Unlock()
-	logRing = append(logRing, strings.TrimSpace(line))
+	logRing = append(logRing, sanitizeDashboardLine(line))
 	if len(logRing) > maxLogRingLines {
 		logRing = logRing[len(logRing)-maxLogRingLines:]
 	}
@@ -192,6 +214,7 @@ func buildDashboardRows(domain string, elapsed time.Duration, steps []string, co
 		fmt.Sprintf("XSS: %-5d | Redir: %-4d | LFI: %-4d | WAF: %-4d | Ports: %-4d",
 			stats.XSS, stats.Redirect, stats.LFI, stats.WAFDetected, stats.OpenPorts),
 		fmt.Sprintf("Hidden Params: %-4d", stats.HiddenParams),
+		fmt.Sprintf("Health: %s | Stages %d/%d | Failed %d | Timeout %d | Skipped %d | Blocked %d", stats.CoverageStatus, stats.CompletedStages, stats.TotalStages, stats.FailedStages, stats.TimedOutStages, stats.SkippedStages, stats.BlockedStages),
 		"\033[1;36mRECENT FINDINGS (Last 3):\033[0m",
 	}
 	for _, f := range getRecentFindings(stats) {
@@ -268,28 +291,61 @@ func lenNoEsc(s string) int {
 }
 
 func UpdateStats(workDir string) Stats {
-	return Stats{
-		Subdomains:   countLines(filepath.Join(workDir, "subs.txt")),
-		LiveSubs:     countLines(filepath.Join(workDir, "live_subs.txt")),
-		AliveHosts:   countLines(filepath.Join(workDir, "alive.txt")),
-		Takeovers:    countLines(filepath.Join(workDir, "validated_takeovers.txt")),
-		Secrets:      countLines(filepath.Join(workDir, "trufflehog_results.txt")) + countLines(filepath.Join(workDir, "potential_secrets.txt")),
-		Auth:         countLines(filepath.Join(workDir, "auth_results.txt")),
-		GraphQL:      countLines(filepath.Join(workDir, "graphql_exposed.txt")),
-		CORS:         countLines(filepath.Join(workDir, "cors_findings.txt")),
-		FFUF:         countLines(filepath.Join(workDir, "ffuf_dirs_200.txt")),
-		SQLi:         summary.ConfirmedSqlmapCount(filepath.Join(workDir, "sqlmap_results")),
-		XSS:          countLines(filepath.Join(workDir, "xss_vulnerabilities.txt")),
-		RCE:          countLines(filepath.Join(workDir, "nuclei_rce_rce.txt")),
-		IDOR:         countLines(filepath.Join(workDir, "idor_vulnerabilities.txt")),
-		SSRF:         countLines(filepath.Join(workDir, "ssrf_vulnerabilities.txt")),
-		Redirect:     countLines(filepath.Join(workDir, "open_redirect_results.txt")),
-		LFI:          countLines(filepath.Join(workDir, "lfi_results.txt")),
-		WAFDetected:  countLines(filepath.Join(workDir, "waf_detections.txt")),
-		OpenPorts:    countLines(filepath.Join(workDir, "naabu_ports.txt")),
-		HiddenParams: countLines(filepath.Join(workDir, "hidden_params.txt")),
-		GhauriSQLi:   countLines(filepath.Join(workDir, "ghauri_results.txt")),
+	stats := Stats{
+		Subdomains:     countLines(filepath.Join(workDir, "subs.txt")),
+		LiveSubs:       countLines(filepath.Join(workDir, "live_subs.txt")),
+		AliveHosts:     countLines(filepath.Join(workDir, "alive.txt")),
+		Takeovers:      countLines(filepath.Join(workDir, "validated_takeovers.txt")),
+		Secrets:        countLines(filepath.Join(workDir, "trufflehog_results.txt")) + countLines(filepath.Join(workDir, "potential_secrets.txt")),
+		Auth:           countLines(filepath.Join(workDir, "auth_results.txt")),
+		GraphQL:        countLines(filepath.Join(workDir, "graphql_exposed.txt")),
+		CORS:           countLines(filepath.Join(workDir, "cors_findings.txt")),
+		FFUF:           countLines(filepath.Join(workDir, "ffuf_dirs_200.txt")),
+		SQLi:           summary.ConfirmedSqlmapCount(filepath.Join(workDir, "sqlmap_results")),
+		XSS:            countLines(filepath.Join(workDir, "xss_vulnerabilities.txt")),
+		RCE:            countLines(filepath.Join(workDir, "nuclei_rce_rce.txt")),
+		IDOR:           countLines(filepath.Join(workDir, "idor_vulnerabilities.txt")),
+		SSRF:           countLines(filepath.Join(workDir, "ssrf_vulnerabilities.txt")),
+		Redirect:       countLines(filepath.Join(workDir, "open_redirect_results.txt")),
+		LFI:            countLines(filepath.Join(workDir, "lfi_results.txt")),
+		WAFDetected:    countLines(filepath.Join(workDir, "waf_detections.txt")),
+		OpenPorts:      countLines(filepath.Join(workDir, "naabu_ports.txt")),
+		HiddenParams:   countLines(filepath.Join(workDir, "hidden_params.txt")),
+		GhauriSQLi:     countLines(filepath.Join(workDir, "ghauri_results.txt")),
+		CoverageStatus: "UNKNOWN",
 	}
+	if records, err := coverage.LoadStageRecords(workDir); err == nil && len(records) > 0 {
+		stats.TotalStages = len(records)
+		stats.CoverageStatus = "RUNNING"
+		for _, record := range records {
+			switch record.Status {
+			case coverage.StatusCompleted, coverage.StatusCompletedEmpty:
+				stats.CompletedStages++
+			case coverage.StatusFailed:
+				stats.FailedStages++
+			case coverage.StatusTimedOut:
+				stats.TimedOutStages++
+			case coverage.StatusSkipped:
+				stats.SkippedStages++
+			case coverage.StatusBlocked:
+				stats.BlockedStages++
+			}
+		}
+		if stats.FailedStages > 0 || stats.TimedOutStages > 0 || stats.SkippedStages > 0 || stats.BlockedStages > 0 {
+			stats.CoverageStatus = "INCOMPLETE"
+		} else if stats.CompletedStages == stats.TotalStages {
+			stats.CoverageStatus = "COMPLETE"
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(workDir, ".rfuf", "coverage_report.json")); err == nil {
+		var report struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(data, &report) == nil && report.Status != "" {
+			stats.CoverageStatus = report.Status
+		}
+	}
+	return stats
 }
 
 func countLines(path string) int {

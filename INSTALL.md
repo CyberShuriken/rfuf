@@ -158,3 +158,15 @@ rfuf -d example.com \
 ```
 
 RFUF sends these values as `X-Bug-Bounty` and `X-Test-Account-Email` through supported shell and Go-finder requests. The exclusion expression is applied before the canonical URL probe and target-list generation, preventing excluded paths from reaching active downstream scanners.
+
+### Coverage integrity and final artifacts
+
+A successful orchestration message is no longer sufficient evidence of complete coverage. RFUF writes one JSON record per stage under `.rfuf/stages/`, including status, exit code, timeout state, input/output counts, and artifact state. The final outputs are `.rfuf/coverage_report.json`, `CoverageReport.md`, `evidence.jsonl`, and an expanded `SUMMARY.md`.
+
+The final status is `COMPLETE` only when all declared stages finish as `completed` or `completed_empty`. A zero-finding stage is valid when it had valid input and exited successfully. `failed`, `timed_out`, `blocked`, and `skipped` stages are visible and cause an incomplete-coverage error. Partial artifacts are preserved for troubleshooting and resume workflows.
+
+### Authenticated health checks and bounds
+
+Use `-auth-check-url` with an optional `-auth-check-marker` to verify an operator-supplied session before scanning. With `-auth-required`, a failed or mismatched check stops the run. Only boolean state and HTTP status are written to `.rfuf/auth_check.json`; credentials and markers are not stored.
+
+Use `-max-targets` to cap final URL streams and `-max-stage-requests` to configure the request-rate ceiling for scanners that support it. These are explicit bounds for RFUF-controlled streams and compatible tools; they are not a universal budget for every third-party binary.

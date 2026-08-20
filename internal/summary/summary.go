@@ -2,6 +2,7 @@ package summary
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
+	"github.com/CyberShuriken/rfuf/internal/coverage"
 )
 
 // Generate builds SUMMARY.md (top-level counts) and findings.md (the
@@ -103,27 +105,55 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	// on every false-positive timeout.
 	sqlmapConfirmed, sqlmapDropped := confirmedSqlmapResults(filepath.Join(workDir, "sqlmap_results"))
 
+	coverageStatus := "UNKNOWN"
+	coverageCompleted, coverageTotal, coverageFailed, coverageTimedOut := 0, 0, 0, 0
+	authState := "not_configured"
+	if data, err := os.ReadFile(filepath.Join(workDir, ".rfuf", "auth_check.json")); err == nil {
+		var auth struct {
+			Configured bool `json:"configured"`
+			Verified   bool `json:"verified"`
+		}
+		if json.Unmarshal(data, &auth) == nil {
+			switch {
+			case auth.Verified:
+				authState = "verified"
+			case auth.Configured:
+				authState = "unverified"
+			}
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(workDir, ".rfuf", "coverage_report.json")); err == nil {
+		var report coverage.CoverageReport
+		if json.Unmarshal(data, &report) == nil {
+			coverageStatus = report.Status
+			coverageCompleted = report.CompletedStages + report.EmptyStages
+			coverageTotal = report.TotalStages
+			coverageFailed = report.FailedStages + report.BlockedStages
+			coverageTimedOut = report.TimedOutStages
+		}
+	}
+
 	// === findings.md — the report the hunter reads ===
 	findings := buildFindingsReport(cp, duration, FindingsBuckets{
-		RCE:             rce,
-		Takeovers:       takeovers,
-		LFI:             lfi,
-		SSRF:            ssrf,
-		Secrets:         secrets,
-		XSS:             xss,
-		Auth:            auth,
-		IDOR:            idor,
-		Redirect:        redirect,
-		SQLi:            sqlmapConfirmed,
-		GraphQL:         graphql,
-		CORS:            cors,
-		WAF:             waf,
-		Ports:           ports,
-		HiddenParams:    hiddenParams,
-		Ghauri:          ghauri,
+		RCE:              rce,
+		Takeovers:        takeovers,
+		LFI:              lfi,
+		SSRF:             ssrf,
+		Secrets:          secrets,
+		XSS:              xss,
+		Auth:             auth,
+		IDOR:             idor,
+		Redirect:         redirect,
+		SQLi:             sqlmapConfirmed,
+		GraphQL:          graphql,
+		CORS:             cors,
+		WAF:              waf,
+		Ports:            ports,
+		HiddenParams:     hiddenParams,
+		Ghauri:           ghauri,
 		PotentialSecrets: potentialSecrets,
-		FFUF:            ffuf,
-		ManualReview:    getFileContent(filepath.Join(workDir, "manual_business_logic_review.txt")),
+		FFUF:             ffuf,
+		ManualReview:     getFileContent(filepath.Join(workDir, "manual_business_logic_review.txt")),
 		APISpecs:         apiSpecs,
 		BOLATargets:      bolaTargets,
 		BOLAPermutations: bolaPermutations,
@@ -150,16 +180,16 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 		DroppedURLTotal:       countLines(filepath.Join(workDir, "all_urls.txt")) - countLines(filepath.Join(workDir, "all_urls_200.txt")),
 
 		// Phase 1 wired-up finders.
-		ReflectionFindings:    reflectionFindings,
-		ParamShapeFindings:    paramshapeFindings,
-		AuthShapeFindings:     authshapeFindings,
+		ReflectionFindings:     reflectionFindings,
+		ParamShapeFindings:     paramshapeFindings,
+		AuthShapeFindings:      authshapeFindings,
 		SignupTakeoverFindings: signupTakeoverFindings,
-		IdorSurfaceFindings:   idorSurfaceFindings,
-		OAuthFindings:         oauthFindings,
-		RaceResults:           raceResults,
-		BucketFindings:        bucketFindings,
-		TakeoverV2Findings:    takeoverV2Findings,
-		JSMineFindings:        jsMineFindings,
+		IdorSurfaceFindings:    idorSurfaceFindings,
+		OAuthFindings:          oauthFindings,
+		RaceResults:            raceResults,
+		BucketFindings:         bucketFindings,
+		TakeoverV2Findings:     takeoverV2Findings,
+		JSMineFindings:         jsMineFindings,
 
 		// Phase 2 new finders.
 		SecHeadersFindings:    secheadersFindings,
@@ -182,6 +212,13 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **Scan Started:** %s
 - **Scan Finished:** %s
 - **Total Duration:** %v
+
+## Coverage Integrity
+- **Run Status:** **%s**
+- **Stages Completed:** %d / %d
+- **Stage Failures or Blocks:** %d
+- **Stage Timeouts:** %d
+- **Authentication:** **%s**
 
 ## Recon Stats
 - **Total Subdomains:** %d
@@ -238,8 +275,10 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 ## Detailed report
 Open [findings.md](./findings.md) — every URL to retest, grouped by
 severity, with false-positive filtering transparent.
-`, cp.Domain, cp.StartedAt.Format(time.RFC822), cp.LastUpdated.Format(time.RFC822), duration,
+	`, cp.Domain, cp.StartedAt.Format(time.RFC822), cp.LastUpdated.Format(time.RFC822), duration,
+		coverageStatus, coverageCompleted, coverageTotal, coverageFailed, coverageTimedOut, authState,
 		subdomains, liveSubs, aliveHosts, len(techFingerprint),
+
 		len(rce), len(takeovers), len(lfi), len(ssrf), len(xss),
 		len(sqlmapConfirmed), countFolders(filepath.Join(workDir, "sqlmap_results")),
 		len(ghauri),
@@ -262,31 +301,31 @@ severity, with false-positive filtering transparent.
 // FindingsBuckets holds every per-category finding slice so the report
 // builder can iterate without an explosion of positional string args.
 type FindingsBuckets struct {
-	RCE             []string
-	Takeovers       []string
-	LFI             []string
-	SSRF            []string
-	Secrets         []string
-	XSS             []string
-	Auth            []string
-	IDOR            []string
-	Redirect        []string
-	SQLi            []string
-	GraphQL         []string
-	CORS            []string
-	WAF             []string
-	Ports           []string
-	HiddenParams    []string
-	Ghauri          []string
+	RCE              []string
+	Takeovers        []string
+	LFI              []string
+	SSRF             []string
+	Secrets          []string
+	XSS              []string
+	Auth             []string
+	IDOR             []string
+	Redirect         []string
+	SQLi             []string
+	GraphQL          []string
+	CORS             []string
+	WAF              []string
+	Ports            []string
+	HiddenParams     []string
+	Ghauri           []string
 	PotentialSecrets []string
-	FFUF            []string
-	ManualReview    []string
-	APISpecs        []string
-	BOLATargets     []string
+	FFUF             []string
+	ManualReview     []string
+	APISpecs         []string
+	BOLATargets      []string
 	BOLAPermutations []string
-	NextjsPlaidJWT  []string
-	DRFFindings     []string
-	DRFIdorTargets  []string
+	NextjsPlaidJWT   []string
+	DRFFindings      []string
+	DRFIdorTargets   []string
 
 	// Tech-aware findings (Discourse / Laravel / WordPress / cache poison).
 	DiscourseFindings   []string
