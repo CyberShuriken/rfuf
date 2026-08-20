@@ -106,57 +106,57 @@ func distroPackages(pm PackageManager) map[string][]string {
 // Naming convention: the "CheckBinary" is what we look up on PATH to decide
 // whether the tool is already installed; the "InstallCommand" is the exact
 // shell snippet to run when it isn't. Most tools are Go-based and install via
-// `go install` (works on every distro with a Go toolchain). TruffleHog is
+// `GOTOOLCHAIN=local go install` (works on every distro with a Go toolchain). TruffleHog is
 // installed via its own installer script (latest releases ship as native
 // binaries, not as a Go module). sqlmap + jq + seclists come from the
 // system package manager — see systemInstallCmd for the per-distro mapping.
 func GetRequiredTools(goBin string) []Tool {
 	return []Tool{
 		// Subdomain enumeration
-		{"subfinder", "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", "subfinder"},
-		{"assetfinder", "go install github.com/tomnomnom/assetfinder@latest", "assetfinder"},
-		{"amass", "go install -v github.com/owasp-amass/amass/v4/cmd/amass@master", "amass"},
+		{"subfinder", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", "subfinder"},
+		{"assetfinder", "GOTOOLCHAIN=local go install github.com/tomnomnom/assetfinder@latest", "assetfinder"},
+		{"amass", "GOTOOLCHAIN=local go install -v github.com/owasp-amass/amass/v4/cmd/amass@master", "amass"},
 		// DNS resolution + takeover checks
-		{"dnsx", "go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest", "dnsx"},
-		{"subzy", "go install -v github.com/PentestPad/subzy@latest", "subzy"},
+		{"dnsx", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest", "dnsx"},
+		{"subzy", "GOTOOLCHAIN=local go install -v github.com/PentestPad/subzy@latest", "subzy"},
 		// Generic scanner
-		{"nuclei", "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", "nuclei"},
+		{"nuclei", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.10", "nuclei"},
 		// HTTP probing + crawling
-		{"httpx", "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest", "httpx"},
-		{"katana", "go install github.com/projectdiscovery/katana/cmd/katana@latest", "katana"},
+		{"httpx", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest", "httpx"},
+		{"katana", "GOTOOLCHAIN=local go install github.com/projectdiscovery/katana/cmd/katana@latest", "katana"},
 		// Secret scanning
 		{"trufflehog", fmt.Sprintf("curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b %s", goBin), "trufflehog"},
 		// GF patterns + helpers
-		{"gf", "go install github.com/tomnomnom/gf@latest", "gf"},
-		{"Gxss", "go install github.com/KathanP19/Gxss@latest", "Gxss"},
-		{"dalfox", "go install github.com/hahwul/dalfox/v2@latest", "dalfox"},
+		{"gf", "GOTOOLCHAIN=local go install github.com/tomnomnom/gf@latest", "gf"},
+		{"Gxss", "GOTOOLCHAIN=local go install github.com/KathanP19/Gxss@latest", "Gxss"},
+		{"dalfox", "GOTOOLCHAIN=local go install github.com/hahwul/dalfox/v2@latest", "dalfox"},
 		// Historical URL mining
-		{"gau", "go install github.com/lc/gau/v2/cmd/gau@latest", "gau"},
-		{"waybackurls", "go install github.com/tomnomnom/waybackurls@latest", "waybackurls"},
+		{"gau", "GOTOOLCHAIN=local go install github.com/lc/gau/v2/cmd/gau@latest", "gau"},
+		{"waybackurls", "GOTOOLCHAIN=local go install github.com/tomnomnom/waybackurls@latest", "waybackurls"},
 		// Fuzzing + URL dedup (uro collapses gau+wayback+katana noise)
-		{"ffuf", "go install github.com/ffuf/ffuf/v2@latest", "ffuf"},
-		{"uro", "go install github.com/s0md3v/uro@latest", "uro"},
+		{"ffuf", "GOTOOLCHAIN=local go install github.com/ffuf/ffuf/v2@latest", "ffuf"},
+		{"uro", "GOTOOLCHAIN=local go install github.com/s0md3v/uro@latest", "uro"},
 		// Port scanning + WAF detection + hidden params per bb-methodology.
 		// naabu is Go-installed; wafw00f, arjun, and ghauri are all
 		// Python-based in 2026 (Go module paths were deprecated) so we
 		// install via pipx or pip3 with --user. The stages that depend
 		// on these tools gracefully no-op when the binary is missing, so
 		// a pip install failure never blocks the pipeline.
-		{"naabu", "go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest", "naabu"},
-			{"wafw00f", "pipx install wafw00f || pip3 install --break-system-packages wafw00f || pip3 install --user wafw00f", "wafw00f"},
-			{"arjun", "pipx install arjun || pip3 install --break-system-packages arjun || pip3 install --user arjun", "arjun"},
-			{"ghauri", "pipx install git+https://github.com/r0oth3x49/ghauri.git || pip3 install --break-system-packages git+https://github.com/r0oth3x49/ghauri.git", "ghauri"},
+		{"naabu", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest", "naabu"},
+		{"wafw00f", "pipx install wafw00f || pip3 install --break-system-packages wafw00f || pip3 install --user wafw00f", "wafw00f"},
+		{"arjun", "pipx install arjun || pip3 install --break-system-packages arjun || pip3 install --user arjun", "arjun"},
+		{"ghauri", "pipx install git+https://github.com/r0oth3x49/ghauri.git || pip3 install --break-system-packages git+https://github.com/r0oth3x49/ghauri.git", "ghauri"},
 		// interactsh-client: OOB callback server used by the new SSRF/RCE/XSS
 		// stages to catch blind results that don't trip templates. Allocates
 		// a unique *.oast.fun (or self-hosted) URL at pipeline boot that
 		// becomes the substitute target for blind payloads.
-		{"interactsh-client", "go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest", "interactsh-client"},
+		{"interactsh-client", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest", "interactsh-client"},
 	}
 }
 
 // VerifyToolsPresent is the no-install counterpart to EnsureTools. Used on
 // `-resume` so a stopped pipeline can pick up without re-running sudo /
-// `go install` for tools we already have on disk. It returns a clear error
+// `GOTOOLCHAIN=local go install` for tools we already have on disk. It returns a clear error
 // if any required binary is missing — the failure message tells the user
 // how to recover (drop -resume to trigger the installer).
 //
@@ -194,7 +194,7 @@ func VerifyToolsPresent() error {
 // install paths so the user always ends up with a working pipeline.
 func EnsureTools(goBin string) error {
 	// 1. Check Go. This is the only hard prerequisite: every recon tool we
-	// install via `go install` needs a working Go toolchain, and the
+	// install via `GOTOOLCHAIN=local go install` needs a working Go toolchain, and the
 	// cross-distro logic only matters once Go is in place.
 	if _, err := exec.LookPath("go"); err != nil {
 		return fmt.Errorf("Go is not installed. Install it first: sudo dnf install -y golang  (Fedora)  |  sudo apt install -y golang-go  (Kali/Debian/Ubuntu)")
@@ -243,7 +243,7 @@ func EnsureTools(goBin string) error {
 
 	// 4. Ensure ~/go/bin is on PATH. This is the Go default install
 	// location; if it isn't on PATH, `which subfinder` will fail even
-	// after a successful `go install`.
+	// after a successful `GOTOOLCHAIN=local go install`.
 	path := os.Getenv("PATH")
 	if !strings.Contains(path, goBin) {
 		newPath := goBin + ":" + path
@@ -276,7 +276,7 @@ func EnsureTools(goBin string) error {
 		// Nuclei needs templates before its first scan can do anything
 		// useful. Updating templates on every install is wasteful, but
 		// doing it once at first-install time is the right trade-off.
-			if t.Name == "nuclei" {
+		if t.Name == "nuclei" {
 			fmt.Println("[*] Updating nuclei templates (first-time setup)...")
 			// On Kali, nuclei may be installed via apt with system-wide
 			// templates at /usr/share/nuclei-templates. The -update-templates

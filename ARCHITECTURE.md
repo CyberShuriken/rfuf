@@ -43,6 +43,8 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
 
 ## Pipeline Rules (Do Not Break)
 
+The dependency installer uses `GOTOOLCHAIN=local` for Go-based tools and pins Nuclei to `v3.3.10`, compatible with the supported Go 1.22 toolchain. It must not silently download a future Go release or trap a manual scan in an unbounded bootstrap. If a tool is unavailable, the operator should install it explicitly and rerun with `-skip-install` only after `VerifyToolsPresent` succeeds.
+
 1. **Dependency Integrity** — stages run as soon as their `Deps` (dependencies) are met. Endpoint scanners depend on the enriched target stream, not only on `alive.txt`.
 2. **Thread-Safe Checkpointing** — `checkpoint.json` is updated via a mutex-protected process.
 3. **Fresh run clears checkpoint** — `rfuf -d domain` without `-resume` resets progress.

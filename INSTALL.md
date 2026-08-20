@@ -145,3 +145,16 @@ rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cook
 The file-based forms read a local file and use its trimmed contents as one session value. Keep those files protected with normal filesystem permissions. `-auth-required` prevents a run from silently falling back to public-only coverage when authenticated testing is mandatory.
 
 The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests are still limited to the authorized wildcard scope supplied to RFUF.
+
+### Program attribution and scope exclusions
+
+For programs that require researcher attribution, pass the program-provided values explicitly:
+
+```bash
+rfuf -d example.com \
+  -bug-bounty-username researcher \
+  -test-account-email test@example.com \
+  -exclude-url-regex '(^|/)(contact|support)(/|$)'
+```
+
+RFUF sends these values as `X-Bug-Bounty` and `X-Test-Account-Email` through supported shell and Go-finder requests. The exclusion expression is applied before the canonical URL probe and target-list generation, preventing excluded paths from reaching active downstream scanners.

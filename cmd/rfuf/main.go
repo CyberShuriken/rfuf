@@ -62,6 +62,12 @@ func main() {
 		"Read a bearer token from a local file when -auth-bearer is not supplied.")
 	authRequired := flag.Bool("auth-required", false,
 		"Refuse to start unless a cookie or bearer session is supplied.")
+	bugBountyUsername := flag.String("bug-bounty-username", "",
+		"Researcher username for the X-Bug-Bounty request header required by some programs.")
+	testAccountEmail := flag.String("test-account-email", "",
+		"Dedicated test-account email for the X-Test-Account-Email request header required by some programs.")
+	excludeURLRegex := flag.String("exclude-url-regex", "",
+		"Extended regular expression for URLs to exclude before downstream scans (repeat program exclusions safely).")
 
 	// OOB / blind detection. Starts interactsh-client at pipeline boot
 	// and wires $RFUF_OOB_URL into SSRF/RCE/XSS payloads.
@@ -127,7 +133,11 @@ func main() {
 		fmt.Println("[!] authenticated testing was required but no cookie or bearer token was supplied")
 		os.Exit(1)
 	}
-	buildAuthEnv(cookieValue, bearerValue)
+	buildAuthEnv(cookieValue, bearerValue, *bugBountyUsername, *testAccountEmail)
+	if strings.TrimSpace(*excludeURLRegex) != "" {
+		executor.AuthEnv["RFUF_EXCLUDE_URL_REGEX"] = strings.TrimSpace(*excludeURLRegex)
+		fmt.Println("[*] URL exclusion regex enabled")
+	}
 
 	// 3. Start interactsh-client for OOB / blind detection. The allocated
 	//    URL is wired into the executor's env so SSRF/RCE/XSS stages can
@@ -205,8 +215,8 @@ func authValue(inline, filePath, label string) (string, error) {
 	return value, nil
 }
 
-func buildAuthEnv(cookie, bearer string) {
-	if cookie == "" && bearer == "" {
+func buildAuthEnv(cookie, bearer, bugBountyUsername, testAccountEmail string) {
+	if cookie == "" && bearer == "" && strings.TrimSpace(bugBountyUsername) == "" && strings.TrimSpace(testAccountEmail) == "" {
 		return
 	}
 	env := map[string]string{}
@@ -217,6 +227,14 @@ func buildAuthEnv(cookie, bearer string) {
 	if bearer != "" {
 		env["RFUF_AUTH_HEADER"] = "Bearer " + bearer
 		fmt.Printf("[*] Auth mode: bearer token will be injected (%d chars)\n", len(bearer))
+	}
+	if strings.TrimSpace(bugBountyUsername) != "" {
+		env["RFUF_BUG_BOUNTY_USERNAME"] = strings.TrimSpace(bugBountyUsername)
+		fmt.Printf("[*] Bug-bounty researcher header enabled for %s\n", strings.TrimSpace(bugBountyUsername))
+	}
+	if strings.TrimSpace(testAccountEmail) != "" {
+		env["RFUF_TEST_ACCOUNT_EMAIL"] = strings.TrimSpace(testAccountEmail)
+		fmt.Println("[*] Test-account email header enabled")
 	}
 	executor.AuthEnv = env
 }

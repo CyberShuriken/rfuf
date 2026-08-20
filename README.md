@@ -203,6 +203,8 @@ rfuf -d example.com -auth-cookie 'session=...' # replay an authorized session co
 rfuf -d example.com -auth-cookie-file ~/.config/rfuf/session.cookie # read cookie locally
 rfuf -d example.com -auth-bearer-file ~/.config/rfuf/token # read bearer token locally
 rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie
+rfuf -d example.com -bug-bounty-username researcher -test-account-email test@example.com
+rfuf -d example.com -exclude-url-regex '(^|/)(contact|support)(/|$)'
 rfuf -v                            # print version
 rfuf -h                            # show help
 ```
@@ -232,6 +234,17 @@ Secrets are passed through the child environment and argument arrays rather
 than interpolated into generated URLs. The scan report records whether auth
 was supplied but does not intentionally print the credential value.
 
+### Program-required headers and exclusions
+
+Manual bug-bounty scans can provide program attribution headers with
+`-bug-bounty-username` and `-test-account-email`. RFUF propagates these as
+`X-Bug-Bounty` and `X-Test-Account-Email` through shell stages and Go finder
+requests without storing their values in findings files. Use
+`-exclude-url-regex` for program-specific exclusions; the expression is
+applied before the canonical HTTP probe and downstream target generation.
+This is intended for exclusions such as contact/support forms, sandbox hosts,
+or other surfaces listed by the program policy.
+
 ### Enriched target streams
 
 The early host probe writes `alive.txt`, but endpoint scanners no longer stop
@@ -249,6 +262,14 @@ with whatever output was produced. Use `-step-timeout <duration>` to raise it
 on big targets, or `-step-timeout 0` only when you explicitly want unlimited
 stage runtime. Stages with known-bounded runtime (gau, waybackurls) additionally
 carry their own per-stage cap (10 minutes); see the stage table below.
+
+### Bounded dependency installation
+
+The installer uses `GOTOOLCHAIN=local` for Go-based dependencies and pins
+Nuclei to a Go 1.22-compatible release. It will not silently download a future
+Go toolchain during a scan. If a dependency is unavailable, install that tool
+explicitly and use `-skip-install` only after the tool verification check
+passes; this keeps manual scans from becoming an unbounded setup loop.
 
 ### `-resume` implies `-skip-install`
 

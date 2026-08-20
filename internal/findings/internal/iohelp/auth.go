@@ -16,6 +16,8 @@ import (
 //     accepted. Used as the full Authorization header value.
 //  2. RFUF_AUTH_COOKIE — set explicitly by the user via `-auth-cookie`.
 //     Wrapped in `Cookie: <value>` for direct injection.
+//  3. RFUF_BUG_BOUNTY_USERNAME and RFUF_TEST_ACCOUNT_EMAIL — optional
+//     program-attribution headers used when a bounty program requires them.
 //
 // Either or both may be unset. The returned slice is suitable to be
 // applied by `req.Header["..."] = [...]` or appended via
@@ -51,6 +53,12 @@ func BuildAuthHeaders() []struct{ Key, Value string } {
 		// form, sent directly) or bare "k=v" (single cookie). We
 		// pass through verbatim.
 		out = append(out, struct{ Key, Value string }{"Cookie", cookie})
+	}
+	if username := strings.TrimSpace(os.Getenv("RFUF_BUG_BOUNTY_USERNAME")); username != "" {
+		out = append(out, struct{ Key, Value string }{"X-Bug-Bounty", username})
+	}
+	if email := strings.TrimSpace(os.Getenv("RFUF_TEST_ACCOUNT_EMAIL")); email != "" {
+		out = append(out, struct{ Key, Value string }{"X-Test-Account-Email", email})
 	}
 	return out
 }

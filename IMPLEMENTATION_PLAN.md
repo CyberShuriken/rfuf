@@ -124,3 +124,9 @@ The plan has been implemented in the current branch. The delivered changes inclu
 The local integration fixture verified discovery of Next.js chunks, conventional `/static/js/` assets, manifests, and API endpoints while replaying a session cookie. The repository validation completed successfully with `go test ./...`, `go vet ./...`, `go build ./cmd/rfuf`, and `git diff --check`.
 
 The implementation intentionally does not create accounts, submit signup forms, guess credentials, bypass MFA, or scan live external targets as part of validation. Authenticated coverage requires a session supplied by the authorized operator.
+
+## Tooling-only completion update
+
+The remaining work is now scoped to manual scanning; no live wildcard scan is part of this completion pass. RFUF now exposes `-bug-bounty-username`, `-test-account-email`, and `-exclude-url-regex`. The first two propagate `X-Bug-Bounty` and `X-Test-Account-Email` through shell and Go-finder requests. The exclusion expression is applied before the canonical URL probe and downstream target generation, allowing operators to reproduce program-specific out-of-scope rules safely.
+
+The interrupted dependency bootstrap was stopped after it began compiling the latest Nuclei toolchain. This prevents a setup loop from blocking manual use. The repository will be validated using deterministic tests and builds; external scanner installation remains an explicit operator setup step rather than part of this tooling-only change.

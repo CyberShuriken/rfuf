@@ -68,3 +68,30 @@ func indexOf(s, sub string) int {
 
 // Ensure exec is "used" so the import isn't flagged when tests get pruned.
 var _ = exec.Command
+
+func TestRequiredToolsPinNucleiAndDisableToolchainSwitching(t *testing.T) {
+	var nuclei Tool
+	for _, tool := range GetRequiredTools("/tmp/go-bin") {
+		if tool.Name == "nuclei" {
+			nuclei = tool
+			break
+		}
+	}
+	if nuclei.CheckBinary != "nuclei" {
+		t.Fatal("nuclei tool definition not found")
+	}
+	if !containsCmd(nuclei.InstallCommand, "GOTOOLCHAIN=local") {
+		t.Fatalf("nuclei installer may silently download a future Go toolchain: %q", nuclei.InstallCommand)
+	}
+	if !containsCmd(nuclei.InstallCommand, "@v3.3.10") {
+		t.Fatalf("nuclei installer is not pinned to the supported release: %q", nuclei.InstallCommand)
+	}
+}
+
+func TestAllGoInstallCommandsDisableToolchainSwitching(t *testing.T) {
+	for _, tool := range GetRequiredTools("/tmp/go-bin") {
+		if containsCmd(tool.InstallCommand, "go install") && !containsCmd(tool.InstallCommand, "GOTOOLCHAIN=local") {
+			t.Errorf("%s installer can silently switch Go toolchains: %q", tool.Name, tool.InstallCommand)
+		}
+	}
+}

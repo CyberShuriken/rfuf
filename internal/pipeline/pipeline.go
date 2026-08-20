@@ -184,6 +184,8 @@ func buildAuthHeaderSnippet() string {
 AUTH_HEADERS=()
 [ -n "$RFUF_AUTH_COOKIE" ] && AUTH_HEADERS+=(-H "Cookie: $RFUF_AUTH_COOKIE")
 [ -n "$RFUF_AUTH_HEADER" ] && AUTH_HEADERS+=(-H "Authorization: $RFUF_AUTH_HEADER")
+[ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME")
+[ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
 `
 }
 
@@ -501,13 +503,13 @@ mkdir -p js_bundles endpoints_found js_secrets
 : > js_asset_errors.txt
 fetch_asset() {
   if [ -n "$RFUF_AUTH_COOKIE" ] && [ -n "$RFUF_AUTH_HEADER" ]; then
-    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "Authorization: $RFUF_AUTH_HEADER" "$1" -o "$2"
+    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   elif [ -n "$RFUF_AUTH_COOKIE" ]; then
-    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" "$1" -o "$2"
+    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   elif [ -n "$RFUF_AUTH_HEADER" ]; then
-    curl -sk --max-time 15 -H "Authorization: $RFUF_AUTH_HEADER" "$1" -o "$2"
+    curl -sk --max-time 15 -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   else
-    curl -sk --max-time 15 "$1" -o "$2"
+    curl -sk --max-time 15 -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   fi
 }
 resolve_asset() {
@@ -665,7 +667,13 @@ exit 0`, "default", []string{"gau_urls", "wayback_urls", "clean_urls", "api_disc
 		// localwp.com because Cloudflare's bot detection returned 403.
 		// 401/403/405 are testable endpoints requiring auth; 301/302 may
 		// redirect to a testable path.
-		{"url_filter_alive", fmt.Sprintf("%s\nhttpx -l all_urls.txt -silent -status-code -mc 200,301,302,401,403,405 \"${AUTH_HEADERS[@]}\" -o all_urls_200.txt", authSnip), "grep", []string{"uro_dedup", "merge_js_endpoints"}, 0},
+		{"url_filter_alive", fmt.Sprintf(`%s
+if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
+  grep -Ev -- "$RFUF_EXCLUDE_URL_REGEX" all_urls.txt > all_urls_scannable.txt || cp all_urls.txt all_urls_scannable.txt
+else
+  cp all_urls.txt all_urls_scannable.txt
+fi
+httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405 "${AUTH_HEADERS[@]}" -o all_urls_200.txt`, authSnip), "grep", []string{"uro_dedup", "merge_js_endpoints"}, 0},
 		// Normalize bundle/manifest discoveries into full URLs and merge them
 		// into all_urls before the endpoint scanners are scheduled.
 		{"merge_js_endpoints", `set +e

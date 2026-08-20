@@ -303,3 +303,34 @@ func TestTrufflehogRecordsStatusAndDiagnostics(t *testing.T) {
 	}
 	t.Fatal("trufflehog_scan step not found")
 }
+
+func TestProgramHeadersReachShellStages(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, s := range steps {
+		if s.ID != "httpx_probe" && s.ID != "nuclei_exposures" && s.ID != "jsmap_scrape" {
+			continue
+		}
+		if !strings.Contains(s.Command, "X-Bug-Bounty") {
+			t.Errorf("%s must propagate X-Bug-Bounty: %q", s.ID, s.Command)
+		}
+		if !strings.Contains(s.Command, "X-Test-Account-Email") {
+			t.Errorf("%s must propagate X-Test-Account-Email: %q", s.ID, s.Command)
+		}
+	}
+}
+
+func TestURLFilterSupportsProgramExclusions(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, s := range steps {
+		if s.ID != "url_filter_alive" {
+			continue
+		}
+		for _, marker := range []string{"RFUF_EXCLUDE_URL_REGEX", "all_urls_scannable.txt", "grep -Ev"} {
+			if !strings.Contains(s.Command, marker) {
+				t.Errorf("url_filter_alive missing %q: %q", marker, s.Command)
+			}
+		}
+		return
+	}
+	t.Fatal("url_filter_alive step not found")
+}
