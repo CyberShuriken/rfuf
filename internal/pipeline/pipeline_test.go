@@ -218,3 +218,88 @@ func TestVulnTargetsSourceFrom200Only(t *testing.T) {
 		}
 	}
 }
+
+func TestSqlmapUsesMaterializedTargetFile(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, s := range steps {
+		if s.ID != "sqlmap_scan" {
+			continue
+		}
+		if !strings.Contains(s.Command, "sqlmap_targets.txt") {
+			t.Fatalf("sqlmap_scan must use a materialized target file: %q", s.Command)
+		}
+		if strings.Contains(s.Command, "<(head") {
+			t.Fatalf("sqlmap_scan regressed to process substitution: %q", s.Command)
+		}
+		if !strings.Contains(s.Command, "sqlmap_status.json") {
+			t.Fatalf("sqlmap_scan must emit status diagnostics: %q", s.Command)
+		}
+		return
+	}
+	t.Fatal("sqlmap_scan step not found")
+}
+
+func TestNucleiHostScansUseEnrichedTargets(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	want := map[string]bool{
+		"nuclei_exposures":    false,
+		"nuclei_misconfigs":   false,
+		"nuclei_auth_scan":    false,
+		"nuclei_graphql_scan": false,
+	}
+	for _, s := range steps {
+		if _, ok := want[s.ID]; !ok {
+			continue
+		}
+		want[s.ID] = true
+		if !strings.Contains(s.Command, "nuclei_targets.txt") {
+			t.Errorf("%s must scan nuclei_targets.txt: %q", s.ID, s.Command)
+		}
+		depOK := false
+		for _, d := range s.Deps {
+			if d == "nuclei_target_merge" {
+				depOK = true
+			}
+		}
+		if !depOK {
+			t.Errorf("%s must depend on nuclei_target_merge: %v", s.ID, s.Deps)
+		}
+	}
+	for id, found := range want {
+		if !found {
+			t.Errorf("%s step missing", id)
+		}
+	}
+}
+
+func TestJavaScriptCollectionCoversModernAssets(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, s := range steps {
+		if s.ID != "jsmap_scrape" {
+			continue
+		}
+		for _, marker := range []string{"manifest.json", "asset-manifest.json", "/_next/static/", "/static/js/", "RFUF_AUTH_COOKIE", "js_assets.txt"} {
+			if !strings.Contains(s.Command, marker) {
+				t.Errorf("jsmap_scrape missing %q: %q", marker, s.Command)
+			}
+		}
+		return
+	}
+	t.Fatal("jsmap_scrape step not found")
+}
+
+func TestTrufflehogRecordsStatusAndDiagnostics(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, s := range steps {
+		if s.ID != "trufflehog_scan" {
+			continue
+		}
+		for _, marker := range []string{"trufflehog_status.json", "trufflehog_stderr.log", "--json", "no_inputs", "not_installed", "scan_error"} {
+			if !strings.Contains(s.Command, marker) {
+				t.Errorf("trufflehog_scan missing %q: %q", marker, s.Command)
+			}
+		}
+		return
+	}
+	t.Fatal("trufflehog_scan step not found")
+}

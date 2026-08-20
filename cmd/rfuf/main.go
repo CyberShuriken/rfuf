@@ -56,6 +56,12 @@ func main() {
 		"Cookie value injected into every request (e.g. 'session=abc123def456'). Unlocks the bug surface behind login on the target.")
 	authBearer := flag.String("auth-bearer", "",
 		"Bearer token injected as Authorization header (e.g. JWT). Use for API-first targets with token auth.")
+	authCookieFile := flag.String("auth-cookie-file", "",
+		"Read a session cookie value from a local file when -auth-cookie is not supplied.")
+	authBearerFile := flag.String("auth-bearer-file", "",
+		"Read a bearer token from a local file when -auth-bearer is not supplied.")
+	authRequired := flag.Bool("auth-required", false,
+		"Refuse to start unless a cookie or bearer session is supplied.")
 
 	// OOB / blind detection. Starts interactsh-client at pipeline boot
 	// and wires $RFUF_OOB_URL into SSRF/RCE/XSS payloads.
@@ -107,7 +113,21 @@ func main() {
 	// 2. Build auth env map (used by executor to inject into every shell).
 	//    Only populated when explicitly requested — empty AuthEnv means
 	//    unauthenticated scan, which is the historical default.
-	buildAuthEnv(*authCookie, *authBearer)
+	cookieValue, err := authValue(*authCookie, *authCookieFile, "cookie")
+	if err != nil {
+		fmt.Printf("[!] %v\n", err)
+		os.Exit(1)
+	}
+	bearerValue, err := authValue(*authBearer, *authBearerFile, "bearer token")
+	if err != nil {
+		fmt.Printf("[!] %v\n", err)
+		os.Exit(1)
+	}
+	if *authRequired && cookieValue == "" && bearerValue == "" {
+		fmt.Println("[!] authenticated testing was required but no cookie or bearer token was supplied")
+		os.Exit(1)
+	}
+	buildAuthEnv(cookieValue, bearerValue)
 
 	// 3. Start interactsh-client for OOB / blind detection. The allocated
 	//    URL is wired into the executor's env so SSRF/RCE/XSS stages can
@@ -162,9 +182,29 @@ func main() {
 
 // buildAuthEnv populates the executor's AuthEnv map from the -auth-cookie
 // and -auth-bearer flags. Stage commands reference these via:
-//   ${RFUF_AUTH_COOKIE:+"--cookie=$RFUF_AUTH_COOKIE"}
-//   ${RFUF_AUTH_HEADER:+"--headers=Authorization: $RFUF_AUTH_HEADER"}
+//
+//	${RFUF_AUTH_COOKIE:+"--cookie=$RFUF_AUTH_COOKIE"}
+//	${RFUF_AUTH_HEADER:+"--headers=Authorization: $RFUF_AUTH_HEADER"}
+//
 // and the per-tool wrappers translate them into the right CLI flags.
+func authValue(inline, filePath, label string) (string, error) {
+	if strings.TrimSpace(inline) != "" {
+		return strings.TrimSpace(inline), nil
+	}
+	if strings.TrimSpace(filePath) == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read auth %s file: %w", label, err)
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("auth %s file is empty: %s", label, filePath)
+	}
+	return value, nil
+}
+
 func buildAuthEnv(cookie, bearer string) {
 	if cookie == "" && bearer == "" {
 		return

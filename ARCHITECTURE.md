@@ -43,7 +43,7 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
 
 ## Pipeline Rules (Do Not Break)
 
-1. **Dependency Integrity** — stages run as soon as their `Deps` (dependencies) are met.
+1. **Dependency Integrity** — stages run as soon as their `Deps` (dependencies) are met. Endpoint scanners depend on the enriched target stream, not only on `alive.txt`.
 2. **Thread-Safe Checkpointing** — `checkpoint.json` is updated via a mutex-protected process.
 3. **Fresh run clears checkpoint** — `rfuf -d domain` without `-resume` resets progress.
 4. **Step types:**
@@ -63,8 +63,10 @@ subzy + nuclei takeovers → validated_takeovers.txt
 httpx → alive.txt
 nuclei (exposures/misconfigs/auth/graphql) → various *.txt
 katana → katana_urls.txt → clean_katana_urls.txt
-gau + waybackurls + katana → all_urls.txt
-gf + grep → *_targets.txt
+HTML + Next.js/static-js/manifest collection → js_assets.txt → js_bundles/
+gau + waybackurls + katana + OpenAPI + JS endpoints → all_urls.txt
+all_urls.txt + alive.txt + JS endpoints → nuclei_targets.txt
+gf + filter → *_targets.txt
 tool scan → *_results.txt / sqlmap_results/
 ffuf → ffuf_dirs_raw.txt → dirbrute_verify_200 → ffuf_dirs_200.txt
 grep business logic → manual_business_logic_review.txt
@@ -114,52 +116,54 @@ Rules for `*_targets` steps:
 
 ## All Stage IDs (execution order)
 
-1. setup_directories  
-2. subfinder  
-3. assetfinder  
-4. amass_enum  
-5. amass_parse  
-6. merge_subs  
-7. dnsx_resolve  
-8. subzy_takeover  
-9. extract_takeover_targets  
-10. validate_takeovers  
-11. httpx_probe  
-12. nuclei_exposures  
-13. nuclei_misconfigs  
-14. nuclei_auth_scan  
-15. nuclei_graphql_scan  
-16. katana_crawl  
-17. clean_urls  
-18. trufflehog_scan  
-19. grep_secrets  
-20. gau_urls  
-21. wayback_urls  
-22. merge_all_urls  
-23. uro_dedup  
-24. url_filter_alive (writes `all_urls_200.txt`; all `*_targets` deps switch here)  
-25. sqli_targets  
-26. sqlmap_scan (level=3, risk=1, technique=BEUSTQ, **timeout --foreground 15m**)
-27. ghauri_sqli (technique=BT, capped)
-28. xss_targets
-29. xss_scan (**timeout --foreground 10m**)
-30. rce_targets  
-31. rce_scan  
-32. idor_targets  
-33. idor_scan  
-34. ssrf_targets  
-35. ssrf_scan  
-36. redirect_targets  
-37. redirect_scan  
-38. lfi_targets  
-39. lfi_scan  
-40. cors_check (**xargs -P 20 parallel, top 500 hosts, --max-time 5 --connect-timeout 3** — serial loop was removed, it caused terminal hang on large targets)  
-41. dirbrute_ffuf (two-wordlist, recursion depth 2, maxtime 600)  
-42. dirbrute_verify_200 (httpx -mc 200 on raw ffuf hits)  
-43. waf_detect (capped to top 200 hosts)  
-44. port_scan_naabu  
-45. hidden_params_arjun (capped to top 100 hosts)  
-46. manual_review_queue
+1. setup_directories
+2. subfinder
+3. assetfinder
+4. amass_enum
+5. amass_parse
+6. merge_subs
+7. dnsx_resolve
+8. subzy_takeover
+9. extract_takeover_targets
+10. validate_takeovers
+11. httpx_probe
+12. nuclei_exposures
+13. nuclei_misconfigs
+14. nuclei_auth_scan
+15. nuclei_graphql_scan
+16. katana_crawl
+17. clean_urls
+18. trufflehog_scan
+19. grep_secrets
+20. gau_urls
+21. wayback_urls
+22. merge_all_urls
+23. jsmap_scrape / merge_js_endpoints
+24. uro_dedup
+25. url_filter_alive (writes `all_urls_200.txt`; includes discovered JS endpoints)
+26. nuclei_target_merge (writes bounded `nuclei_targets.txt`)
+27. sqli_targets
+28. sqlmap_scan (materialized `sqlmap_targets.txt`, level=3, risk=1, technique=BEUSTQ, **timeout --foreground 15m**)
+29. ghauri_sqli (technique=BT, capped)
+30. xss_targets
+31. xss_scan (**timeout --foreground 10m**)
+32. rce_targets
+33. rce_scan
+34. idor_targets
+35. idor_scan
+36. ssrf_targets
+37. ssrf_scan
+38. redirect_targets
+39. redirect_scan
+40. lfi_targets
+41. lfi_scan
+42. cors_check (**xargs -P 20 parallel, top 500 hosts, --max-time 5 --connect-timeout 3** — serial loop was removed, it caused terminal hang on large targets)
+43. dirbrute_ffuf (two-wordlist, recursion depth 1, maxtime 1200)
+44. dirbrute_verify_200 (httpx -mc 200 on raw ffuf hits)
+45. waf_detect (capped to top 200 hosts)
+46. port_scan_naabu
+47. hidden_params_arjun (capped to top 100 hosts)
+48. manual_review_queue
 
 ## High-Signal Methodology Modules (new)
 
@@ -215,13 +219,19 @@ Auth values flow through the pipeline via three layers:
    env map to every child shell's environment as `RFUF_AUTH_COOKIE` /
    `RFUF_AUTH_HEADER`.
 3. **Consumers** translate to per-tool flags:
-   - Bash stages: `${RFUF_AUTH_COOKIE:+--cookie=$RFUF_AUTH_COOKIE}` /
-     `${RFUF_AUTH_HEADER:+--headers=Authorization: $RFUF_AUTH_HEADER}`.
+   - Bash stages: an `AUTH_HEADERS` array supplies `-H "Cookie: ..."` and
+     `-H "Authorization: ..."`; SQLmap uses a separate `SQLMAP_AUTH_ARGS`
+     array so cookie separators and bearer spaces are preserved.
    - Go finders: `iohelp.ApplyAuth(req)` sets the Authorization /
      Cookie headers on each outbound `http.Request`.
 
 Unset = unauthenticated scan (legacy default). The auth threading is
-opt-in per scan; nothing leaks into reports or log files.
+opt-in per scan. `-auth-cookie-file` and `-auth-bearer-file` provide a
+local-only way to replay a session created through the target's normal login
+flow; `-auth-required` prevents an accidental public-only run. RFUF does not
+auto-register accounts or guess credentials. Header arguments are constructed
+as Bash arrays so cookie separators and bearer-token spaces remain intact.
+Credential values are not intentionally included in reports.
 
 ### WAF bypass chaining
 

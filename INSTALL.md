@@ -128,3 +128,20 @@ Recon tools (`subfinder`, `dnsx`, `httpx`, etc.) are **not** installed
 by `rfuf install`. Those are bootstrapped automatically the first time
 you run `rfuf -d <domain>`. See the main [README](README.md) for the
 full pipeline.
+
+---
+
+## Authenticated scan inputs
+
+The scanner does not create accounts, submit signup forms, guess credentials, or bypass MFA. Create an authorized session through the target’s normal login flow, then pass the resulting cookie or bearer token explicitly:
+
+```bash
+rfuf -d example.com -auth-cookie 'session=...'
+rfuf -d example.com -auth-cookie-file ~/.config/rfuf/session.cookie
+rfuf -d example.com -auth-bearer-file ~/.config/rfuf/token
+rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie
+```
+
+The file-based forms read a local file and use its trimmed contents as one session value. Keep those files protected with normal filesystem permissions. `-auth-required` prevents a run from silently falling back to public-only coverage when authenticated testing is mandatory.
+
+The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests are still limited to the authorized wildcard scope supplied to RFUF.

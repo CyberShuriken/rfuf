@@ -194,11 +194,15 @@ sudo cp bin/rfuf /usr/local/bin/               # any dir already on $PATH
 
 ```bash
 rfuf install                       # one-time system install (places binary in ~/.local/share/rfuf)
-rfuf update                        # rebuild & replace the installed binary from current source
+rfuf update                        # rebuild & replace the installed binary from source
 rfuf -d example.com                # fresh full scan
 rfuf -d example.com -resume        # continue a previously interrupted scan (skips installer)
 rfuf -d example.com -step-timeout 4h  # allow up to four hours per stage
 rfuf -d example.com -skip-install  # like -resume, but on a fresh scan (debug / CI)
+rfuf -d example.com -auth-cookie 'session=...' # replay an authorized session cookie
+rfuf -d example.com -auth-cookie-file ~/.config/rfuf/session.cookie # read cookie locally
+rfuf -d example.com -auth-bearer-file ~/.config/rfuf/token # read bearer token locally
+rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie
 rfuf -v                            # print version
 rfuf -h                            # show help
 ```
@@ -211,6 +215,32 @@ By default all output is written to:
 
 Override the working directory or target list is intentionally not
 exposed — the tool is opinionated by design.
+
+### Authenticated testing
+
+RFUF does not create accounts, guess credentials, or automatically submit a
+signup form. For an authorized private-surface scan, provide a session that
+you created through the target’s normal login flow with `-auth-cookie`,
+`-auth-cookie-file`, `-auth-bearer`, or `-auth-bearer-file`. The file forms
+contain one cookie value or bearer token and should be readable only by the
+operator. Use `-auth-required` when a run must fail rather than silently fall
+back to public-only coverage.
+
+Authentication is threaded through HTTP probing, crawling, API discovery,
+JavaScript and manifest downloads, nuclei, SQLmap, and Go finder requests.
+Secrets are passed through the child environment and argument arrays rather
+than interpolated into generated URLs. The scan report records whether auth
+was supplied but does not intentionally print the credential value.
+
+### Enriched target streams
+
+The early host probe writes `alive.txt`, but endpoint scanners no longer stop
+there. RFUF merges crawl and historical URLs, OpenAPI/Swagger paths, and
+JavaScript/manifest endpoints into `all_urls.txt`, then writes the bounded
+`nuclei_targets.txt` stream used by the exposure, misconfiguration, auth, and
+GraphQL nuclei passes. The JavaScript collector covers HTML script and link
+references, Next.js `/_next/static/` chunks, conventional `/static/js/`
+assets, source maps, and common manifest files.
 
 Each pipeline stage has a 30-minute wall-clock limit by default. Tightening
 this from the previous 2-hour default means a single hung tool can't pin the
@@ -354,9 +384,19 @@ large targets (thousands of alive hosts):
 ├── katana_urls.txt
 ├── clean_katana_urls.txt
 ├── trufflehog_results.txt
+├── trufflehog_status.json
+├── trufflehog_stderr.log
+├── trufflehog_version.txt
 ├── potential_secrets.txt
 ├── all_urls.txt
 ├── all_urls_200.txt
+├── js_assets.txt
+├── js_endpoints.txt
+├── jsmap_status.txt
+├── nuclei_targets.txt
+├── nuclei_targets_status.txt
+├── sqlmap_targets.txt
+├── sqlmap_status.json
 ├── sqlmap_results/
 ├── xss_vulnerabilities.txt
 ├── nuclei_rce_rce.txt
