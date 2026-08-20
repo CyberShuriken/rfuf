@@ -10,17 +10,21 @@ It does not wrap tool APIs — each stage runs a **bash one-liner** via `interna
 
 ```
 cmd/rfuf/main.go
-  → config.ResolvePaths()
+  → scope.NormalizeDomain()
+  → config.ResolvePaths(normalized root)
   → installer.EnsureTools() / EnsureSeclists()
   → pipeline.Run()
        → checkpoint load/save (.rfuf/checkpoint.json) [Thread-Safe]
        → pipeline.ExecuteGraph()
-            → Concurrently run steps whose dependencies are met
+            → scope_guard filters discovered hosts before active probing
+            → concurrently run steps whose dependencies are met
             → executor.RunCommand() per stage
+       → evidence.BuildIndex()
+       → owasp.Generate() → OWASP_2025_COVERAGE.md + MANUAL_TEST_PLAN.md
        → summary.Generate() → SUMMARY.md
 ```
 
-Output root: `~/Desktop/Bug_Bounty/<domain>/`
+Output root: `~/Desktop/Bug_Bounty/<normalized-root-domain>/`. Both `example.com` and `*.example.com` resolve to the same root directory.
 
 ## Package Map
 
@@ -28,13 +32,18 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
 |---------|------|
 | `cmd/rfuf` | CLI flags: `-d`, `-resume`, `-v`, `-h`, `install` subcommand |
 | `cmd/filter-testable` | `package main` wrapper for `internal/filter`; reads stdin, writes pass-through URLs to stdout. Replaces the broken `go run ./internal/filter` reference. |
+| `cmd/scope-filter` | Standalone newline-delimited host/URL scope filter used by local workflows and fixture tests. |
+| `internal/scope` | Normalizes root or wildcard domains and matches only the exact root or proper subdomains. |
+| `internal/owasp` | Maps redacted evidence and stage health to OWASP Top 10:2025 coverage and generates the manual validation plan. |
 | `cmd/findings-runner` | `package main` wrapper that dispatches `<finder-name>` to `internal/findings/<name>.Run()`. One wrapper handles all 15+ finder modules. |
 | `internal/config` | Resolves work dir, GOPATH/bin, nuclei templates, seclists wordlist |
 | `internal/installer` | Auto-installs missing Go/apt tools and GF patterns |
 | `internal/pipeline` | **Single source of truth** for all 60+ stage definitions |
 | `internal/executor` | Runs `bash -c`, logs to `.rfuf/rfuf.log`, handles Ctrl+C; threads `RFUF_AUTH_*` and `RFUF_OOB_*` env vars |
 | `internal/checkpoint` | Persists completed step IDs for `-resume` |
-| `internal/summary` | Writes `SUMMARY.md` and severity-grouped `findings.md` |
+| `internal/summary` | Writes `SUMMARY.md` and severity-grouped `findings.md`, linking scope and OWASP artifacts |
+| `internal/evidence` | Builds redacted `evidence.jsonl` records for candidate findings |
+| `internal/owasp` | Writes `candidate_index.jsonl`, `OWASP_2025_COVERAGE.md`, and `MANUAL_TEST_PLAN.md` |
 | `internal/cli` | Live terminal dashboard (stats header during scan) |
 | `internal/findings/*` | 15 Go modules implementing the high-signal methodology chain (reflection, paramshape, authshape, signup, idor, oauth, race, buckets, takeoversvc, jsmine, secheaders, backupscan, businesslogic, hostheader, cors2). Each reads inputs from the work dir and writes `*_findings.txt` |
 | `internal/findings/internal/iohelp` | Tiny helpers (`ReadLines`, `WriteLines`, `BuildAuthHeaders`, `ApplyAuth`) shared by every finder |
@@ -46,20 +55,23 @@ Output root: `~/Desktop/Bug_Bounty/<domain>/`
 The dependency installer uses `GOTOOLCHAIN=local` for Go-based tools and pins Nuclei to `v3.3.10`, compatible with the supported Go 1.22 toolchain. It must not silently download a future Go release or trap a manual scan in an unbounded bootstrap. If a tool is unavailable, the operator should install it explicitly and rerun with `-skip-install` only after `VerifyToolsPresent` succeeds.
 
 1. **Dependency Integrity** — stages run as soon as their `Deps` (dependencies) are met. Endpoint scanners depend on the enriched target stream, not only on `alive.txt`.
-2. **Thread-Safe Checkpointing** — `checkpoint.json` is updated via a mutex-protected process.
-3. **Fresh run clears checkpoint** — `rfuf -d domain` without `-resume` resets progress.
-4. **Step types:**
+2. **Scope Integrity** — `-d example.com` and `-d '*.example.com'` normalize to one root. `scope_guard` filters all discovered hosts before DNS/HTTP probing; lookalike and third-party names are retained only in the rejected evidence stream.
+3. **OWASP Honesty** — coverage output distinguishes `covered`, `partial`, `blocked`, and completed-empty. A candidate is never treated as a confirmed vulnerability without manual reproduction.
+4. **Secret Redaction** — evidence and manual plans contain metadata and redacted targets only; cookie, bearer, API-key, password, and response-body secrets must not be written.
+5. **Thread-Safe Checkpointing** — `checkpoint.json` is updated via a mutex-protected process.
+6. **Fresh run clears checkpoint** — `rfuf -d domain` without `-resume` resets progress.
+7. **Step types:**
    - `"default"` — exit code 0 = success
    - `"grep"` — exit code 0 or 1 = success (no matches is OK)
-5. **Dashboard Consistency** — The UI uses ANSI escapes to maintain a fixed multi-stage dashboard at the top of the terminal.
-6. **Never use serial shell loops against alive.txt** — `while read; do curl; done < alive.txt` with no timeout against thousands of hosts will stall the pipeline for hours. Use `xargs -P N` for parallelism and always add `--max-time`/`--connect-timeout` to every `curl` invocation. This is why `cors_check` was completely rewritten.
-7. **Cap large-host stages** — any stage that performs one-request-per-host must cap its input (`head -n N`) to a safe ceiling. Current limits: CORS=500, WAF=200, Arjun=100.
-8. **Single-command long-runners need a shell timeout** — `sqlmap`/`dalfox`/`nuclei`-over-thousands-of-urls stages that have no natural early-exit must be wrapped with `timeout --foreground <duration> … ; || true` so they cannot pin the dashboard past the cap. The `|| true` is critical: without it the stage records a failure and the next `-resume` re-runs it from scratch, looping forever. With it, partial output on disk counts as a successful checkpoint.
+8. **Dashboard Consistency** — The UI uses ANSI escapes to maintain a fixed multi-stage dashboard at the top of the terminal.
+9. **Never use serial shell loops against alive.txt** — `while read; do curl; done < alive.txt` with no timeout against thousands of hosts will stall the pipeline for hours. Use `xargs -P N` for parallelism and always add `--max-time`/`--connect-timeout` to every `curl` invocation. This is why `cors_check` was completely rewritten.
+10. **Cap large-host stages** — any stage that performs one-request-per-host must cap its input (`head -n N`) to a safe ceiling. Current limits: CORS=500, WAF=200, Arjun=100.
+11. **Single-command long-runners need a shell timeout** — `sqlmap`/`dalfox`/`nuclei`-over-thousands-of-urls stages that have no natural early-exit must be wrapped with `timeout --foreground <duration> … ; || true` so they cannot pin the dashboard past the cap. The `|| true` is critical: without it the stage records a failure and the next `-resume` re-runs it from scratch, looping forever. With it, partial output on disk counts as a successful checkpoint.
 
 ## Data Flow
 
 ```
-subfinder/assetfinder/amass → subs.txt
+subfinder/assetfinder/amass → subs.txt → scope_guard → scoped_subs.txt + scope.json
 dnsx → live_subs.txt
 subzy + nuclei takeovers → validated_takeovers.txt
 httpx → alive.txt
@@ -72,6 +84,7 @@ gf + filter → *_targets.txt
 tool scan → *_results.txt / sqlmap_results/
 ffuf → ffuf_dirs_raw.txt → dirbrute_verify_200 → ffuf_dirs_200.txt
 grep business logic → manual_business_logic_review.txt
+stage health + evidence → OWASP_2025_COVERAGE.md + candidate_index.jsonl + MANUAL_TEST_PLAN.md
 ```
 
 ## Vulnerability Scan Stages (Critical)
@@ -124,8 +137,9 @@ Rules for `*_targets` steps:
 4. amass_enum
 5. amass_parse
 6. merge_subs
-7. dnsx_resolve
-8. subzy_takeover
+7. scope_guard
+8. dnsx_resolve
+9. subzy_takeover
 9. extract_takeover_targets
 10. validate_takeovers
 11. httpx_probe
@@ -166,14 +180,14 @@ Rules for `*_targets` steps:
 46. port_scan_naabu
 47. hidden_params_arjun (capped to top 100 hosts)
 48. manual_review_queue
+49. final OWASP coverage/evidence/manual-plan generation (finalization, not a scanner stage)
 
 ## High-Signal Methodology Modules (new)
 
 The default scanner chain (sqlmap, dalfox, nuclei, ffuf) catches the
 low-hanging fruit but is **quiet on real targets** because modern apps
 use ORMs, CSRF tokens, CSP headers, and rate-limiting that block the
-obvious payloads. The pipeline wires up 15 Go finder modules under
-`internal/findings/*` that cover the bug classes those scanners miss.
+obvious payloads. The pipeline wires up 15 Go finder modules under `internal/findings/*` that cover the bug classes those scanners miss. Finalization then maps their redacted outputs to OWASP Top 10:2025 and produces candidate-specific manual tasks; this is a planning aid, not a complete automated audit.
 
 Each module exposes `Run(workDir string) error`, reads from the work
 dir (`alive.txt`, `all_urls.txt`, `all_urls_200.txt`, `js_bundles/`,

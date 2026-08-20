@@ -17,6 +17,7 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/coverage"
 	"github.com/CyberShuriken/rfuf/internal/evidence"
 	"github.com/CyberShuriken/rfuf/internal/executor"
+	"github.com/CyberShuriken/rfuf/internal/owasp"
 	"github.com/CyberShuriken/rfuf/internal/summary"
 )
 
@@ -251,7 +252,29 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 		// grep -F treats the domain as a fixed string. Added file check for resilience.
 		{"amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "grep", []string{"amass_enum"}, 0},
 		{"merge_subs", "touch subfinder.txt assetfinder.txt amass_sub.txt; cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}, 0},
-		{"dnsx_resolve", "dnsx -l subs.txt -silent -o live_subs.txt", "default", []string{"merge_subs"}, 0},
+		// Scope guard: wildcard discovery may return related or third-party
+		// names. Only the exact root and proper subdomains continue to active
+		// DNS/HTTP probing. The raw rejected stream is retained for review.
+		{"scope_guard", `set -e
+ROOT=$(printf '%s' "$RFUF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+: > in_scope_hosts.txt
+: > out_of_scope_hosts.txt
+awk -v root="$ROOT" '
+  function lower(s) { return tolower(s) }
+  {
+    host=lower($0); sub(/\.$/, "", host)
+    if (host == root || (length(host) > length(root)+1 && substr(host, length(host)-length(root), length(root)+1) == "." root)) print host > "in_scope_hosts.txt"
+    else print $0 > "out_of_scope_hosts.txt"
+  }
+' subs.txt
+sort -u in_scope_hosts.txt -o in_scope_hosts.txt 2>/dev/null || :
+sort -u out_of_scope_hosts.txt -o out_of_scope_hosts.txt 2>/dev/null || :
+: > scoped_subs.txt
+cat in_scope_hosts.txt > scoped_subs.txt 2>/dev/null || :
+IN=$(wc -l < scoped_subs.txt | tr -d ' ')
+OUT=$(wc -l < out_of_scope_hosts.txt | tr -d ' ')
+printf '{"input":"%s","root_domain":"%s","in_scope":%s,"out_of_scope":%s,"policy":"exact_root_or_subdomain"}\n' "$RFUF_DOMAIN" "$ROOT" "${IN:-0}" "${OUT:-0}" > scope.json`, "default", []string{"merge_subs"}, 0},
+		{"dnsx_resolve", "dnsx -l scoped_subs.txt -silent -o live_subs.txt", "default", []string{"scope_guard"}, 0},
 
 		// === NEW: Subdomain brute (catches staging/dev that CT logs miss) ===
 		{"subdomain_brute", `set +e
@@ -265,7 +288,7 @@ done
 sort -u brute_subs.txt -o brute_subs.txt
 exit 0`, "grep", []string{"dnsx_resolve"}, 0},
 
-		{"merge_brute_subs", "cat subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "default", []string{"subdomain_brute"}, 0},
+		{"merge_brute_subs", "cat scoped_subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "default", []string{"subdomain_brute"}, 0},
 
 		{"subzy_takeover", "subzy run --targets live_subs.txt --vuln | tee subzy_vulnerable.txt", "default", []string{"merge_brute_subs"}, 0},
 		{"extract_takeover_targets", fmt.Sprintf("grep \"VULNERABLE\" subzy_vulnerable.txt | grep -oE '[a-zA-Z0-9._-]+\\.%s' | sort -u > takeover_targets.txt", domainEscaped), "grep", []string{"subzy_takeover"}, 0},
@@ -1278,6 +1301,7 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 	inputs = coverage.ExtractInputPaths(step.Command)
 	outputs = coverage.ExtractOutputPaths(step.Command)
 	knownInputs := map[string][]string{
+		"scope_guard":          {"subs.txt"},
 		"jsmap_scrape":         {"alive.txt"},
 		"merge_all_urls":       {"gau_urls.txt", "wayback_urls.txt", "clean_katana_urls.txt", "openapi_paths.txt"},
 		"url_filter_alive":     {"all_urls_scannable.txt"},
@@ -1293,6 +1317,7 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 		"lfi_targets":          {"all_urls_200.txt"},
 	}
 	known := map[string][]string{
+		"scope_guard":         {"scope.json", "in_scope_hosts.txt", "out_of_scope_hosts.txt", "scoped_subs.txt"},
 		"subfinder":           {"subs.txt"},
 		"assetfinder":         {"assetfinder.txt"},
 		"amass_enum":          {"amass.txt"},
@@ -1358,12 +1383,13 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 	if err := writeBlockedRecords(paths.WorkDir, steps); err != nil && runErr == nil {
 		runErr = err
 	}
-	records, err := coverage.LoadStageRecords(paths.WorkDir)
+	stageRecords, err := coverage.LoadStageRecords(paths.WorkDir)
+	var report coverage.CoverageReport
 	if err != nil && runErr == nil {
 		runErr = err
 	}
 	if err == nil {
-		report := coverage.Evaluate(domain, startedAt, time.Now(), records)
+		report = coverage.Evaluate(domain, startedAt, time.Now(), stageRecords)
 		if writeErr := coverage.WriteReport(paths.WorkDir, report); writeErr != nil && runErr == nil {
 			runErr = writeErr
 		}
@@ -1371,11 +1397,17 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 			runErr = fmt.Errorf("coverage incomplete: %s", strings.Join(report.RequiredIssues, "; "))
 		}
 	}
-	if records, evidenceErr := evidence.BuildIndex(paths.WorkDir); evidenceErr != nil && runErr == nil {
+	evidenceRecords, evidenceErr := evidence.BuildIndex(paths.WorkDir)
+	if evidenceErr != nil && runErr == nil {
 		runErr = evidenceErr
 	} else if evidenceErr == nil {
-		if writeErr := evidence.WriteIndex(paths.WorkDir, records); writeErr != nil && runErr == nil {
+		if writeErr := evidence.WriteIndex(paths.WorkDir, evidenceRecords); writeErr != nil && runErr == nil {
 			runErr = writeErr
+		}
+		if err == nil {
+			if writeErr := owasp.Generate(paths.WorkDir, domain, report, stageRecords, evidenceRecords); writeErr != nil && runErr == nil {
+				runErr = writeErr
+			}
 		}
 	}
 	if summaryErr := summary.Generate(paths.WorkDir, cp); summaryErr != nil && runErr == nil {

@@ -1,41 +1,38 @@
-# RFUF Missing Capabilities Audit
+# RFUF Capability Audit
 
 **Audit date:** 2026-08-20
-**Scope:** Tooling-only review; no live target scan performed.
+**Scope:** Tooling-only review and local fixture validation; no live target scan performed.
 
-## Confirmed gaps
+## Completed capabilities
 
-| Capability | Current behavior | Required improvement |
+| Capability | Current behavior | Evidence or output |
 |---|---|---|
-| Stage integrity | `pipeline.Run` marks a step complete after an acceptable process exit, and `grep` treats exit 1 as success. There is no persisted per-stage input/output/timeout/status record. | Add `.rfuf/stages/<step>.json` records and a final `coverage_report.json` with explicit status, exit code, timeout, input/output counts, and skip reason. |
-| Completion gate | The orchestrator exits with `Pipeline complete` when all graph nodes are marked complete, including intentional directory-brute skip and soft timeout paths. | Separate `completed`, `partial`, `failed`, `skipped`, and `timed_out`; print `COMPLETE` only when required-stage coverage passes. |
-| Timeout semantics | Executor intentionally converts its context timeout to a successful result, which hides partial/timeout state. | Preserve partial output but report `timed_out=true` and make final coverage status incomplete unless the stage is explicitly optional. |
-| Stage errors | Errors can be sent through `errChan`, but there is no durable stage error/status artifact or final stage matrix. | Persist start/end, exit, timeout, error, input/output counts, and dependency state for every stage. |
-| Dashboard telemetry | `cli.UpdateStats` counts output files only. It does not show stage health or scanner coverage. The screenshot’s large request counter is likely child-tool stats text rather than a typed RFUF metric, but it is not normalized. | Add bounded typed telemetry and a stage-health summary; avoid parsing huge child counters as signed integers. |
-| Scope enforcement | `-exclude-url-regex` is applied in the URL probe stage but later merge stages can reintroduce URLs. | Centralize a final scope/exclusion filter after every URL merge and before every active target stream. |
-| Auth verification | Cookie/bearer replay exists, but no operator-supplied health-check URL or expected marker confirms the session is authenticated. | Add optional `-auth-check-url` and `-auth-check-marker`; persist only boolean/result metadata and never secret values. |
-| Rate/request budget | Individual tool flags and stage timeouts exist, but no run-wide request budget or host rate policy is enforced across tools. | Add conservative operator-configurable run budget metadata and propagate bounded rate settings where supported; do not pretend tools with no common budget are globally governed. |
-| Dependencies | Nuclei is pinned and Go toolchain switching is disabled, but most Go tools still use `@latest`. | Add a version manifest/lock documentation and tests; pin at least the high-impact tools or expose a version manifest. |
-| Evidence normalization | Findings are collected in many category-specific text files and summarized manually. | Add a normalized JSONL evidence index with source, category, severity, confidence, target, and validation state, without secrets. |
-| False-positive state | Dashboard labels any non-empty candidate file as a finding. | Label candidates as `candidate` until manually validated; keep raw artifacts separate from confirmed evidence. |
-| Final artifact checks | Summary generation does not enforce expected artifact existence or classify empty inputs. | Add final artifact/coverage validation and include missing/empty/optional state in reports. |
-| Business-logic workflows | Existing modules generate BOLA/IDOR and business-logic candidates but do not provide a generic safe workflow recorder or two-account comparison. | Document this as manual-only scope and expose candidate evidence; do not add automatic cross-account access. |
+| Wildcard scope normalization | `-d example.com` and `-d '*.example.com'` normalize to one validated root domain and one work directory. | `internal/scope`, CLI validation, scope tests |
+| Active scope boundary | `scope_guard` filters the discovered host stream before DNS and HTTP probing. Exact-root and proper subdomains are retained; lookalikes and third-party names are rejected. | `scope.json`, `in_scope_hosts.txt`, `out_of_scope_hosts.txt`, `scoped_subs.txt` |
+| Stage integrity | RFUF persists lifecycle records with status, timeout, exit code, input/output metrics, and dependency context. | `.rfuf/stages/*.json`, `.rfuf/coverage_report.json`, `CoverageReport.md` |
+| Completion gate | `COMPLETE` is reserved for required stages that are `completed` or `completed_empty`; failures, timeouts, blocks, and skips remain visible. | Coverage evaluator and pipeline finalization |
+| Evidence normalization | Candidate artifacts are indexed as redacted JSONL metadata with category, source, target, severity, confidence, and validation state. | `evidence.jsonl`, `candidate_index.jsonl` |
+| OWASP mapping | Existing scanner and finder artifacts map to A01:2025–A10:2025 with honest `covered`, `partial`, and `blocked` states. | `OWASP_2025_COVERAGE.md` |
+| Manual validation guidance | Candidates are converted into non-destructive, candidate-specific tasks with required identity or role, expected control, evidence, and stop conditions. | `MANUAL_TEST_PLAN.md` |
+| Authentication replay | Operator-supplied cookies and bearer tokens propagate through supported stages; no credentials are guessed or created. | `-auth-cookie`, `-auth-bearer`, `-auth-required`, auth health check |
+| Request bounds | RFUF retains stage timeouts, target caps, parallelism limits, and compatible-tool rate flags. | CLI flags and pipeline constants |
+| Documentation | README, architecture, installation, implementation, audit, plan, and tasklist documents describe the same behavior. | Repository Markdown files |
 
-## Current implementation anchors
+## Deliberate limitations
 
-- `internal/checkpoint/checkpoint.go`: checkpoint only stores completed step IDs.
-- `internal/executor/executor.go`: process result and timeout handling.
-- `internal/pipeline/pipeline.go`: `Step`, `Run`, command graph, target streams, and shell stages.
-- `internal/cli/ui.go`: dashboard stats are line-count based.
-- `internal/summary/summary.go`: summary and findings report generation.
-- `internal/installer/installer.go`: dependency install definitions.
+| Capability | Why it remains limited | Correct next step |
+|---|---|---|
+| Cross-account access control | A black-box scan cannot infer object ownership or roles from one session. | Supply two authorized test sessions and manually validate the tasks in `MANUAL_TEST_PLAN.md`. |
+| Software supply chain failures | A public domain does not expose lockfiles, CI workflows, SBOMs, or signed release provenance. | Provide a repository or dependency-manifest input for a separate source review. |
+| Insecure design | Intended business invariants and abuse cases are application-specific. | Model the workflow and test limits, approvals, replay, rollback, and state transitions with synthetic data. |
+| Logging and alerting | Security telemetry is usually not observable from HTTP responses. | Use a test tenant and verify audit records, alert routing, retention, and tamper resistance. |
+| Exceptional conditions | Fail-open authorization, rollback, idempotency, and partial failures require controlled workflow tests. | Use a local replica or non-production test environment. |
+| Universal request accounting | Third-party tools expose different rate and retry controls. | Treat RFUF limits as conservative controls, not a universal global budget. |
 
 ## Safety boundary
 
-The implementation must remain tooling-only and authorized-scope oriented. It must not add credential guessing, automatic account creation, MFA bypass, uncontrolled cross-account testing, data exfiltration, denial-of-service behavior, or automatic HackerOne submission.
+RFUF must remain limited to assets the operator is explicitly authorized to test. It must not add credential guessing, automatic account creation, MFA bypass, uncontrolled cross-account testing, data exfiltration, denial-of-service behavior, destructive validation, secret-value logging, or automatic report submission.
 
-## Implemented in the current worktree
+## Validation status
 
-The following gaps have been addressed: durable stage lifecycle records; strict required-stage completion gating; explicit timeout classification; input/output artifact metrics; coverage reports; dashboard stage-health counters; child-statistics and request-metadata sanitization; a final same-domain and exclusion filter; authenticated health-check URL and marker support; bounded target and compatible-tool rate settings; redacted JSONL evidence indexing; final summary authentication state; and deterministic tests for coverage, scope filtering, authentication headers, evidence redaction, dashboard normalization, and finalization.
-
-The remaining limitations are deliberate or dependent on external binaries: RFUF cannot impose a universal request budget on scanners that do not expose one, several upstream tools still resolve their own latest releases, and workflow/IDOR impact validation remains manual and operator-controlled.
+The current worktree has passed `go test ./...`, `go vet ./...`, `go build ./cmd/rfuf`, `go build ./cmd/scope-filter`, `gofmt`, and `git diff --check`. Validation used synthetic local fixtures and did not send requests to a live external target.

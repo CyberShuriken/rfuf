@@ -19,10 +19,11 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/installer"
 	"github.com/CyberShuriken/rfuf/internal/installer/sysinstall"
 	"github.com/CyberShuriken/rfuf/internal/pipeline"
+	"github.com/CyberShuriken/rfuf/internal/scope"
 )
 
 var (
-	version = "2.1.0"
+	version = "2.2.0"
 )
 
 func main() {
@@ -68,6 +69,14 @@ func main() {
 		"Read a bearer token from a local file when -auth-bearer is not supplied.")
 	authRequired := flag.Bool("auth-required", false,
 		"Refuse to start unless a cookie or bearer session is supplied.")
+	secondAuthCookie := flag.String("auth-cookie-b", "", "Optional second authorized test-account cookie; metadata only, never replayed automatically.")
+	secondAuthCookieFile := flag.String("auth-cookie-b-file", "", "Read an optional second test-account cookie from a local file; metadata only.")
+	secondAuthBearer := flag.String("auth-bearer-b", "", "Optional second authorized test-account bearer token; metadata only, never replayed automatically.")
+	secondAuthBearerFile := flag.String("auth-bearer-b-file", "", "Read an optional second test-account bearer token from a local file; metadata only.")
+	roleA := flag.String("role-a", "", "Label for the primary test identity or role in the manual validation plan.")
+	roleB := flag.String("role-b", "", "Label for the optional second test identity or role in the manual validation plan.")
+	repositoryPath := flag.String("repository-path", "", "Optional local repository path for source and supply-chain review planning; not uploaded or scanned automatically.")
+	testAPIBaseURL := flag.String("test-api-base-url", "", "Optional authorized test API base URL to reference in manual validation planning; not contacted automatically.")
 	bugBountyUsername := flag.String("bug-bounty-username", "",
 		"Researcher username for the X-Bug-Bounty request header required by some programs.")
 	testAccountEmail := flag.String("test-account-email", "",
@@ -116,15 +125,21 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	normalizedDomain, err := scope.NormalizeDomain(*domain)
+	if err != nil {
+		fmt.Printf("Error: invalid domain scope: %v\n", err)
+		os.Exit(1)
+	}
 	if *maxTargets <= 0 || *maxStageRequests <= 0 {
 		fmt.Println("Error: -max-targets and -max-stage-requests must be positive")
 		os.Exit(1)
 	}
 
-	fmt.Printf("[*] Starting RFUF for %s\n", *domain)
+	fmt.Printf("[*] Starting RFUF for %s (normalized scope: %s)\n", *domain, normalizedDomain)
 
-	// 1. Resolve Paths
-	paths, err := config.ResolvePaths(*domain)
+	// 1. Resolve Paths using the normalized root so wildcard and non-wildcard
+	// invocations resume into the same per-domain work directory.
+	paths, err := config.ResolvePaths(normalizedDomain)
 	if err != nil {
 		fmt.Printf("[!] Error resolving paths: %v\n", err)
 		os.Exit(1)
@@ -143,11 +158,26 @@ func main() {
 		fmt.Printf("[!] %v\n", err)
 		os.Exit(1)
 	}
+	secondCookieValue, err := authValue(*secondAuthCookie, *secondAuthCookieFile, "second test-account cookie")
+	if err != nil {
+		fmt.Printf("[!] %v\n", err)
+		os.Exit(1)
+	}
+	secondBearerValue, err := authValue(*secondAuthBearer, *secondAuthBearerFile, "second test-account bearer token")
+	if err != nil {
+		fmt.Printf("[!] %v\n", err)
+		os.Exit(1)
+	}
 	if *authRequired && cookieValue == "" && bearerValue == "" {
 		fmt.Println("[!] authenticated testing was required but no cookie or bearer token was supplied")
 		os.Exit(1)
 	}
 	buildAuthEnv(cookieValue, bearerValue, *bugBountyUsername, *testAccountEmail)
+	executor.AuthEnv["RFUF_DOMAIN"] = normalizedDomain
+	if err := writeValidationInputsMetadata(paths.WorkDir, secondCookieValue != "", secondBearerValue != "", *roleA, *roleB, *repositoryPath, *testAPIBaseURL); err != nil {
+		fmt.Printf("[!] failed to write validation metadata: %v\n", err)
+		os.Exit(1)
+	}
 	executor.AuthEnv["RFUF_MAX_TARGETS"] = fmt.Sprintf("%d", *maxTargets)
 	executor.AuthEnv["RFUF_MAX_STAGE_REQUESTS"] = fmt.Sprintf("%d", *maxStageRequests)
 	if strings.TrimSpace(*excludeURLRegex) != "" {
@@ -226,7 +256,7 @@ func main() {
 	}
 
 	// 6. Run Pipeline
-	if err := pipeline.Run(*domain, *resume, paths, *stepTimeout); err != nil {
+	if err := pipeline.Run(normalizedDomain, *resume, paths, *stepTimeout); err != nil {
 		fmt.Printf("[!] Pipeline failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -255,6 +285,26 @@ func authValue(inline, filePath, label string) (string, error) {
 		return "", fmt.Errorf("auth %s file is empty: %s", label, filePath)
 	}
 	return value, nil
+}
+
+func writeValidationInputsMetadata(workDir string, secondCookie, secondBearer bool, roleA, roleB, repositoryPath, testAPIBaseURL string) error {
+	metadata := struct {
+		SecondCookieConfigured bool   `json:"second_cookie_configured"`
+		SecondBearerConfigured bool   `json:"second_bearer_configured"`
+		RoleA                  string `json:"role_a,omitempty"`
+		RoleB                  string `json:"role_b,omitempty"`
+		RepositoryPath         string `json:"repository_path,omitempty"`
+		TestAPIBaseURL         string `json:"test_api_base_url,omitempty"`
+	}{SecondCookieConfigured: secondCookie, SecondBearerConfigured: secondBearer, RoleA: strings.TrimSpace(roleA), RoleB: strings.TrimSpace(roleB), RepositoryPath: strings.TrimSpace(repositoryPath), TestAPIBaseURL: strings.TrimSpace(testAPIBaseURL)}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(workDir, ".rfuf")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "validation_inputs.json"), append(data, '\n'), 0644)
 }
 
 func writeAuthCheckMetadata(workDir string, configured, verified bool, status int, checkErr error) error {

@@ -74,7 +74,7 @@ executor code.
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v           # → rfuf version 2.0.0
+rfuf -v            # → rfuf version 2.2.0
 ```
 
 Run a no-op help check from an unrelated directory to confirm:
@@ -146,6 +146,8 @@ The file-based forms read a local file and use its trimmed contents as one sessi
 
 The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests are still limited to the authorized wildcard scope supplied to RFUF.
 
+The `-d` value may be `example.com` or `*.example.com`; both normalize to one root scope. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results, because wildcard discovery is not permission to scan third-party assets.
+
 ### Program attribution and scope exclusions
 
 For programs that require researcher attribution, pass the program-provided values explicitly:
@@ -161,7 +163,7 @@ RFUF sends these values as `X-Bug-Bounty` and `X-Test-Account-Email` through sup
 
 ### Coverage integrity and final artifacts
 
-A successful orchestration message is no longer sufficient evidence of complete coverage. RFUF writes one JSON record per stage under `.rfuf/stages/`, including status, exit code, timeout state, input/output counts, and artifact state. The final outputs are `.rfuf/coverage_report.json`, `CoverageReport.md`, `evidence.jsonl`, and an expanded `SUMMARY.md`.
+A successful orchestration message is no longer sufficient evidence of complete coverage. RFUF writes one JSON record per stage under `.rfuf/stages/`, including status, exit code, timeout state, input/output counts, and artifact state. The final outputs are `.rfuf/coverage_report.json`, `CoverageReport.md`, `evidence.jsonl`, `candidate_index.jsonl`, `OWASP_2025_COVERAGE.md`, `MANUAL_TEST_PLAN.md`, and an expanded `SUMMARY.md`.
 
 The final status is `COMPLETE` only when all declared stages finish as `completed` or `completed_empty`. A zero-finding stage is valid when it had valid input and exited successfully. `failed`, `timed_out`, `blocked`, and `skipped` stages are visible and cause an incomplete-coverage error. Partial artifacts are preserved for troubleshooting and resume workflows.
 

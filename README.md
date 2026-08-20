@@ -56,6 +56,9 @@ step, and can resume exactly where it stopped.
 - **Zero configuration** — no API keys, no YAML, no environment file. Pass
   `-d` and go.
 - **Per-domain output directory** — clean separation between targets.
+- **Wildcard scope guard** — accepts `example.com` or `*.example.com`, normalizes both to one root scope, and filters discovered hosts before active DNS/HTTP probing.
+- **OWASP Top 10:2025 coverage report** — maps completed stages and candidate evidence to A01–A10 without claiming that black-box scanning proves every category.
+- **Exact manual test plan** — writes candidate-specific identity, control, evidence, and stop-condition guidance for tests that require two accounts, source, deployment, workflow, or logging access.
 - **Auto-generated `findings.md`** — severity-grouped report with retest
   hints per vulnerability class and a transparent "what was filtered out"
   appendix. Open this first after a run.
@@ -196,6 +199,7 @@ sudo cp bin/rfuf /usr/local/bin/               # any dir already on $PATH
 rfuf install                       # one-time system install (places binary in ~/.local/share/rfuf)
 rfuf update                        # rebuild & replace the installed binary from source
 rfuf -d example.com                # fresh full scan
+rfuf -d '*.example.com'             # wildcard scope; normalized to example.com
 rfuf -d example.com -resume        # continue a previously interrupted scan (skips installer)
 rfuf -d example.com -step-timeout 4h  # allow up to four hours per stage
 rfuf -d example.com -skip-install  # like -resume, but on a fresh scan (debug / CI)
@@ -217,6 +221,12 @@ By default all output is written to:
 
 Override the working directory or target list is intentionally not
 exposed — the tool is opinionated by design.
+
+### Wildcard scope and authorization
+
+`-d` accepts either a root domain (`example.com`) or a wildcard scope (`*.example.com`). RFUF normalizes both forms to the same output directory and active-scan boundary. Exact-root and proper subdomains are in scope; lookalikes such as `example.com.evil.test` and third-party assets discovered through redirects, scripts, or history are retained as rejected evidence and are not actively probed.
+
+Wildcard input is not permission to scan every related asset. Run RFUF only against assets explicitly authorized by the program or asset owner, and review `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before relying on the results.
 
 ### Authenticated testing
 
@@ -258,6 +268,12 @@ When a session is supplied, `-auth-check-url` can make a bounded request to an o
 Use `-max-targets` to cap final scoped URL streams and `-max-stage-requests` to set the rate ceiling for scanners that support a rate option. These controls are conservative bounds, not a universal request counter for tools that do not expose a compatible budget interface.
 
 The dashboard shows stage health separately from finding counts and redacts noisy scanner statistics and request metadata from the live panel. Raw child output remains in `.rfuf/rfuf.log` for local troubleshooting.
+
+### OWASP coverage, evidence, and manual validation
+
+The finalization step writes `OWASP_2025_COVERAGE.md`, `candidate_index.jsonl`, and `MANUAL_TEST_PLAN.md`. The coverage report distinguishes `covered`, `partial`, `blocked`, and completed-empty states. A category can remain partial or blocked because some OWASP risks require source code, dependency manifests, deployment configuration, two authorized identities, business context, or security-log access.
+
+`MANUAL_TEST_PLAN.md` turns candidates such as IDOR/BOLA, privileged paths, OAuth, business logic, races, JWT, CORS, and injection into precise, non-destructive tasks. It specifies the required identity or role, expected control, evidence to capture, and stop conditions. RFUF never creates accounts, guesses credentials, bypasses MFA, or treats a scanner lead as a confirmed vulnerability.
 
 ### Evidence index and validation state
 
@@ -342,9 +358,10 @@ added per the bb-methodology / security-arsenal playbook are marked
 | # | Stage | Tool(s) | Output |
 |---|-------|---------|--------|
 | 1 | Subdomain enumeration | `subfinder`, `assetfinder`, `amass` | `subs.txt` |
-| 2 | DNS resolution | `dnsx` | `live_subs.txt` |
-| 3 | Subdomain takeover | `subzy` + `nuclei` | `validated_takeovers.txt` |
-| 4 | HTTP probing | `httpx` | `alive.txt` |
+| 2 | Scope guard (**new**) | Built-in exact-root/subdomain filter | `scope.json`, `in_scope_hosts.txt`, `out_of_scope_hosts.txt`, `scoped_subs.txt` |
+| 3 | DNS resolution | `dnsx` | `live_subs.txt` |
+| 4 | Subdomain takeover | `subzy` + `nuclei` | `validated_takeovers.txt` |
+| 5 | HTTP probing | `httpx` | `alive.txt` |
 | 5 | Exposure scanning | `nuclei` (token-spray/exposure/config) | `credentials_found.txt` |
 | 6 | Misconfiguration scan | `nuclei` (vulns / exposed panels / misconfig) | `misconfigs.txt` |
 | 7 | Auth/JWT scan | `nuclei` (jwt/auth-bypass/default-login) | `auth_results.txt` |
@@ -385,7 +402,8 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 42 | Host-header injection (**new**) | `go run ./cmd/findings-runner hostheader` | `hostheader_findings.txt` |
 | 43 | Credentialed CORS preflight (**new**) | `go run ./cmd/findings-runner cors2` | `cors2_findings.txt` |
 | 44 | Custom nuclei template pass (**new**) | `nuclei -t nuclei-templates-rfuf/` | `nuclei_rfuf_pass.txt` |
-| 45 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
+| 45 | OWASP coverage and manual plan (**new**) | Built-in evidence mapper | `OWASP_2025_COVERAGE.md`, `candidate_index.jsonl`, `MANUAL_TEST_PLAN.md` |
+| 46 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
 
 > Stages 14, 15, 16, 17, 18, 19, 20, 21 source from `all_urls_200.txt` —
 > only endpoints that responded 200 are scanned. Stage 28 (manual review
@@ -412,6 +430,10 @@ large targets (thousands of alive hosts):
 ├── .rfuf/
 │   ├── checkpoint.json    # resume state
 │   └── rfuf.log           # full command log
+├── scope.json
+├── in_scope_hosts.txt
+├── out_of_scope_hosts.txt
+├── scoped_subs.txt
 ├── subs.txt
 ├── live_subs.txt
 ├── alive.txt

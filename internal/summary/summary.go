@@ -220,6 +220,14 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 - **Stage Timeouts:** %d
 - **Authentication:** **%s**
 
+## Scope and OWASP Assessment
+- **Normalized root scope:** %s
+- **Scope evidence:** [scope.json](./scope.json), [in-scope hosts](./in_scope_hosts.txt), [rejected hosts](./out_of_scope_hosts.txt)
+- **OWASP coverage:** [OWASP_2025_COVERAGE.md](./OWASP_2025_COVERAGE.md)
+- **Candidate evidence:** [candidate_index.jsonl](./candidate_index.jsonl)
+- **Manual validation:** [MANUAL_TEST_PLAN.md](./MANUAL_TEST_PLAN.md)
+- **Validation inputs:** [validation_inputs.json](./.rfuf/validation_inputs.json)
+
 ## Recon Stats
 - **Total Subdomains:** %d
 - **Live Subdomains (DNS):** %d
@@ -277,6 +285,7 @@ Open [findings.md](./findings.md) — every URL to retest, grouped by
 severity, with false-positive filtering transparent.
 	`, cp.Domain, cp.StartedAt.Format(time.RFC822), cp.LastUpdated.Format(time.RFC822), duration,
 		coverageStatus, coverageCompleted, coverageTotal, coverageFailed, coverageTimedOut, authState,
+		cp.Domain,
 		subdomains, liveSubs, aliveHosts, len(techFingerprint),
 
 		len(rce), len(takeovers), len(lfi), len(ssrf), len(xss),
