@@ -20,7 +20,7 @@ The work is complete when the following are true:
 | Manual guidance | The run writes `MANUAL_TEST_PLAN.md` with precise, candidate-specific, non-destructive test instructions and stop conditions. | ✅ |
 | Documentation | README.md, ARCHITECTURE.md, IMPLEMENTATION_PLAN.md, INSTALL.md when relevant, and this task list describe the new behavior accurately. | ✅ |
 | Validation | `gofmt`, `go vet ./...`, `go test ./...`, `go build ./cmd/rfuf`, and `git diff --check` pass. | ✅ |
-| Delivery | Changes are committed and pushed to the selected GitHub repository branch. | ☐ |
+| Delivery | Changes are committed and pushed to the selected GitHub repository branch. | ✅ |
 
 ## Phase 1 — Normalize and enforce wildcard scope
 
@@ -71,7 +71,7 @@ The work is complete when the following are true:
 | 5.2 | Run `go test ./...`, including scope, evidence, OWASP, pipeline, summary, and CLI tests. | ✅ |
 | 5.3 | Run `go vet ./...` and `go build ./cmd/rfuf`. | ✅ |
 | 5.4 | Run a local fixture test using synthetic hosts and URLs only; do not scan a live external target. | ✅ |
-| 5.5 | Commit the complete change set and push it to the selected GitHub repository branch. | ☐ |
+| 5.5 | Commit the complete change set and push it to the selected GitHub repository branch. | ✅ |
 
 ## Explicit non-goals
 
