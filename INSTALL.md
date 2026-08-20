@@ -131,6 +131,19 @@ full pipeline.
 
 ---
 
+## Fedora troubleshooting
+
+On Fedora, RFUF passes standard input through to `sudo dnf`, so an interactive terminal can answer the password prompt. Package prechecks use representative executables, avoiding repeated installation attempts for package names such as `ca-certificates` and `openssl` that are not themselves PATH commands.
+
+For non-interactive use, install required system packages before starting RFUF:
+
+```bash
+sudo dnf install -y git ca-certificates openssl gcc make jq sqlmap
+rfuf -d '*.example.com' -skip-install
+```
+
+If the network cannot register an OOB callback, RFUF continues without interactsh after the default 20-second wait. Use `-interactsh-timeout 0` or `-disable-interactsh` when OOB callbacks are unavailable or out of scope. A previous false stage-health error—`subfinder incomplete (status=failed exit_code=0)`—is fixed by validating `subfinder.txt` and `amass_raw.txt`, the actual producer outputs.
+
 ## Authenticated scan inputs
 
 The scanner does not create accounts, submit signup forms, guess credentials, or bypass MFA. Create an authorized session through the target’s normal login flow, then pass the resulting cookie or bearer token explicitly:

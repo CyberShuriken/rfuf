@@ -1318,9 +1318,9 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 	}
 	known := map[string][]string{
 		"scope_guard":         {"scope.json", "in_scope_hosts.txt", "out_of_scope_hosts.txt", "scoped_subs.txt"},
-		"subfinder":           {"subs.txt"},
+		"subfinder":           {"subfinder.txt"},
 		"assetfinder":         {"assetfinder.txt"},
-		"amass_enum":          {"amass.txt"},
+		"amass_enum":          {"amass_raw.txt"},
 		"dnsx_resolve":        {"live_subs.txt"},
 		"httpx_probe":         {"alive.txt"},
 		"jsmap_scrape":        {"js_assets.txt", "js_endpoints.txt"},

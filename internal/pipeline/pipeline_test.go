@@ -61,6 +61,43 @@ func TestAmassFailureDoesNotAbortPipeline(t *testing.T) {
 	t.Fatal("amass_enum step not found")
 }
 
+func TestReconArtifactContractsMatchProducerFiles(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, want := range []struct {
+		id     string
+		output string
+	}{
+		{id: "subfinder", output: "subfinder.txt"},
+		{id: "amass_enum", output: "amass_raw.txt"},
+	} {
+		var step Step
+		found := false
+		for _, candidate := range steps {
+			if candidate.ID == want.id {
+				step = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s step not found", want.id)
+		}
+		_, outputs := stageArtifacts(step)
+		if !containsString(outputs, want.output) {
+			t.Fatalf("%s must validate %s, got %v", want.id, want.output, outputs)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestDirbruteUsesRecursion guards against the slow per-host loop
 // regressing back in. The fast path is one ffuf invocation with two
 // wordlists (-w hosts.txt:HOST + -w words.txt:WORD), recursion enabled

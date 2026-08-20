@@ -65,6 +65,12 @@ Add optional TLS and certificate policy checks, token-rotation checks, password-
 
 Add a test-tenant workflow for verifying audit records, alerting, actor attribution, retention, and tamper resistance. Add local or test-environment cases for fail-open authorization, retries, rollback, idempotency, partial failure, and resource limits.
 
+## Fedora runtime remediation
+
+The pipeline now validates each recon stage against the artifact its producer actually writes. In particular, `subfinder` is checked against `subfinder.txt` and Amass against `amass_raw.txt`; an existing empty file is reported as `completed_empty` rather than `failed`.
+
+The Fedora installer checks representative binaries instead of treating package names such as `ca-certificates` and `openssl` as PATH commands. Interactive package commands receive `os.Stdin`, while non-interactive runs report a manual-install recovery path when password-authenticated sudo is unavailable. Interactsh startup is optional, waits up to 20 seconds by default, supports `-interactsh-timeout 0`, and keeps a successfully started client alive through the scan.
+
 ## Validation requirements
 
 Every change must pass:

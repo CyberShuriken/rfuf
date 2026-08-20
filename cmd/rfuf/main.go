@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -92,6 +91,8 @@ func main() {
 	// and wires $RFUF_OOB_URL into SSRF/RCE/XSS payloads.
 	interactshServer := flag.String("interactsh-server", "https://oast.fun",
 		"interactsh server URL to register with. Default oast.fun (projectdiscovery's public server). Use -disable-interactsh on offline/private scans.")
+	interactshTimeout := flag.Duration("interactsh-timeout", 20*time.Second,
+		"Maximum time to wait for interactsh-client to print its callback URL. Set to 0 to disable OOB startup waiting.")
 	disableInteractsh := flag.Bool("disable-interactsh", false,
 		"Skip starting interactsh-client. Use on offline/private scans or when OOB callbacks are out of scope.")
 
@@ -217,7 +218,9 @@ func main() {
 	//    means shell `${RFUF_OOB_URL:+...}` expansions evaluate to empty
 	//    and the pipeline proceeds without OOB.
 	if !*disableInteractsh {
-		if err := startInteractsh(*interactshServer); err != nil {
+		if *interactshTimeout <= 0 {
+			fmt.Println("[*] OOB startup wait disabled; proceeding without interactsh")
+		} else if err := startInteractsh(*interactshServer, *interactshTimeout); err != nil {
 			fmt.Printf("[!] interactsh start failed: %v — proceeding without OOB\n", err)
 		}
 		defer stopInteractsh()
@@ -392,14 +395,11 @@ func buildAuthEnv(cookie, bearer, bugBountyUsername, testAccountEmail string) {
 // allocated URL on its first stdout line — we parse it, set
 // executor.OOBURL, and let the client keep running until pipeline finish
 // (stopInteractsh kills it).
-func startInteractsh(server string) error {
+func startInteractsh(server string, startupTimeout time.Duration) error {
 	if _, err := exec.LookPath("interactsh-client"); err != nil {
 		return fmt.Errorf("interactsh-client not on PATH (run without -disable-interactsh only after `rfuf -d X` once on a fresh install)")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "interactsh-client",
+	cmd := exec.Command("interactsh-client",
 		"-server", server,
 		"-no-http-server",
 		"-v",
@@ -443,9 +443,10 @@ func startInteractsh(server string) error {
 		// detach the running process — keep it alive for the pipeline duration
 		go func() { _ = cmd.Wait() }()
 		return nil
-	case <-time.After(8 * time.Second):
+	case <-time.After(startupTimeout):
 		_ = cmd.Process.Kill()
-		return fmt.Errorf("interactsh-client did not print URL within 8s")
+		_ = cmd.Wait()
+		return fmt.Errorf("interactsh-client did not print URL within %s; use -interactsh-timeout 0 or -disable-interactsh if OOB callbacks are unavailable", startupTimeout)
 	}
 }
 

@@ -297,6 +297,22 @@ on big targets, or `-step-timeout 0` only when you explicitly want unlimited
 stage runtime. Stages with known-bounded runtime (gau, waybackurls) additionally
 carry their own per-stage cap (10 minutes); see the stage table below.
 
+### Fedora setup troubleshooting
+
+On Fedora, RFUF passes the terminal’s standard input to `sudo dnf`, so package installation can request the user password normally. The installer checks representative executables rather than treating package names such as `ca-certificates` and `openssl` as PATH commands; this prevents a needless `git` package prompt when Git is already installed.
+
+If RFUF is launched without an interactive terminal and a required Fedora package is missing, it now prints an actionable message instead of waiting for a password that cannot be read. Install the prerequisites manually, then rerun with `-skip-install` only after the required tools are present:
+
+```bash
+sudo dnf install -y git ca-certificates openssl gcc make jq sqlmap
+test -t 0 && echo "interactive terminal available"
+rfuf -d '*.example.com' -skip-install
+```
+
+The interactsh callback client is optional. RFUF waits up to 20 seconds by default and continues without OOB callbacks if registration is unavailable. Use `-interactsh-timeout 0` or `-disable-interactsh` when the target, network, or bounty policy does not permit OOB callbacks. Successful interactsh startup now keeps the client alive for the scan instead of cancelling it when startup returns.
+
+If a run reports `step subfinder incomplete (status=failed exit_code=0)`, update RFUF and rerun. The stage-health artifact map now validates `subfinder.txt` and `amass_raw.txt`, the files those commands actually produce; a genuinely empty result is recorded as `completed_empty`, not failed.
+
 ### Bounded dependency installation
 
 The installer uses `GOTOOLCHAIN=local` for Go-based dependencies and pins

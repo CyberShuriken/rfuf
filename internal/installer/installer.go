@@ -188,6 +188,60 @@ func VerifyToolsPresent() error {
 	return nil
 }
 
+func packageGroupPresent(pm PackageManager, logical string, packages []string) bool {
+	// Package names are not always executable names. In particular Fedora's
+	// git prerequisite group includes ca-certificates and openssl, neither of
+	// which should be checked with LookPath. Check representative binaries
+	// instead, while leaving package-only groups to the package manager.
+	if pm == PKG_DNF && logical == "git" {
+		if _, err := exec.LookPath("rpm"); err == nil {
+			for _, packageName := range packages {
+				if err := exec.Command("rpm", "-q", packageName).Run(); err != nil {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	binaries := map[string][]string{
+		"sqlmap": {"sqlmap"},
+		"jq":     {"jq"},
+		"build":  {"gcc", "make"},
+		"git":    {"git"},
+	}
+	if pm == PKG_APT && logical == "seclists" {
+		home, _ := os.UserHomeDir()
+		for _, path := range []string{"/usr/share/seclists", filepath.Join(home, "SecLists")} {
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				return true
+			}
+		}
+	}
+	checks, ok := binaries[logical]
+	if !ok {
+		return false
+	}
+	for _, binary := range checks {
+		if _, err := exec.LookPath(binary); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func sudoUsableForPackageInstall() (bool, string) {
+	if _, err := exec.LookPath("sudo"); err != nil {
+		return false, "sudo is not installed; install the required distro packages manually or run as root"
+	}
+	if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		return true, ""
+	}
+	if err := exec.Command("sudo", "-n", "true").Run(); err == nil {
+		return true, ""
+	}
+	return false, "sudo requires a password but RFUF has no interactive terminal; run the command from a terminal, configure passwordless sudo for these packages, or install them manually"
+}
+
 // EnsureTools is the entry point. It is idempotent: any tool already on PATH
 // is skipped, any tool missing is installed. The function never panics on a
 // missing distro package — sqlmap/jq/seclists fall back to alternative
@@ -214,26 +268,26 @@ func EnsureTools(goBin string) error {
 		if len(names) == 0 {
 			continue
 		}
-		// Only install a package if the binary it provides isn't already
-		// present. This makes the function idempotent and avoids re-running
-		// apt update on every invocation.
-		allPresent := true
-		for _, n := range names {
-			if _, err := exec.LookPath(n); err != nil {
-				allPresent = false
-				break
-			}
-		}
-		if allPresent {
+		// Package names are not necessarily executable names. Use the
+		// representative-binary map so Fedora's ca-certificates/openssl
+		// prerequisites do not cause a needless sudo prompt every run.
+		if packageGroupPresent(pm, logical, names) {
+
 			fmt.Printf("[*] %s already installed (skipping)\n", logical)
 			continue
 		}
 		fmt.Printf("[*] Installing %s (%s)...\n", logical, strings.Join(names, " "))
+		if usable, reason := sudoUsableForPackageInstall(); !usable {
+			fmt.Printf("[!] Skipping %s package install: %s\n", logical, reason)
+			continue
+		}
 		installCmd := systemInstallCmd(pm, names...)
 		cmd := exec.Command("bash", "-c", installCmd)
+		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
+
 			// Don't fail the whole pipeline — fall through and let the
 			// per-tool check below produce a clearer error if the binary
 			// is genuinely missing after the package install attempt.
