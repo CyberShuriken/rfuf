@@ -174,7 +174,7 @@ Open a new shell, then verify:
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v           # → rfuf version 2.4.0
+rfuf -v           # → rfuf version 2.4.1
 ```
 
 For full details, troubleshooting, and uninstall instructions see
@@ -315,7 +315,7 @@ rfuf -d '*.example.com' -skip-install
 
 The interactsh callback client is optional. RFUF waits up to 20 seconds by default and continues without OOB callbacks if registration is unavailable. Use `-interactsh-timeout 0` or `-disable-interactsh` when the target, network, or bounty policy does not permit OOB callbacks. Successful interactsh startup now keeps the client alive for the scan instead of cancelling it when startup returns.
 
-If a run reports `step subfinder incomplete (status=failed exit_code=0)` or `step amass_enum incomplete (status=failed exit_code=0)`, update RFUF and rerun. The stage-health artifact map now validates `subfinder.txt` and `amass_raw.txt`, and both stages create their declared artifact when a tool returns zero results. A genuinely empty result is recorded as `completed_empty`, not failed.
+If a run reports `step subfinder incomplete (status=failed exit_code=0)` or `step amass_enum incomplete (status=failed exit_code=0)`, update to RFUF v2.4.1 or later and rerun. The stage-health artifact map now validates `subfinder.txt` and `amass_raw.txt`, and both stages create their declared artifact when a tool returns zero results. A genuinely empty result is recorded as `completed_empty`, not failed.
 
 ### Bounded dependency installation
 
