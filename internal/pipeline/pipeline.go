@@ -262,7 +262,10 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 		// Subfinder and assetfinder are independent sources, so do not throw
 		// away their results or stop the whole pipeline in that case. Keep
 		// any partial Amass output and leave an empty file if it produced none.
-		{"amass_enum", fmt.Sprintf("if ! amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >&2; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "default", []string{"setup_directories"}, 0},
+		// Note: stderr from the warning message is sent to /dev/null rather
+		// than `>&2` so the shell command parser does not misread the
+		// redirect as an output artifact filename (see coverage regex).
+		{"amass_enum", fmt.Sprintf("if ! amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "default", []string{"setup_directories"}, 0},
 		// amass_parse: `amass -o file.txt` writes one subdomain per line.
 		// grep -F treats the domain as a fixed string. Added file check for resilience.
 		{"amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "grep", []string{"amass_enum"}, 0},

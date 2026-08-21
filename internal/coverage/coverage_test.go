@@ -3,6 +3,7 @@ package coverage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -13,6 +14,34 @@ func TestExtractArtifactPaths(t *testing.T) {
 	outputs := ExtractOutputPaths(command)
 	if len(inputs) == 0 || len(outputs) == 0 {
 		t.Fatalf("expected input/output paths, got inputs=%v outputs=%v", inputs, outputs)
+	}
+}
+
+// Regression: shell commands routinely use `>&2` for stderr redirection and
+// chain statements with `;`. The redirect-extraction regex used to treat
+// `>&2` as an output redirect to a file named `&2` (with stray punctuation)
+// and bled trailing `;` into filenames, so the amass_enum command — which
+// uses both — was misreported as a failed stage despite exit 0. The parser
+// must ignore fd-redirect forms and trim shell punctuation.
+func TestExtractArtifactPathsIgnoresFdRedirectAndShellPunctuation(t *testing.T) {
+	command := `if ! amass enum -passive -norecursive -timeout 30 -d admin.wickr.com -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >&2; fi; [ -f amass_raw.txt ] || touch amass_raw.txt`
+	outputs := ExtractOutputPaths(command)
+	for _, p := range outputs {
+		if strings.ContainsAny(p, ";&|<>") {
+			t.Fatalf("output path %q contains shell punctuation: %v", p, outputs)
+		}
+	}
+	// amass_raw.txt must still be captured (either via -o flag or via the
+	// `> amass_raw.txt` redirect in the if-branch).
+	found := false
+	for _, p := range outputs {
+		if p == "amass_raw.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected amass_raw.txt in outputs, got %v", outputs)
 	}
 }
 

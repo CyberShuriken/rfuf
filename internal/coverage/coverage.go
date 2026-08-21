@@ -63,9 +63,16 @@ type CoverageReport struct {
 }
 
 var (
-	inputFlagPattern  = regexp.MustCompile(`(?:^|\s)(?:-l|--list|-m|--input-file|-i)\s+["']?([^\s"']+)`)
-	outputFlagPattern = regexp.MustCompile(`(?:^|\s)(?:-o|--output|-of)\s+["']?([^\s"']+)`)
-	redirectPattern   = regexp.MustCompile(`(?:>|>>|:\s*>)\s*["']?([^\s"']+)`)
+	inputFlagPattern  = regexp.MustCompile(`(?:^|\s)(?:-l|--list|-m|--input-file|-i)\s+["']?([^\s"';&|()<>]+)`)
+	outputFlagPattern = regexp.MustCompile(`(?:^|\s)(?:-o|--output|-of)\s+["']?([^\s"';&|()<>]+)`)
+	// redirectPattern matches shell output redirections like `> file` or
+	// `>> file` and `: > file`, but explicitly excludes fd-redirect forms
+	// (`>&2`, `2>&1`, etc.) by requiring the character immediately after
+	// `>`/`>>` to be whitespace, `:`, or the start of a quoted path — never
+	// `&`. The captured group also stops at shell punctuation so that
+	// trailing `;`, `&`, `|`, `&&`, `||`, or `()` do not bleed into the
+	// filename.
+	redirectPattern = regexp.MustCompile(`(?:>>?|:\s*>)\s+["']?([^\s"';&|()<>]+)`)
 )
 
 func ExtractInputPaths(command string) []string {
@@ -102,7 +109,12 @@ func filterArtifactPaths(paths []string) []string {
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
 		path = strings.Trim(path, "'\"")
-		if path == "" || strings.HasPrefix(path, "-") || path == "/dev/null" || strings.Contains(path, " ") {
+		if path == "" || strings.HasPrefix(path, "-") || path == "/dev/null" {
+			continue
+		}
+		// Drop anything that still contains shell metacharacters or
+		// whitespace — these were never real filenames.
+		if strings.ContainsAny(path, " \t;&|<>()") {
 			continue
 		}
 		if !seen[path] {
