@@ -57,6 +57,9 @@ func TestAmassFailureDoesNotAbortPipeline(t *testing.T) {
 		if !strings.Contains(step.Command, "touch amass_raw.txt") {
 			t.Fatalf("amass_enum must provide an empty-file fallback: %q", step.Command)
 		}
+		if !strings.Contains(step.Command, "[ -f amass_raw.txt ] || touch amass_raw.txt") {
+			t.Fatalf("amass_enum must create the artifact when exit 0 produces no file: %q", step.Command)
+		}
 		return
 	}
 	t.Fatal("amass_enum step not found")

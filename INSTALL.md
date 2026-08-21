@@ -142,7 +142,7 @@ sudo dnf install -y git ca-certificates openssl gcc make jq sqlmap
 rfuf -d '*.example.com' -skip-install
 ```
 
-If the network cannot register an OOB callback, RFUF continues without interactsh after the default 20-second wait. Use `-interactsh-timeout 0` or `-disable-interactsh` when OOB callbacks are unavailable or out of scope. A previous false stage-health error—`subfinder incomplete (status=failed exit_code=0)`—is fixed by validating `subfinder.txt` and `amass_raw.txt`, the actual producer outputs.
+If the network cannot register an OOB callback, RFUF continues without interactsh after the default 20-second wait. Use `-interactsh-timeout 0` or `-disable-interactsh` when OOB callbacks are unavailable or out of scope. Previous false stage-health errors—`subfinder incomplete (status=failed exit_code=0)` and `amass_enum incomplete (status=failed exit_code=0)`—are handled by validating the actual producer outputs and creating empty artifacts when a tool legitimately returns no results. Such runs are recorded as `completed_empty`.
 
 ## Authenticated scan inputs
 
