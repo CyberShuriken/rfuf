@@ -273,8 +273,11 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 		// Scope guard: wildcard discovery may return related or third-party
 		// names. Only the exact root and proper subdomains continue to active
 		// DNS/HTTP probing. The raw rejected stream is retained for review.
-		{"scope_guard", `set -e
+		{"scope_guard", `set +e
 ROOT=$(printf '%s' "$RFUF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+# Discovery can legitimately be empty, and a missing upstream file should not
+# turn a zero-result exact scan into a missing-artifact failure.
+[ -f subs.txt ] || : > subs.txt
 WILDCARD=0
 [ "$RFUF_SCOPE_MODE" = "wildcard" ] && WILDCARD=1
 : > in_scope_hosts.txt
@@ -286,7 +289,7 @@ awk -v root="$ROOT" -v wildcard="$WILDCARD" '
     if (host == root || (wildcard == 1 && length(host) > length(root)+1 && substr(host, length(host)-length(root), length(root)+1) == "." root)) print host > "in_scope_hosts.txt"
     else print $0 > "out_of_scope_hosts.txt"
   }
-' subs.txt
+' subs.txt || :
 sort -u in_scope_hosts.txt -o in_scope_hosts.txt 2>/dev/null || :
 sort -u out_of_scope_hosts.txt -o out_of_scope_hosts.txt 2>/dev/null || :
 : > scoped_subs.txt
@@ -1323,6 +1326,39 @@ func stageRequired(stepID string) bool {
 	return true
 }
 
+func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
+	switch stepID {
+	case "scope_guard", "amass_enum", "subfinder":
+		// These discovery stages may legitimately return zero results. Their
+		// declared files are still required for downstream stage accounting.
+	default:
+		return nil
+	}
+	for _, path := range outputs {
+		clean := filepath.Clean(path)
+		if filepath.IsAbs(clean) || clean == "." || strings.HasPrefix(clean, "..") {
+			continue
+		}
+		full := filepath.Join(workDir, clean)
+		if _, err := os.Stat(full); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("cannot inspect zero-result artifact %s: %w", clean, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			return fmt.Errorf("cannot create artifact directory for %s: %w", clean, err)
+		}
+		file, err := os.OpenFile(full, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("cannot create zero-result artifact %s: %w", clean, err)
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("cannot close zero-result artifact %s: %w", clean, err)
+		}
+	}
+	return nil
+}
+
 func stageArtifacts(step Step) (inputs, outputs []string) {
 	inputs = coverage.ExtractInputPaths(step.Command)
 	outputs = coverage.ExtractOutputPaths(step.Command)
@@ -1637,6 +1673,12 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					defer func() { <-semaphore }()
 
 					res, err := executor.RunCommand(ctx, step.Command, paths.WorkDir, logFile, effectiveStepTimeout(stepTimeout, step.Timeout))
+					if err == nil && res.ExitCode == 0 {
+						_, outputs := stageArtifacts(step)
+						if materializeErr := ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs); materializeErr != nil {
+							err = materializeErr
+						}
+					}
 
 					mu.Lock()
 					delete(running, step.ID)
