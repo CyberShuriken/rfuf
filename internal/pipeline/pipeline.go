@@ -293,7 +293,10 @@ sort -u out_of_scope_hosts.txt -o out_of_scope_hosts.txt 2>/dev/null || :
 cat in_scope_hosts.txt > scoped_subs.txt 2>/dev/null || :
 IN=$(wc -l < scoped_subs.txt | tr -d ' ')
 OUT=$(wc -l < out_of_scope_hosts.txt | tr -d ' ')
-printf '{"input":"%s","root_domain":"%s","mode":"%s","in_scope":%s,"out_of_scope":%s,"policy":"%s"}\n' "$RFUF_SCOPE_INPUT" "$ROOT" "$RFUF_SCOPE_MODE" "${IN:-0}" "${OUT:-0}" "$RFUF_SCOPE_MODE" > scope.json`, "default", []string{"merge_subs"}, 0},
+printf '{"input":"%s","root_domain":"%s","mode":"%s","in_scope":%s,"out_of_scope":%s,"policy":"%s"}\n' "$RFUF_SCOPE_INPUT" "$ROOT" "$RFUF_SCOPE_MODE" "${IN:-0}" "${OUT:-0}" "$RFUF_SCOPE_MODE" > scope.json
+# Every output is created explicitly so a successful zero-result run is
+# completed_empty rather than misclassified as a missing-artifact failure.
+touch scope.json in_scope_hosts.txt out_of_scope_hosts.txt scoped_subs.txt`, "default", []string{"merge_subs"}, 0},
 		{"dnsx_resolve", "dnsx -l scoped_subs.txt -silent -o live_subs.txt", "default", []string{"scope_guard"}, 0},
 
 		// === NEW: Subdomain brute (catches staging/dev that CT logs miss) ===

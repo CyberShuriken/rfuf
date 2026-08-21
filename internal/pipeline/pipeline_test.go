@@ -466,6 +466,48 @@ func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
 	}
 }
 
+func TestScopeGuardCreatesDeclaredArtifacts(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("admin.wickr.com", &config.Paths{}) {
+		if step.ID == "scope_guard" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("scope_guard step not found")
+	}
+	if !strings.Contains(command, "touch scope.json in_scope_hosts.txt out_of_scope_hosts.txt scoped_subs.txt") {
+		t.Fatalf("scope_guard must materialize every declared artifact: %q", command)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "subs.txt"), []byte("admin.wickr.com\napi.admin.wickr.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"RFUF_DOMAIN=admin.wickr.com",
+		"RFUF_SCOPE_INPUT=admin.wickr.com",
+		"RFUF_SCOPE_MODE=exact",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("scope_guard failed: %v output=%s", err, output)
+	}
+	for _, name := range []string{"scope.json", "in_scope_hosts.txt", "out_of_scope_hosts.txt", "scoped_subs.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("scope_guard did not create %s: %v", name, err)
+		}
+	}
+	inScope, err := os.ReadFile(filepath.Join(dir, "in_scope_hosts.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(inScope)) != "admin.wickr.com" {
+		t.Fatalf("exact scope accepted unexpected hosts: %q", inScope)
+	}
+}
+
 func TestFinalizeRunWritesIncompleteCoverageArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	cp, err := checkpoint.Load(dir, "example.com")
