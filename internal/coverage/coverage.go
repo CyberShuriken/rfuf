@@ -82,6 +82,10 @@ var (
 	// final state of the worktree contains the destination, never the
 	// pre-rename source.
 	mvPattern = regexp.MustCompile(`\bmv\s+(?:-[a-zA-Z]+\s+)*["']?([^\s"';&|()<>]+)["']?\s+["']?([^\s"';&|()<>]+)`)
+	// rmPattern captures files intentionally removed during a stage. A
+	// redirect to a temporary file followed by `rm -f` should not make the
+	// temporary file a required final artifact.
+	rmPattern = regexp.MustCompile(`\brm\s+(?:-[a-zA-Z]+\s+)*(?:--\s+)?["']?([^\s"';&|()<>]+)`)
 )
 
 func ExtractInputPaths(command string) []string {
@@ -90,14 +94,15 @@ func ExtractInputPaths(command string) []string {
 
 func ExtractOutputPaths(command string) []string {
 	paths := extractUnique(outputFlagPattern.FindAllStringSubmatch(command, -1))
-	// Filter the redirect captures: drop any path that is the source of a
-	// later `mv` in the same command. The `> tmp && mv tmp dst` pattern
-	// creates tmp, then renames it away; the redirect regex would otherwise
-	// record tmp as a declared output that does not exist post-execute.
+	// Filter redirect captures for files that are not present in the final
+	// worktree. This includes sources of a later `mv` and temporary files
+	// explicitly removed by `rm`. Otherwise the classifier would report a
+	// successful command as failed because an intermediate file is absent.
 	mvSources := extractMvSources(command)
+	removedPaths := extractRemovedPaths(command)
 	redirects := extractUnique(redirectPattern.FindAllStringSubmatch(command, -1))
 	for _, p := range redirects {
-		if mvSources[p] {
+		if mvSources[p] || removedPaths[p] {
 			continue
 		}
 		paths = append(paths, p)
@@ -116,6 +121,17 @@ func ExtractOutputPaths(command string) []string {
 // in the command. The source is intentionally excluded because it no longer
 // exists post-rename, and reporting it as missing would falsely flag every
 // `mv`-using step as a missing-artifact failure (the exact bug fixed here).
+func extractRemovedPaths(command string) map[string]bool {
+	matches := rmPattern.FindAllStringSubmatch(command, -1)
+	out := make(map[string]bool)
+	for _, m := range matches {
+		if len(m) >= 2 && m[1] != "" {
+			out[m[1]] = true
+		}
+	}
+	return out
+}
+
 func extractMvDestinations(command string) []string {
 	matches := mvPattern.FindAllStringSubmatch(command, -1)
 	seen := make(map[string]bool)

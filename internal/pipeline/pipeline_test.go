@@ -73,6 +73,7 @@ func TestReconArtifactContractsMatchProducerFiles(t *testing.T) {
 	}{
 		{id: "subfinder", output: "subfinder.txt"},
 		{id: "amass_enum", output: "amass_raw.txt"},
+		{id: "hidden_params_arjun", output: "hidden_params.txt"},
 	} {
 		var step Step
 		found := false
@@ -90,6 +91,10 @@ func TestReconArtifactContractsMatchProducerFiles(t *testing.T) {
 		if !containsString(outputs, want.output) {
 			t.Fatalf("%s must validate %s, got %v", want.id, want.output, outputs)
 		}
+		if want.id == "hidden_params_arjun" && containsString(outputs, "arjun_targets_tmp.txt") {
+			t.Fatalf("%s must not require cleaned-up temporary input, got %v", want.id, outputs)
+		}
+
 	}
 }
 
@@ -518,7 +523,11 @@ func TestEnsureZeroResultArtifacts(t *testing.T) {
 	if err := ensureZeroResultArtifacts(dir, "jsmap_scrape", jsOutputs); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range append(outputs, jsOutputs...) {
+	hiddenOutputs := []string{"hidden_params.txt"}
+	if err := ensureZeroResultArtifacts(dir, "hidden_params_arjun", hiddenOutputs); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range append(append(outputs, jsOutputs...), hiddenOutputs...) {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("missing materialized artifact %s: %v", name, err)

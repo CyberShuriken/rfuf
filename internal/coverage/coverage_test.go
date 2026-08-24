@@ -45,6 +45,26 @@ func TestExtractArtifactPathsIgnoresFdRedirectAndShellPunctuation(t *testing.T) 
 	}
 }
 
+func TestExtractOutputPathsIgnoresRemovedTemporaryRedirect(t *testing.T) {
+	command := `head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -o hidden_params.txt || touch hidden_params.txt; rm -f arjun_targets_tmp.txt`
+	outputs := ExtractOutputPaths(command)
+	for _, p := range outputs {
+		if p == "arjun_targets_tmp.txt" {
+			t.Fatalf("removed temporary input was classified as a final output: %v", outputs)
+		}
+	}
+	found := false
+	for _, p := range outputs {
+		if p == "hidden_params.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected hidden_params.txt in outputs, got %v", outputs)
+	}
+}
+
 func TestMeasureArtifactsAndEvaluate(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("a\nb\n"), 0644); err != nil {
@@ -91,9 +111,9 @@ func TestWriteAndLoadStageRecords(t *testing.T) {
 // the *destination* of `mv` invocations as an output.
 func TestExtractOutputPathsCapturesMvDestination(t *testing.T) {
 	cases := []struct {
-		name   string
+		name    string
 		command string
-		want   []string
+		want    []string
 	}{
 		{
 			name:    "merge_brute_subs",

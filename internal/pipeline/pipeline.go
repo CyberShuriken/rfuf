@@ -1335,7 +1335,7 @@ func stageRequired(stepID string) bool {
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	switch stepID {
-	case "scope_guard", "amass_enum", "subfinder", "jsmap_scrape", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
+	case "scope_guard", "amass_enum", "subfinder", "jsmap_scrape", "hidden_params_arjun", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
 		// These discovery / merge / fuzzing stages may legitimately return zero results
 		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints, no live hosts
 		// to dirbrute). Their declared files are still required for downstream stage
@@ -1394,7 +1394,7 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 		"amass_enum":          {"amass_raw.txt"},
 		"dnsx_resolve":        {"live_subs.txt"},
 		"httpx_probe":         {"alive.txt"},
-		"jsmap_scrape":        {"js_assets.txt", "js_endpoints.txt"},
+		"jsmap_scrape":        {"js_assets.txt", "js_endpoints.txt", "jsmap_status.txt"},
 		"merge_all_urls":      {"all_urls.txt"},
 		"url_filter_alive":    {"all_urls_200.txt"},
 		"merge_js_endpoints":  {"all_urls.txt", "js_endpoints_full.txt"},
@@ -1410,6 +1410,7 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 		"dirbrute_verify_200": {"ffuf_dirs_200.txt"},
 		"js_endpoints_scan":   {"js_endpoint_findings.txt"},
 		"ghauri_sqli":         {"ghauri_results.txt"},
+		"hidden_params_arjun": {"hidden_params.txt"},
 	}
 	inputs = append(inputs, knownInputs[step.ID]...)
 	outputs = append(outputs, known[step.ID]...)
