@@ -145,9 +145,12 @@ var (
 	// JS collection is intentionally bounded per host and globally. Modern
 	// SPAs can reference hundreds of chunks; an unbounded collector turns
 	// one wildcard into an accidental asset mirror.
-	jsAssetPerHostCap = 100
-	jsAssetTotalCap   = 5000
-	nucleiTargetCap   = 10000
+	jsAssetPerHostCap   = 100
+	jsAssetTotalCap     = 5000
+	nucleiTargetCap     = 10000
+	katanaTargetCap     = 200
+	katanaCrawlDuration = "10m"
+	katanaStepTimeout   = 12 * time.Minute
 )
 
 // filterTestableRef is the documented path to the filter_testable binary
@@ -544,9 +547,18 @@ done < tech_fingerprint.txt
 grep -rh "\[VULN\]" cache_poison_results/ 2>/dev/null | sort -u > cache_poison_findings.txt
 exit 0`, "grep", []string{"tech_fingerprint"}, 0},
 
-		// katana crawl with auth headers
+		// Katana can expand quickly when fed a large alive list, especially with
+		// JavaScript and known-file crawling enabled. Cap the input list and use
+		// Katana's own crawl-duration limit so a busy target yields partial URLs
+		// instead of holding the pipeline until the global 30-minute deadline.
 		{"katana_crawl", fmt.Sprintf(`%s
-[ -s alive.txt ] && katana -list alive.txt -jc -kf all -d 3 -fs rdn %s -o katana_urls.txt || touch katana_urls.txt`, authSnip, "${AUTH_HEADERS:+(Header is via HEAD/GET only)}"), "default", []string{"httpx_probe"}, 0},
+if [ -s alive.txt ]; then
+  head -n %d alive.txt > katana_targets.txt
+  katana -list katana_targets.txt -jc -kf all -d 2 -ct %s -timeout 10 -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 10 -p 5 -iqp -fs rdn %s -o katana_urls.txt || true
+else
+  : > katana_targets.txt
+fi
+[ -f katana_urls.txt ] || : > katana_urls.txt`, authSnip, katanaTargetCap, katanaCrawlDuration, "${AUTH_HEADERS:+(Header is via HEAD/GET only)}"), "default", []string{"httpx_probe"}, katanaStepTimeout},
 
 		{"clean_urls", fmt.Sprintf("grep -Ei '^https?://([a-zA-Z0-9-]+\\.)*%s' katana_urls.txt | grep -Ev '\\.(css|js|png|jpg|jpeg|gif|pdf|svg|ico)($|\\?)' | sed 's/\\\\$//' | sort -u > clean_katana_urls.txt", domainEscaped), "grep", []string{"katana_crawl"}, 0},
 
@@ -1335,7 +1347,7 @@ func stageRequired(stepID string) bool {
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	switch stepID {
-	case "scope_guard", "amass_enum", "subfinder", "jsmap_scrape", "hidden_params_arjun", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
+	case "scope_guard", "amass_enum", "subfinder", "jsmap_scrape", "hidden_params_arjun", "katana_crawl", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
 		// These discovery / merge / fuzzing stages may legitimately return zero results
 		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints, no live hosts
 		// to dirbrute). Their declared files are still required for downstream stage

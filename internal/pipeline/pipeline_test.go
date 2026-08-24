@@ -364,6 +364,35 @@ func TestJavaScriptCollectionCoversModernAssets(t *testing.T) {
 	t.Fatal("jsmap_scrape step not found")
 }
 
+func TestKatanaCrawlIsBounded(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, step := range steps {
+		if step.ID != "katana_crawl" {
+			continue
+		}
+		for _, marker := range []string{
+			"head -n 200 alive.txt > katana_targets.txt",
+			"-list katana_targets.txt",
+			"-jc",
+			"-kf all",
+			"-d 2",
+			"-ct 10m",
+			"-timeout 10",
+			"-iqp",
+			"katana_urls.txt",
+		} {
+			if !strings.Contains(step.Command, marker) {
+				t.Errorf("katana_crawl missing %q: %q", marker, step.Command)
+			}
+		}
+		if step.Timeout != 12*time.Minute {
+			t.Errorf("katana_crawl timeout = %v, want 12m", step.Timeout)
+		}
+		return
+	}
+	t.Fatal("katana_crawl step not found")
+}
+
 func TestTrufflehogRecordsStatusAndDiagnostics(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	for _, s := range steps {
