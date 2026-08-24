@@ -64,7 +64,7 @@ type CoverageReport struct {
 
 var (
 	inputFlagPattern  = regexp.MustCompile(`(?:^|\s)(?:-l|--list|-m|--input-file|-i)\s+["']?([^\s"';&|()<>]+)`)
-	outputFlagPattern = regexp.MustCompile(`(?:^|\s)(?:-o|--output|-of)\s+["']?([^\s"';&|()<>]+)`)
+	outputFlagPattern = regexp.MustCompile(`(?:^|\s)(?:-o|--output)\s+["']?([^\s"';&|()<>]+)`)
 	// redirectPattern matches shell output redirections like `> file` or
 	// `>> file` and `: > file`, but explicitly excludes fd-redirect forms
 	// (`>&2`, `2>&1`, etc.) by requiring the character immediately after
@@ -74,8 +74,12 @@ var (
 	// filename.
 	// Full-line shell comments are removed before extraction, preventing
 	// examples such as `<loc> tags` in comments from becoming fake artifacts.
-	redirectPattern         = regexp.MustCompile(`(?:>>?|:\s*>)\s+["']?([^\s"';&|()<>]+)`)
-	shellCommentLinePattern = regexp.MustCompile(`(?m)^[ \t]*#.*(?:\n|$)`)
+	// The character before the operator cannot be `<` or `-`, preventing XML
+	// text and arrow diagnostics such as `-> %{http_code}` from matching.
+	redirectPattern = regexp.MustCompile(`(?:^|[^<-])(?:>>?|:\s*>)\s+["']?([^\s"';&|()<>]+)`)
+
+	shellCommentLinePattern  = regexp.MustCompile(`(?m)^[ \t]*#.*(?:\n|$)`)
+	singleQuotedShellPattern = regexp.MustCompile(`'[^']*'`)
 
 	// mvPattern captures the *destination* of `mv src dst` and
 	// `mv src1 src2 dst` invocations. After a rename, the source no longer
@@ -98,6 +102,9 @@ func ExtractInputPaths(command string) []string {
 
 func ExtractOutputPaths(command string) []string {
 	command = shellCommentLinePattern.ReplaceAllString(command, "")
+	command = singleQuotedShellPattern.ReplaceAllStringFunc(command, func(quoted string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(quoted, ">>", "  "), ">", " ")
+	})
 	paths := extractUnique(outputFlagPattern.FindAllStringSubmatch(command, -1))
 	// Filter redirect captures for files that are not present in the final
 	// worktree. This includes sources of a later `mv` and temporary files

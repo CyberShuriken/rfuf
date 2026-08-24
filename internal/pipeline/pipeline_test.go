@@ -393,6 +393,38 @@ func TestKatanaCrawlIsBounded(t *testing.T) {
 	t.Fatal("katana_crawl step not found")
 }
 
+func TestBolaSurfaceRunPassesWithEmptyInput(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("example.com", &config.Paths{}) {
+		if step.ID == "bola_surface_run" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("bola_surface_run step not found")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "all_urls.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bola_surface_run failed with empty input: %v output=%s", err, output)
+	}
+	outputs := []string{"bola_targets.txt", "bola_curl.txt", "bola_permutations.txt"}
+	for _, name := range outputs {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("missing BOLA artifact %s: %v", name, err)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("empty BOLA fixture produced unexpected data in %s", name)
+		}
+	}
+}
+
 func TestTrufflehogRecordsStatusAndDiagnostics(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	for _, s := range steps {

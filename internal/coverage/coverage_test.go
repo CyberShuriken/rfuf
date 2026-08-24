@@ -70,6 +70,66 @@ cat openapi_paths.txt | sort -u > all_urls.txt`
 	}
 }
 
+func TestExtractOutputPathsIgnoresQuotedComparisonOperator(t *testing.T) {
+	command := `awk '{ if (length($0) > 0) print $0 > "in_scope_hosts.txt" }' subs.txt > scoped_subs.txt`
+	outputs := ExtractOutputPaths(command)
+	for _, p := range outputs {
+		if p == "0" || p == "in_scope_hosts.txt" {
+			t.Fatalf("quoted comparison/output text was classified as an artifact: %v", outputs)
+		}
+	}
+	found := false
+	for _, p := range outputs {
+		if p == "scoped_subs.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected scoped_subs.txt in outputs, got %v", outputs)
+	}
+}
+
+func TestExtractOutputPathsIgnoresOutputFormatFlag(t *testing.T) {
+	command := `ffuf -o ffuf_results/all.json -of json -s`
+	outputs := ExtractOutputPaths(command)
+	for _, p := range outputs {
+		if p == "json" {
+			t.Fatalf("output-format value was classified as an artifact: %v", outputs)
+		}
+	}
+	found := false
+	for _, p := range outputs {
+		if p == "ffuf_results/all.json" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected ffuf output file in outputs, got %v", outputs)
+	}
+}
+
+func TestExtractOutputPathsIgnoresDiagnosticArrow(t *testing.T) {
+	command := `echo "curl -sk https://example.com -o /dev/null -w \" -> %{http_code}\"" >> bola_curl.txt`
+	outputs := ExtractOutputPaths(command)
+	for _, p := range outputs {
+		if p == "%{http_code}" {
+			t.Fatalf("diagnostic arrow text was classified as an artifact: %v", outputs)
+		}
+	}
+	found := false
+	for _, p := range outputs {
+		if p == "bola_curl.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected bola_curl.txt in outputs, got %v", outputs)
+	}
+}
+
 func TestExtractOutputPathsIgnoresRemovedTemporaryRedirect(t *testing.T) {
 	command := `head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -o hidden_params.txt || touch hidden_params.txt; rm -f arjun_targets_tmp.txt`
 	outputs := ExtractOutputPaths(command)
