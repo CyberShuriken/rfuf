@@ -72,7 +72,11 @@ var (
 	// `&`. The captured group also stops at shell punctuation so that
 	// trailing `;`, `&`, `|`, `&&`, `||`, or `()` do not bleed into the
 	// filename.
-	redirectPattern = regexp.MustCompile(`(?:>>?|:\s*>)\s+["']?([^\s"';&|()<>]+)`)
+	// Full-line shell comments are removed before extraction, preventing
+	// examples such as `<loc> tags` in comments from becoming fake artifacts.
+	redirectPattern         = regexp.MustCompile(`(?:>>?|:\s*>)\s+["']?([^\s"';&|()<>]+)`)
+	shellCommentLinePattern = regexp.MustCompile(`(?m)^[ \t]*#.*(?:\n|$)`)
+
 	// mvPattern captures the *destination* of `mv src dst` and
 	// `mv src1 src2 dst` invocations. After a rename, the source no longer
 	// exists — measuring source existence would falsely flag every renamed
@@ -93,6 +97,7 @@ func ExtractInputPaths(command string) []string {
 }
 
 func ExtractOutputPaths(command string) []string {
+	command = shellCommentLinePattern.ReplaceAllString(command, "")
 	paths := extractUnique(outputFlagPattern.FindAllStringSubmatch(command, -1))
 	// Filter redirect captures for files that are not present in the final
 	// worktree. This includes sources of a later `mv` and temporary files

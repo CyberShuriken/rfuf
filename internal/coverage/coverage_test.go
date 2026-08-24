@@ -45,6 +45,31 @@ func TestExtractArtifactPathsIgnoresFdRedirectAndShellPunctuation(t *testing.T) 
 	}
 }
 
+func TestExtractOutputPathsIgnoresXmlLikeCommentText(t *testing.T) {
+	command := `: > openapi_paths.txt
+# Also handle sitemap.xml URLs (already full URLs in <loc> tags)
+grep -oE '<loc>[^<]+</loc>' spec.json >> openapi_paths.txt
+cat openapi_paths.txt | sort -u > all_urls.txt`
+	outputs := ExtractOutputPaths(command)
+	for _, p := range outputs {
+		if p == "tags" {
+			t.Fatalf("XML-like comment text was classified as an artifact: %v", outputs)
+		}
+	}
+	for _, want := range []string{"openapi_paths.txt", "all_urls.txt"} {
+		found := false
+		for _, p := range outputs {
+			if p == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %s in outputs, got %v", want, outputs)
+		}
+	}
+}
+
 func TestExtractOutputPathsIgnoresRemovedTemporaryRedirect(t *testing.T) {
 	command := `head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -o hidden_params.txt || touch hidden_params.txt; rm -f arjun_targets_tmp.txt`
 	outputs := ExtractOutputPaths(command)
