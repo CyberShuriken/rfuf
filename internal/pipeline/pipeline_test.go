@@ -514,7 +514,11 @@ func TestEnsureZeroResultArtifacts(t *testing.T) {
 	if err := ensureZeroResultArtifacts(dir, "scope_guard", outputs); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range outputs {
+	jsOutputs := []string{"js_assets.txt", "js_endpoints.txt", "jsmap_status.txt"}
+	if err := ensureZeroResultArtifacts(dir, "jsmap_scrape", jsOutputs); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range append(outputs, jsOutputs...) {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("missing materialized artifact %s: %v", name, err)

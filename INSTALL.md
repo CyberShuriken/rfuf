@@ -74,7 +74,7 @@ executor code.
 
 ```bash
 which rfuf        # → /opt/rfuf/rfuf
-rfuf -v            # → rfuf version 2.4.3
+rfuf -v            # → rfuf version 2.4.4
 ```
 
 Run a no-op help check from an unrelated directory to confirm:
@@ -142,7 +142,7 @@ sudo dnf install -y git ca-certificates openssl gcc make jq sqlmap
 rfuf -d '*.example.com' -skip-install
 ```
 
-If the network cannot register an OOB callback, RFUF continues without interactsh after the default 20-second wait. Use `-interactsh-timeout 0` or `-disable-interactsh` when OOB callbacks are unavailable or out of scope. Previous false stage-health errors—`subfinder incomplete (status=failed exit_code=0)` and `amass_enum incomplete (status=failed exit_code=0)`—are fixed in RFUF v2.4.3 by validating the actual producer outputs and creating empty artifacts when a tool legitimately returns no results. Such runs are recorded as `completed_empty`. RFUF v2.4.3 also materializes all `scope_guard` outputs before returning, preventing an empty exact-domain result from being reported as a failed stage.
+If the network cannot register an OOB callback, RFUF continues without interactsh after the default 20-second wait. Use `-interactsh-timeout 0` or `-disable-interactsh` when OOB callbacks are unavailable or out of scope. Previous false stage-health errors—`subfinder incomplete (status=failed exit_code=0)` and `amass_enum incomplete (status=failed exit_code=0)`—are fixed in RFUF v2.4.4 by validating the actual producer outputs and creating empty artifacts when a tool legitimately returns no results. Such runs are recorded as `completed_empty`. RFUF v2.4.4 also materializes all `scope_guard` outputs before returning, preventing an empty exact-domain result from being reported as a failed stage. The same safeguard covers `jsmap_scrape` and creates `js_assets.txt`, `js_endpoints.txt`, and `jsmap_status.txt` when JavaScript discovery returns no assets.
 
 ## Authenticated scan inputs
 
@@ -159,7 +159,7 @@ The file-based forms read a local file and use its trimmed contents as one sessi
 
 The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests remain limited to the explicit scope supplied to RFUF.
 
-The `-d` value controls the mode: `example.com` is exact-only, while `*.example.com` includes the root and proper subdomains. RFUF v2.4.3 includes the exact/wildcard scope distinction, the Amass zero-result artifact fix, and the executor-boundary scope_guard empty-artifact fix. Both use the same normalized root output directory, but `scope.json` records the original input and selected mode. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results; wildcard input is not permission to scan third-party assets.
+The `-d` value controls the mode: `example.com` is exact-only, while `*.example.com` includes the root and proper subdomains. RFUF v2.4.4 includes the exact/wildcard scope distinction, the Amass zero-result artifact fix, the executor-boundary scope_guard empty-artifact fix, and the jsmap_scrape resume safeguard. Both use the same normalized root output directory, but `scope.json` records the original input and selected mode. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results; wildcard input is not permission to scan third-party assets.
 
 A resumed run must use the same mode as the original run. To change from `example.com` to `*.example.com`, start a fresh run without `-resume`; RFUF rejects the mismatch to prevent accidental scope expansion.
 

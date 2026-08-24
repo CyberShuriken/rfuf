@@ -1335,7 +1335,7 @@ func stageRequired(stepID string) bool {
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	switch stepID {
-	case "scope_guard", "amass_enum", "subfinder", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
+	case "scope_guard", "amass_enum", "subfinder", "jsmap_scrape", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
 		// These discovery / merge / fuzzing stages may legitimately return zero results
 		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints, no live hosts
 		// to dirbrute). Their declared files are still required for downstream stage
