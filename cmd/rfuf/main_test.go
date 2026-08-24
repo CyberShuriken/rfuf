@@ -18,7 +18,7 @@ func TestVerifyAuthSessionSendsConfiguredHeaders(t *testing.T) {
 		"RFUF_TEST_ACCOUNT_EMAIL":  "test@example.com",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Cookie") != "session=test" || r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("X-Bug-Bounty") != "researcher" || r.Header.Get("X-Test-Account-Email") != "test@example.com" {
+		if r.Header.Get("Cookie") != "session=test" || r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("X-Bug-Bounty") != "researcher" || r.Header.Get("X-HackerOne-Research") != "researcher" || r.Header.Get("X-Test-Account-Email") != "test@example.com" {
 			http.Error(w, "missing headers", http.StatusUnauthorized)
 			return
 		}

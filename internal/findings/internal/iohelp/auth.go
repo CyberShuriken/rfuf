@@ -55,8 +55,14 @@ func BuildAuthHeaders() []struct{ Key, Value string } {
 		out = append(out, struct{ Key, Value string }{"Cookie", cookie})
 	}
 	if username := strings.TrimSpace(os.Getenv("RFUF_BUG_BOUNTY_USERNAME")); username != "" {
-		out = append(out, struct{ Key, Value string }{"X-Bug-Bounty", username})
+		// Preserve the legacy header for existing programs and also send
+		// HackerOne's standard attribution header when required.
+		out = append(out,
+			struct{ Key, Value string }{"X-Bug-Bounty", username},
+			struct{ Key, Value string }{"X-HackerOne-Research", username},
+		)
 	}
+
 	if email := strings.TrimSpace(os.Getenv("RFUF_TEST_ACCOUNT_EMAIL")); email != "" {
 		out = append(out, struct{ Key, Value string }{"X-Test-Account-Email", email})
 	}

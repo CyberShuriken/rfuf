@@ -193,7 +193,7 @@ func buildAuthHeaderSnippet() string {
 AUTH_HEADERS=()
 [ -n "$RFUF_AUTH_COOKIE" ] && AUTH_HEADERS+=(-H "Cookie: $RFUF_AUTH_COOKIE")
 [ -n "$RFUF_AUTH_HEADER" ] && AUTH_HEADERS+=(-H "Authorization: $RFUF_AUTH_HEADER")
-[ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME")
+[ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
 [ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
 `
 }
@@ -570,13 +570,13 @@ mkdir -p js_bundles endpoints_found js_secrets
 : > js_asset_errors.txt
 fetch_asset() {
   if [ -n "$RFUF_AUTH_COOKIE" ] && [ -n "$RFUF_AUTH_HEADER" ]; then
-    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
+    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   elif [ -n "$RFUF_AUTH_COOKIE" ]; then
-    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
+    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   elif [ -n "$RFUF_AUTH_HEADER" ]; then
-    curl -sk --max-time 15 -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
+    curl -sk --max-time 15 -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   else
-    curl -sk --max-time 15 -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
+    curl -sk --max-time 15 -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
   fi
 }
 resolve_asset() {

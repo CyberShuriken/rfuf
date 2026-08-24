@@ -30,6 +30,9 @@ func TestBuildAuthHeadersIncludesProgramHeaders(t *testing.T) {
 	if seen["X-Bug-Bounty"] != "soumo6t9" {
 		t.Fatalf("X-Bug-Bounty = %q", seen["X-Bug-Bounty"])
 	}
+	if seen["X-HackerOne-Research"] != "soumo6t9" {
+		t.Fatalf("X-HackerOne-Research = %q", seen["X-HackerOne-Research"])
+	}
 	if seen["X-Test-Account-Email"] != "test@example.com" {
 		t.Fatalf("X-Test-Account-Email = %q", seen["X-Test-Account-Email"])
 	}

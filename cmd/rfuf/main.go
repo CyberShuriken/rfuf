@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	version = "2.4.9"
+	version = "2.4.10"
 )
 
 func main() {
@@ -77,7 +77,7 @@ func main() {
 	repositoryPath := flag.String("repository-path", "", "Optional local repository path for source and supply-chain review planning; not uploaded or scanned automatically.")
 	testAPIBaseURL := flag.String("test-api-base-url", "", "Optional authorized test API base URL to reference in manual validation planning; not contacted automatically.")
 	bugBountyUsername := flag.String("bug-bounty-username", "",
-		"Researcher username for the X-Bug-Bounty request header required by some programs.")
+		"Researcher username for X-HackerOne-Research and legacy X-Bug-Bounty attribution headers.")
 	testAccountEmail := flag.String("test-account-email", "",
 		"Dedicated test-account email for the X-Test-Account-Email request header required by some programs.")
 	excludeURLRegex := flag.String("exclude-url-regex", "",
@@ -348,6 +348,7 @@ func verifyAuthSession(checkURL, marker string) (bool, int, error) {
 	}
 	if username := strings.TrimSpace(executor.AuthEnv["RFUF_BUG_BOUNTY_USERNAME"]); username != "" {
 		req.Header.Set("X-Bug-Bounty", username)
+		req.Header.Set("X-HackerOne-Research", username)
 	}
 	if email := strings.TrimSpace(executor.AuthEnv["RFUF_TEST_ACCOUNT_EMAIL"]); email != "" {
 		req.Header.Set("X-Test-Account-Email", email)

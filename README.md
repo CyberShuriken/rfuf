@@ -252,8 +252,9 @@ was supplied but does not intentionally print the credential value.
 
 Manual bug-bounty scans can provide program attribution headers with
 `-bug-bounty-username` and `-test-account-email`. RFUF propagates these as
-`X-Bug-Bounty` and `X-Test-Account-Email` through shell stages and Go finder
-requests without storing their values in findings files. Use
+`X-HackerOne-Research`, legacy `X-Bug-Bounty`, and `X-Test-Account-Email`
+through shell stages and Go finder requests without storing their values in
+findings files. Use
 `-exclude-url-regex` for program-specific exclusions; the expression is
 applied before the canonical HTTP probe and downstream target generation.
 This is intended for exclusions such as contact/support forms, sandbox hosts,
@@ -315,7 +316,7 @@ rfuf -d '*.example.com' -skip-install
 
 The interactsh callback client is optional. RFUF waits up to 20 seconds by default and continues without OOB callbacks if registration is unavailable. Use `-interactsh-timeout 0` or `-disable-interactsh` when the target, network, or bounty policy does not permit OOB callbacks. Successful interactsh startup now keeps the client alive for the scan instead of cancelling it when startup returns.
 
-If a run reports `step subfinder incomplete (status=failed exit_code=0)`, `step amass_enum incomplete (status=failed exit_code=0)`, `step jsmap_scrape incomplete (status=failed exit_code=0)`, or `step hidden_params_arjun incomplete (status=failed exit_code=0)`, update to RFUF v2.4.5 or later and rerun. If it reports `step katana_crawl incomplete (status=timed_out exit_code=0)`, update to RFUF v2.4.6 or later. If it reports `step merge_all_urls incomplete (status=failed exit_code=0)` or `step bola_surface_run incomplete (status=failed exit_code=0)`, update to RFUF v2.4.9 or later. The stage-health artifact map validates final producer outputs, materializes declared reports for legitimate zero-result stages, ignores temporary redirect files that a stage explicitly removes, ignores output-format values such as `-of json`, and rejects comments, quoted expressions, XML-like text, and diagnostic arrows as output paths. A genuinely empty result is recorded as `completed_empty`, not failed. RFUF v2.4.6 bounds Katana to the first 200 alive hosts, two crawl levels, a 10-minute crawl duration, a 10-second request timeout, and a 12-minute stage ceiling; partial URLs are retained when a busy target reaches the Katana limit.
+If a run reports `step subfinder incomplete (status=failed exit_code=0)`, `step amass_enum incomplete (status=failed exit_code=0)`, `step jsmap_scrape incomplete (status=failed exit_code=0)`, or `step hidden_params_arjun incomplete (status=failed exit_code=0)`, update to RFUF v2.4.5 or later and rerun. If it reports `step katana_crawl incomplete (status=timed_out exit_code=0)`, update to RFUF v2.4.6 or later. If it reports `step merge_all_urls incomplete (status=failed exit_code=0)` or `step bola_surface_run incomplete (status=failed exit_code=0)`, update to RFUF v2.4.9 or later. The stage-health artifact map validates final producer outputs, materializes declared reports for legitimate zero-result stages, ignores temporary redirect files that a stage explicitly removes, ignores output-format values such as `-of json`, and rejects comments, quoted expressions, XML-like text, and diagnostic arrows as output paths. A genuinely empty result is recorded as `completed_empty`, not failed. RFUF v2.4.10 also sends HackerOne’s required `X-HackerOne-Research` attribution header on auth checks, shell stages, JavaScript fetches, and Go finder requests. RFUF v2.4.6 bounds Katana to the first 200 alive hosts, two crawl levels, a 10-minute crawl duration, a 10-second request timeout, and a 12-minute stage ceiling; partial URLs are retained when a busy target reaches the Katana limit.
 
 ### Bounded dependency installation
 

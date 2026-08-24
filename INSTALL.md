@@ -159,7 +159,7 @@ The file-based forms read a local file and use its trimmed contents as one sessi
 
 The supplied session is propagated to HTTP probing, crawling, API discovery, JavaScript and manifest downloads, nuclei, SQLmap, and Go finder modules. Authenticated requests remain limited to the explicit scope supplied to RFUF.
 
-The `-d` value controls the mode: `example.com` is exact-only, while `*.example.com` includes the root and proper subdomains. RFUF v2.4.9 includes the exact/wildcard scope distinction, the Amass zero-result artifact fix, the executor-boundary scope_guard empty-artifact fix, the jsmap_scrape resume safeguard, the hidden_params_arjun temporary-artifact fix, bounded Katana crawling, and the merge_all_urls artifact-parser fix. Both use the same normalized root output directory, but `scope.json` records the original input and selected mode. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results; wildcard input is not permission to scan third-party assets.
+The `-d` value controls the mode: `example.com` is exact-only, while `*.example.com` includes the root and proper subdomains. RFUF v2.4.10 includes the exact/wildcard scope distinction, the Amass zero-result artifact fix, the executor-boundary scope_guard empty-artifact fix, the jsmap_scrape resume safeguard, the hidden_params_arjun temporary-artifact fix, bounded Katana crawling, and the merge_all_urls artifact-parser fix. Both use the same normalized root output directory, but `scope.json` records the original input and selected mode. RFUF writes `scope.json`, `in_scope_hosts.txt`, and `out_of_scope_hosts.txt` before active DNS/HTTP probing. Review these files before using scan results; wildcard input is not permission to scan third-party assets.
 
 A resumed run must use the same mode as the original run. To change from `example.com` to `*.example.com`, start a fresh run without `-resume`; RFUF rejects the mismatch to prevent accidental scope expansion.
 
@@ -174,7 +174,7 @@ rfuf -d example.com \
   -exclude-url-regex '(^|/)(contact|support)(/|$)'
 ```
 
-RFUF sends these values as `X-Bug-Bounty` and `X-Test-Account-Email` through supported shell and Go-finder requests. The exclusion expression is applied before the canonical URL probe and target-list generation, preventing excluded paths from reaching active downstream scanners.
+RFUF sends the researcher username as both `X-HackerOne-Research` and legacy `X-Bug-Bounty`, plus `X-Test-Account-Email`, through supported shell and Go-finder requests. RFUF v2.4.10 also includes the HackerOne attribution header in the auth-check request. The exclusion expression is applied before the canonical URL probe and target-list generation, preventing excluded paths from reaching active downstream scanners.
 
 ### Coverage integrity and final artifacts
 

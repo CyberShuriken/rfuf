@@ -121,7 +121,7 @@ func sanitizeDashboardLine(line string) string {
 	if strings.Contains(line, "Templates:") && strings.Contains(line, "Requests:") {
 		return "[scanner statistics recorded in .rfuf/rfuf.log]"
 	}
-	for _, marker := range []string{"Authorization:", "Cookie:", "X-Bug-Bounty:", "X-Test-Account-Email:"} {
+	for _, marker := range []string{"Authorization:", "Cookie:", "X-Bug-Bounty:", "X-HackerOne-Research:", "X-Test-Account-Email:"} {
 		if strings.Contains(line, marker) {
 			return "[redacted request metadata; see stage status files]"
 		}
