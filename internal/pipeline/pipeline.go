@@ -593,6 +593,10 @@ while read -r HOST; do
   done
 done < alive.txt
 sort -u js_assets.txt -o js_assets.txt
+# Cap to top-N assets. The coverage extractor captures js_assets.capped
+# from the redirect regex; the subsequent mv then removes it. The real
+# fix is at the extractor level (skip redirect targets that are the
+# source of a later mv), so this is unchanged from the original.
 head -n %d js_assets.txt > js_assets.capped && mv js_assets.capped js_assets.txt
 while read -r FULL_URL; do
   [ -n "$FULL_URL" ] || continue
@@ -1089,7 +1093,10 @@ exit 0`, "grep", []string{"merge_all_urls"}, 0},
 		// wafw00f issues one HTTP request per host; at 5k hosts with default
 		// socket timeouts this becomes a 30-min+ serial scan. 200 hosts is
 		// enough to fingerprint the WAF vendor(s) in the target's infrastructure.
-		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then head -n 200 alive.txt > waf_targets_tmp.txt; wafw00f -i waf_targets_tmp.txt -o waf_detections.txt || true; rm -f waf_targets_tmp.txt; else : > waf_detections.txt; fi", "grep", []string{"httpx_probe"}, 0},
+		// Do NOT rm waf_targets_tmp.txt at the end: the coverage extractor
+		// sees `> waf_targets_tmp.txt` as a declared output, and an absent
+		// file marks the step failed despite exit_code=0.
+		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then head -n 200 alive.txt > waf_targets_tmp.txt; wafw00f -i waf_targets_tmp.txt -o waf_detections.txt || true; else : > waf_targets_tmp.txt; : > waf_detections.txt; fi", "grep", []string{"httpx_probe"}, 0},
 		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt || true; else : > naabu_ports.txt; fi", "grep", []string{"httpx_probe"}, 0},
 
 		// Hidden parameter discovery (arjun). Cap to 100 hosts — arjun's
@@ -1328,10 +1335,10 @@ func stageRequired(stepID string) bool {
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	switch stepID {
-	case "scope_guard", "amass_enum", "subfinder", "merge_brute_subs", "merge_js_endpoints":
-		// These discovery / merge stages may legitimately return zero results
-		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints).
-		// Their declared files are still required for downstream stage
+	case "scope_guard", "amass_enum", "subfinder", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
+		// These discovery / merge / fuzzing stages may legitimately return zero results
+		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints, no live hosts
+		// to dirbrute). Their declared files are still required for downstream stage
 		// accounting, so materialize an empty file when the producer did not.
 	default:
 		return nil

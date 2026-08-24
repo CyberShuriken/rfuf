@@ -792,6 +792,114 @@ func TestMergeBruteSubsPassesWhenScopedSubsEmpty(t *testing.T) {
 	}
 }
 
+// TestDirbruteFFUFPassesWhenAliveEmpty reproduces the dirbrute_ffuf failure
+// mode seen in the wolt.com run: when alive.txt is empty (no live hosts
+// from httpx_probe), the step's else-branch runs `: > ffuf_dirs_raw.txt`
+// but ffuf_results/all.json is NEVER created, so the coverage checker
+// sees a missing declared output and marks the step status=failed
+// despite exit_code=0. After the fix, ensureZeroResultArtifacts must
+// materialize ffuf_results/all.json so the step is reported
+// completed_empty.
+func TestDirbruteFFUFPassesWhenAliveEmpty(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("wolt.com", &config.Paths{}) {
+		if step.ID == "dirbrute_ffuf" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("dirbrute_ffuf step not found")
+	}
+
+	// Zero-alive fixture: alive.txt is empty, which sends the step down
+	// the `: > ffuf_dirs_raw.txt` else-branch.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alive.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("dirbrute_ffuf failed to execute: %v output=%s", err, output)
+	}
+
+	// The shell correctly created ffuf_dirs_raw.txt, but did NOT create
+	// ffuf_results/all.json (it only exists in the happy path). The
+	// pipeline's post-execute step calls ensureZeroResultArtifacts
+	// exactly to fill that gap; we run it here to verify.
+	_, outputs := stageArtifacts(Step{ID: "dirbrute_ffuf", Command: command})
+	if err := ensureZeroResultArtifacts(dir, "dirbrute_ffuf", outputs); err != nil {
+		t.Fatalf("ensureZeroResultArtifacts rejected dirbrute_ffuf: %v", err)
+	}
+
+	// Both declared outputs must now exist.
+	if _, err := os.Stat(filepath.Join(dir, "ffuf_dirs_raw.txt")); err != nil {
+		t.Fatalf("ffuf_dirs_raw.txt missing after ensureZeroResultArtifacts: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ffuf_results", "all.json")); err != nil {
+		t.Fatalf("ffuf_results/all.json missing after ensureZeroResultArtifacts: %v", err)
+	}
+
+	// Coverage must see all declared outputs as Exists=true.
+	metrics := coverage.MeasureArtifacts(dir, outputs)
+	for _, m := range metrics {
+		if !m.Exists {
+			t.Fatalf("output %s reported missing despite existing: %+v", m.Path, metrics)
+		}
+	}
+}
+
+// TestWafDetectPassesWhenWafw00fMissing reproduces the waf_detect failure
+// mode seen in the wolt.com run: the previous step's command created
+// waf_targets_tmp.txt via `> waf_targets_tmp.txt`, ran wafw00f, and then
+// `rm -f waf_targets_tmp.txt` removed it. The coverage extractor sees the
+// redirect as a declared output, the post-run measurement sees the file
+// missing, and the step is marked status=failed despite exit_code=0.
+// After the fix (no rm, plus else-branch materialization), the file
+// must exist after the step runs.
+func TestWafDetectPassesWhenWafw00fMissing(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("wolt.com", &config.Paths{}) {
+		if step.ID == "waf_detect" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("waf_detect step not found")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alive.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("waf_detect failed to execute: %v output=%s", err, output)
+	}
+
+	// The fix: when wafw00f is missing, the else-branch must materialize
+	// BOTH waf_targets_tmp.txt and waf_detections.txt so the step
+	// reports completed_empty instead of failed.
+	if _, err := os.Stat(filepath.Join(dir, "waf_targets_tmp.txt")); err != nil {
+		t.Fatalf("waf_targets_tmp.txt missing after waf_detect: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "waf_detections.txt")); err != nil {
+		t.Fatalf("waf_detections.txt missing after waf_detect: %v", err)
+	}
+
+	// The command must NOT contain `rm -f waf_targets_tmp.txt` — that
+	// is the line that caused the bug in the first place. If this
+	// assertion ever fires, the regression has been reintroduced.
+	if strings.Contains(command, "rm -f waf_targets_tmp.txt") {
+		t.Fatalf("waf_detect command still removes its own declared output: %s", command)
+	}
+}
+
 // TestMergeJSEndpointsPasses verifies the same bug shape on
 // merge_js_endpoints, which also uses `> tmp && mv tmp dst`. If the
 // extractor only sees the redirect target (renamed-away tmp), the step

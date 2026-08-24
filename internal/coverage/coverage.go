@@ -90,7 +90,18 @@ func ExtractInputPaths(command string) []string {
 
 func ExtractOutputPaths(command string) []string {
 	paths := extractUnique(outputFlagPattern.FindAllStringSubmatch(command, -1))
-	paths = append(paths, extractUnique(redirectPattern.FindAllStringSubmatch(command, -1))...)
+	// Filter the redirect captures: drop any path that is the source of a
+	// later `mv` in the same command. The `> tmp && mv tmp dst` pattern
+	// creates tmp, then renames it away; the redirect regex would otherwise
+	// record tmp as a declared output that does not exist post-execute.
+	mvSources := extractMvSources(command)
+	redirects := extractUnique(redirectPattern.FindAllStringSubmatch(command, -1))
+	for _, p := range redirects {
+		if mvSources[p] {
+			continue
+		}
+		paths = append(paths, p)
+	}
 	// Merge destinations from `mv src dst`. Both src and dst are returned
 	// because some pipelines write both files (dst is the real output; src
 	// may not exist post-rename). MeasureArtifacts reports missing sources
@@ -117,6 +128,27 @@ func extractMvDestinations(command string) []string {
 		if !seen[m[2]] {
 			seen[m[2]] = true
 			out = append(out, m[2])
+		}
+	}
+	return out
+}
+
+// extractMvSources returns the set of paths used as the *source* of any
+// `mv src dst` in the command. These paths are removed (renamed away) by
+// the mv; if they were also captured by the redirect regex, the post-run
+// measurement would see them as missing and wrongly flag the step as
+// failed. Callers use this set to filter such redirect captures.
+func extractMvSources(command string) map[string]bool {
+	matches := mvPattern.FindAllStringSubmatch(command, -1)
+	out := make(map[string]bool)
+	for _, m := range matches {
+		if len(m) < 3 {
+			continue
+		}
+		// Group 1 is the source. For `mv src1 src2 dst` only the first
+		// group is the source; dst is the second.
+		if m[1] != "" {
+			out[m[1]] = true
 		}
 	}
 	return out
