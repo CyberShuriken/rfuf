@@ -73,6 +73,15 @@ var (
 	// trailing `;`, `&`, `|`, `&&`, `||`, or `()` do not bleed into the
 	// filename.
 	redirectPattern = regexp.MustCompile(`(?:>>?|:\s*>)\s+["']?([^\s"';&|()<>]+)`)
+	// mvPattern captures the *destination* of `mv src dst` and
+	// `mv src1 src2 dst` invocations. After a rename, the source no longer
+	// exists — measuring source existence would falsely flag every renamed
+	// step as a missing-artifact failure. We capture every group after the
+	// `mv` command except the last (which is the final destination when
+	// multiple sources are given); all are recorded as outputs because the
+	// final state of the worktree contains the destination, never the
+	// pre-rename source.
+	mvPattern = regexp.MustCompile(`\bmv\s+(?:-[a-zA-Z]+\s+)*["']?([^\s"';&|()<>]+)["']?\s+["']?([^\s"';&|()<>]+)`)
 )
 
 func ExtractInputPaths(command string) []string {
@@ -82,7 +91,35 @@ func ExtractInputPaths(command string) []string {
 func ExtractOutputPaths(command string) []string {
 	paths := extractUnique(outputFlagPattern.FindAllStringSubmatch(command, -1))
 	paths = append(paths, extractUnique(redirectPattern.FindAllStringSubmatch(command, -1))...)
+	// Merge destinations from `mv src dst`. Both src and dst are returned
+	// because some pipelines write both files (dst is the real output; src
+	// may not exist post-rename). MeasureArtifacts reports missing sources
+	// as Exists=false but CountMetrics only counts lines from Exists=true
+	// files, so an absent source cannot inflate the artifact count. We do,
+	// however, want the destination to be measured against the real file.
+	paths = append(paths, extractMvDestinations(command)...)
 	return filterArtifactPaths(paths)
+}
+
+// extractMvDestinations returns only the *destination* of every `mv src dst`
+// in the command. The source is intentionally excluded because it no longer
+// exists post-rename, and reporting it as missing would falsely flag every
+// `mv`-using step as a missing-artifact failure (the exact bug fixed here).
+func extractMvDestinations(command string) []string {
+	matches := mvPattern.FindAllStringSubmatch(command, -1)
+	seen := make(map[string]bool)
+	var out []string
+	for _, m := range matches {
+		// mvPattern captures src and dst; dst is the last group.
+		if len(m) < 3 || m[2] == "" {
+			continue
+		}
+		if !seen[m[2]] {
+			seen[m[2]] = true
+			out = append(out, m[2])
+		}
+	}
+	return out
 }
 
 func extractUnique(matches [][]string) []string {

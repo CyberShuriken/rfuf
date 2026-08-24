@@ -1328,9 +1328,11 @@ func stageRequired(stepID string) bool {
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	switch stepID {
-	case "scope_guard", "amass_enum", "subfinder":
-		// These discovery stages may legitimately return zero results. Their
-		// declared files are still required for downstream stage accounting.
+	case "scope_guard", "amass_enum", "subfinder", "merge_brute_subs", "merge_js_endpoints":
+		// These discovery / merge stages may legitimately return zero results
+		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints).
+		// Their declared files are still required for downstream stage
+		// accounting, so materialize an empty file when the producer did not.
 	default:
 		return nil
 	}
@@ -1517,6 +1519,10 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 		}
 	}
 
+	// Capture the dashboard start time AFTER any checkpoint reset so a
+	// fresh re-run against an existing work dir shows wall-clock elapsed
+	// from this invocation, not from the previous one. On -resume we
+	// intentionally keep cp.StartedAt so elapsed reflects total work.
 	startTime := cp.StartedAt
 	if !resume {
 		if len(cp.CompletedSteps) > 0 {
@@ -1527,6 +1533,7 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 		if err := os.RemoveAll(filepath.Join(paths.WorkDir, ".rfuf", "stages")); err != nil {
 			return fmt.Errorf("failed to reset stage records: %w", err)
 		}
+		startTime = cp.StartedAt
 	}
 
 	logFile, err := executor.GetLogFile(paths.WorkDir)

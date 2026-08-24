@@ -593,3 +593,251 @@ func TestNucleiUsesConfiguredRateLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestRunForScopeDashboardStartTimeResetsOnFreshRerun guards against the
+// "dashboard shows the previous run's elapsed time" bug. The dashboard
+// computes elapsed = time.Since(startTime), and startTime must come from
+// cp.StartedAt AFTER any checkpoint.Reset() call — otherwise re-running
+// rfuf against an existing work dir without -resume displays wall-clock
+// elapsed from the previous invocation.
+//
+// We model the lifecycle directly (load → reset → re-read) instead of
+// running the whole pipeline so the test stays fast and deterministic.
+func TestRunForScopeDashboardStartTimeResetsOnFreshRerun(t *testing.T) {
+	dir := t.TempDir()
+
+	// First run: load + complete one step + save. cp.StartedAt is "old".
+	cp, err := checkpoint.Load(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStart := cp.StartedAt
+	if err := cp.CompleteStep("subfinder"); err != nil {
+		t.Fatal(err)
+	}
+	// Force a clearly-old wall-clock value so the assertion below is
+	// unambiguous — we'd otherwise be racing against time.Now() at the
+	// millisecond granularity of test scheduling.
+	past := time.Now().Add(-72 * time.Hour)
+	cp.StartedAt = past
+	if err := cp.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second run (no -resume): reload, observe CompletedSteps > 0, reset.
+	cp2, err := checkpoint.Load(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cp2.CompletedSteps) == 0 {
+		t.Fatal("setup: expected CompletedSteps to carry across reload")
+	}
+	if !cp2.StartedAt.Equal(past) {
+		t.Fatalf("setup: expected loaded StartedAt to equal past, got %v want %v", cp2.StartedAt, past)
+	}
+
+	// Reproduce the fixed pipeline shape: read cp.StartedAt, then if not
+	// resuming and CompletedSteps>0, Reset(), then re-read cp.StartedAt.
+	startTime := cp2.StartedAt
+	if len(cp2.CompletedSteps) > 0 {
+		if err := cp2.Reset(); err != nil {
+			t.Fatal(err)
+		}
+		startTime = cp2.StartedAt
+	}
+
+	// After reset, startTime must be recent — not the 72h-old value.
+	if startTime.Equal(oldStart) || startTime.Equal(past) {
+		t.Fatalf("startTime still points at the previous run: %v", startTime)
+	}
+	if d := time.Since(startTime); d < 0 || d > 5*time.Second {
+		t.Fatalf("startTime should be within the last few seconds, got %v ago", d)
+	}
+}
+
+// TestRunForScopeDashboardStartTimePreservedOnResume confirms the inverse:
+// when -resume is set the original StartedAt must survive untouched, so
+// elapsed reflects total work across the original run plus the resumed
+// session.
+func TestRunForScopeDashboardStartTimePreservedOnResume(t *testing.T) {
+	dir := t.TempDir()
+	cp, err := checkpoint.Load(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.CompleteStep("subfinder"); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-48 * time.Hour)
+	cp.StartedAt = past
+	if err := cp.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	cp2, err := checkpoint.Load(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Resume path: do NOT reset; the existing StartedAt is the truth.
+	startTime := cp2.StartedAt
+	if !startTime.Equal(past) {
+		t.Fatalf("resume path lost original StartedAt: got %v want %v", startTime, past)
+	}
+}
+
+// TestMergeBruteSubsPassesWhenBruteSubsEmpty reproduces the exact wolt.com
+// failure: exact-mode scan where subdomain_brute exits 0 with an empty
+// brute_subs.txt, then merge_brute_subs runs `cat … | sort -u > tmp && mv
+// tmp live_subs.txt`. Before the extractor fix, the coverage check only
+// saw the redirect target (the renamed-away tmp file) and flagged the
+// step as status=failed despite exit_code=0. After the fix, the step must
+// record live_subs.txt as an output and complete successfully (or
+// completed_empty if scoped_subs.txt was also empty).
+func TestMergeBruteSubsPassesWhenBruteSubsEmpty(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("wolt.com", &config.Paths{}) {
+		if step.ID == "merge_brute_subs" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("merge_brute_subs step not found")
+	}
+
+	// Exact-mode fixture: scoped_subs.txt has the apex, brute_subs.txt
+	// is empty (subdomain_brute exits 0 immediately in exact mode).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "scoped_subs.txt"), []byte("wolt.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "brute_subs.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("merge_brute_subs failed to execute: %v output=%s", err, output)
+	}
+
+	// The post-condition: live_subs.txt must contain the merged result.
+	data, err := os.ReadFile(filepath.Join(dir, "live_subs.txt"))
+	if err != nil {
+		t.Fatalf("live_subs.txt missing after merge_brute_subs: %v", err)
+	}
+	if !strings.Contains(string(data), "wolt.com") {
+		t.Fatalf("live_subs.txt missing apex after merge: %q", data)
+	}
+
+	// Coverage check must see live_subs.txt as an output and report
+	// Exists=true — this is the assertion the bug used to break.
+	outputs := coverage.ExtractOutputPaths(command)
+	var found bool
+	for _, p := range outputs {
+		if p == "live_subs.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ExtractOutputPaths did not capture live_subs.txt from %q; got %v", command, outputs)
+	}
+	metrics := coverage.MeasureArtifacts(dir, outputs)
+	for _, m := range metrics {
+		if m.Path == "live_subs.txt" && !m.Exists {
+			t.Fatalf("live_subs.txt reported missing despite existing: %+v", metrics)
+		}
+	}
+}
+
+// TestMergeBruteSubsPassesWhenScopedSubsEmpty covers the rarer both-empty
+// case: if scoped_subs.txt is empty AND brute_subs.txt is empty (a zero-
+// result exact-mode scan with no upstream discovery), merge_brute_subs
+// still must materialize live_subs.txt so downstream stages don't see a
+// missing file.
+func TestMergeBruteSubsPassesWhenScopedSubsEmpty(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("wolt.com", &config.Paths{}) {
+		if step.ID == "merge_brute_subs" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("merge_brute_subs step not found")
+	}
+
+	dir := t.TempDir()
+	// Both inputs empty.
+	if err := os.WriteFile(filepath.Join(dir, "scoped_subs.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "brute_subs.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("merge_brute_subs failed to execute on empty inputs: %v output=%s", err, output)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "live_subs.txt")); err != nil {
+		t.Fatalf("live_subs.txt missing after zero-input merge_brute_subs: %v", err)
+	}
+
+	if err := ensureZeroResultArtifacts(dir, "merge_brute_subs", []string{"live_subs.txt"}); err != nil {
+		t.Fatalf("ensureZeroResultArtifacts rejected merge_brute_subs: %v", err)
+	}
+}
+
+// TestMergeJSEndpointsPasses verifies the same bug shape on
+// merge_js_endpoints, which also uses `> tmp && mv tmp dst`. If the
+// extractor only sees the redirect target (renamed-away tmp), the step
+// is wrongly flagged status=failed.
+func TestMergeJSEndpointsPasses(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("wolt.com", &config.Paths{}) {
+		if step.ID == "merge_js_endpoints" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("merge_js_endpoints step not found")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "js_endpoints.txt"), []byte("https://app.wolt.com/api\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "all_urls.txt"), []byte("https://app.wolt.com/home\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("merge_js_endpoints failed: %v output=%s", err, output)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "all_urls.txt"))
+	if err != nil {
+		t.Fatalf("all_urls.txt missing after merge: %v", err)
+	}
+	if !strings.Contains(string(data), "app.wolt.com") {
+		t.Fatalf("all_urls.txt missing endpoints after merge: %q", data)
+	}
+
+	outputs := coverage.ExtractOutputPaths(command)
+	var found bool
+	for _, p := range outputs {
+		if p == "all_urls.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ExtractOutputPaths did not capture all_urls.txt from merge_js_endpoints; got %v", outputs)
+	}
+}
