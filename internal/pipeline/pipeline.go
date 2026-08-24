@@ -863,8 +863,16 @@ exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0
 		{"ssrf_targets", fmt.Sprintf(`%s . all_urls_200.txt > ssrf_targets_filtered.txt
 { gf ssrf ssrf_targets_filtered.txt; grep -Ei "url=|uri=|path=|dest=|redirect=|callback=|webhook=|src=|fetch=|proxy=|target=" ssrf_targets_filtered.txt; } | sort -u > ssrf_targets.txt
 exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
-		// ssrf_scan: substitute ${OOB}->interactsh URL for blind SSRF detection
+		// ssrf_scan: substitute ${OOB}->interactsh URL for blind SSRF detection.
+		// ssrf_targets_oob.txt is declared as a required output downstream, so it
+		// must always exist when the step exits — even when interactsh failed to
+		// start (RFUF_OOB_URL empty) or no SSRF candidates were produced. The
+		// previous version only wrote it inside the `if [ -n "$RFUF_OOB_URL" ]`
+		// branch, which caused the pipeline to mark the step status=failed with
+		// exit_code=0 (missing artifact) on every run where interactsh was off.
 		{"ssrf_scan", fmt.Sprintf(`%s
+: > ssrf_targets_oob.txt
+: > ssrf_vulnerabilities.txt
 if [ -n "$RFUF_OOB_URL" ]; then
   sed "s|FOOBAR|$RFUF_OOB_URL|g" ssrf_targets.txt > ssrf_targets_oob.txt
   nuclei -l ssrf_targets_oob.txt -tags ssrf %s "${AUTH_HEADERS[@]}" -o ssrf_vulnerabilities.txt -var oob_url=$RFUF_OOB_URL
@@ -1739,12 +1747,34 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 							break
 						}
 					}
+					// A clean tool exit with no output is NOT a failure. It
+					// usually means the input was empty (e.g. SQLi targets
+					// got filtered to zero URLs on this domain), so the
+					// scanner had nothing to test and wrote no findings.
+					// Treat that as completed_empty and continue, not as a
+					// pipeline-fatal failure.
+					emptyInput := coverage.CountMetrics(inputMetrics) == 0
 					if res.TimedOut {
 						status = coverage.StatusTimedOut
+					} else if missingOutput && (emptyInput || res.ExitCode == 0) {
+						status = coverage.StatusCompletedEmpty
 					} else if missingOutput {
 						status = coverage.StatusFailed
 					} else if coverage.CountMetrics(outputMetrics) == 0 {
 						status = coverage.StatusCompletedEmpty
+					}
+
+					// A status of completed_empty (clean exit, no output)
+					// is never a pipeline failure — the tool did its job,
+					// there was just nothing to do. Skip the errChan and
+					// fall through to the success path that marks the
+					// step complete.
+					if status == coverage.StatusCompletedEmpty {
+						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+						completed[step.ID] = true
+						cp.CompleteStep(step.ID)
+						mu.Unlock()
+						return
 					}
 
 					if !success || res.TimedOut || missingOutput {
