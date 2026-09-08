@@ -135,7 +135,7 @@ func GetRequiredTools(goBin string) []Tool {
 		{"waybackurls", "GOTOOLCHAIN=local go install github.com/tomnomnom/waybackurls@latest", "waybackurls"},
 		// Fuzzing + URL dedup (uro collapses gau+wayback+katana noise)
 		{"ffuf", "GOTOOLCHAIN=local go install github.com/ffuf/ffuf/v2@latest", "ffuf"},
-		{"uro", "GOTOOLCHAIN=local go install github.com/s0md3v/uro@latest", "uro"},
+		{"uro", "GOTOOLCHAIN=local go install github.com/szybnev/uro-go/cmd/uro@latest", "uro"},
 		// Port scanning + WAF detection + hidden params per bb-methodology.
 		// naabu is Go-installed; wafw00f, arjun, and ghauri are all
 		// Python-based in 2026 (Go module paths were deprecated) so we
@@ -164,7 +164,7 @@ func GetRequiredTools(goBin string) []Tool {
 // `-resume`. That re-cloned SecLists (multi-hundred-MB git clone), triggered
 // `sudo dnf install git ...` prompts that block forever in non-interactive
 // terminals, and rebuilt Go tools the user already had — wasting minutes
-// before the pipeline even started.
+// before the pipeline started doing real work.
 func VerifyToolsPresent() error {
 	// bash is the universal shell for every pipeline stage; missing-bash
 	// commands would just fail silently inside the executor.
@@ -357,8 +357,12 @@ func EnsureTools(goBin string) error {
 	for _, p := range requiredPatterns {
 		home, _ := os.UserHomeDir()
 		patternPath := filepath.Join(home, ".gf", p+".json")
-		if _, err := os.Stat(patternPath); os.IsNotExist(err) {
-			return fmt.Errorf("required GF pattern %s.json missing in %s — clone https://github.com/1ndianl33t/Gf-Patterns into %s", p, filepath.Join(home, ".gf"), filepath.Join(home, ".gf"))
+		if _, err := os.Stat(patternPath); err != nil {
+			fmt.Printf("[DEBUG] Stat error for %s: %v\n", patternPath, err)
+			if os.IsNotExist(err) {
+				return fmt.Errorf("required GF pattern %s.json missing in %s — clone https://github.com/1ndianl33t/Gf-Patterns into %s", p, filepath.Join(home, ".gf"), filepath.Join(home, ".gf"))
+			}
+			return fmt.Errorf("error accessing GF pattern %s.json: %v", p, err)
 		}
 	}
 
