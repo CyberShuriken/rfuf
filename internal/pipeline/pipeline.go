@@ -297,7 +297,7 @@ exit 0`, wordlist, domain, wordlist)
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default", nil, 0},
 		{"subfinder", disc("subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "subfinder.txt"), "default", []string{"setup_directories"}, 0},
 		{"assetfinder", disc("assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "assetfinder.txt"), "default", []string{"setup_directories"}, 0},
-		{"amass_enum", disc("amass_enum", fmt.Sprintf("if ! amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "amass_raw.txt"), "default", []string{"setup_directories"}, 0},
+		{"amass_enum", disc("amass_enum", fmt.Sprintf("if ! timeout --foreground 10m amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "amass_raw.txt"), "default", []string{"setup_directories"}, 0},
 		{"amass_parse", disc("amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "amass_sub.txt"), "grep", []string{"amass_enum"}, 0},
 		{"merge_subs", "touch subfinder.txt assetfinder.txt amass_sub.txt; cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}, 0},
 		{"scope_guard", `set +e
@@ -1263,6 +1263,14 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 									_ = ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs)
 									outputMetrics = coverage.MeasureArtifacts(paths.WorkDir, outputs)
 									status = coverage.StatusCompletedEmpty
+
+								// If it's a soft stage that timed out, we treat it as completed_empty
+								// so the pipeline can proceed.
+								_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+								completed[step.ID] = true
+								cp.CompleteStep(step.ID)
+								mu.Unlock()
+								return
 								} else {
 									status = coverage.StatusTimedOut
 								}
