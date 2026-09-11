@@ -32,7 +32,6 @@ Output root: `~/Desktop/Bug_Bounty/<normalized-root-domain>/`. Both `example.com
 |---------|------|
 | `cmd/rfuf` | CLI flags: `-d`, `-resume`, `-v`, `-h`, `install` subcommand |
 | `cmd/filter-testable` | `package main` wrapper for `internal/filter`; reads stdin, writes pass-through URLs to stdout. Replaces the broken `go run ./internal/filter` reference. |
-| `cmd/scope-filter` | Standalone newline-delimited host/URL scope filter used by local workflows and fixture tests. |
 | `internal/scope` | Normalizes root or wildcard domains and matches only the exact root or proper subdomains. |
 | `internal/owasp` | Maps redacted evidence and stage health to OWASP Top 10:2025 coverage and generates the manual validation plan. |
 | `cmd/findings-runner` | `package main` wrapper that dispatches `<finder-name>` to `internal/findings/<name>.Run()`. One wrapper handles all 15+ finder modules. |

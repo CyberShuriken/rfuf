@@ -223,9 +223,21 @@ func main() {
 	if !*disableInteractsh {
 		if *interactshTimeout <= 0 {
 			fmt.Println("[*] OOB startup wait disabled; proceeding without interactsh")
-		} else if err := startInteractsh(*interactshServer, *interactshTimeout); err != nil {
-			fmt.Printf("[!] OOB callbacks unavailable: %v\n", err)
-			fmt.Println("    Continuing without OOB detection; use -disable-interactsh to suppress this check.")
+		} else {
+			var oobErr error
+			for i := 0; i < 3; i++ {
+				if oobErr = startInteractsh(*interactshServer, *interactshTimeout); oobErr == nil {
+					break
+				}
+				if i < 2 {
+					fmt.Printf("[!] OOB startup failed (attempt %d/3): %v. Retrying...\n", i+1, oobErr)
+					time.Sleep(2 * time.Second)
+				}
+			}
+			if oobErr != nil {
+				fmt.Printf("[!] OOB callbacks unavailable after 3 attempts: %v\n", oobErr)
+				fmt.Println("    Continuing without OOB detection; use -disable-interactsh to suppress this check.")
+			}
 		}
 		defer stopInteractsh()
 	}
