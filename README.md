@@ -45,6 +45,7 @@ step, and can resume exactly where it stopped.
 - **Single command, parallel pipeline** — intelligent dependency tracking
   allows multiple tools to run simultaneously (e.g., `subfinder`, `assetfinder`,
   and `amass` run in parallel) while ensuring data integrity.
+- **Hunter Pipeline with Feedback Loops** — shifts from a "200 OK only" filter to a high-interest stream (401, 403, 500) that feeds specialized bypass and spraying modules, incorporating OpenAPI specs and JS endpoints into a recursive discovery loop.
 - **Crash-safe checkpoints** — every completed step is written to
   `checkpoint.json`. Kill the process, restart, pick up where you stopped.
 - **Self-installing** — missing tools are detected and installed via
@@ -201,6 +202,7 @@ rfuf update                        # rebuild from the clone and replace the inst
 rfuf -d example.com                # exact host only
 rfuf -d '*.example.com'             # explicit wildcard: root + subdomains
 rfuf -d example.com -resume        # continue a previously interrupted scan (skips installer)
+rfuf -d example.com -wordlist /path/to/list.txt  # override default directory wordlist
 rfuf -d example.com -step-timeout 4h  # allow up to four hours per stage
 rfuf -d example.com -skip-install  # like -resume, but on a fresh scan (debug / CI)
 rfuf -d example.com -auth-cookie 'session=...' # replay an authorized session cookie

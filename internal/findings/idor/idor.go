@@ -1,30 +1,11 @@
-// Package idor implements F5: IDOR surface mapping.
-//
-// Real IDOR findings need two authenticated test accounts and a manual
-// "swap the ID and see if the other user sees the response" test. We
-// can't do that — the tool has no concept of authentication. What we
-// CAN do is build a high-signal candidate list:
-//
-//   1. Group every URL in all_urls.txt by the *name* of its object-
-//      reference parameter (id, user_id, account_id, ...).
-//   2. For each group, count the number of distinct hosts and the
-//      number of distinct IDs observed.
-//   3. Emit groups where (a) the param name is on our candidate list
-//      AND (b) the group spans ≥2 hosts or has ≥3 distinct IDs.
-//
-// A surface-map entry means: "this parameter on this kind of URL is
-// used in enough places to be worth setting up two test accounts for."
-// That's exactly the triage list a real hunter would build by hand.
-//
-// Output:
-//   - idor_surface.csv   with columns: param,host_count,id_count,
-//                        example_url,hosts
-//   - idor_surface.txt   same data, tab-separated, with severity
 package idor
 
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -108,12 +89,34 @@ var objectRefParams = map[string]bool{
 	"resourceid":    true,
 }
 
+var uuidRegex = regexp.MustCompile(`(?i)[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
+var seqIDRegex = regexp.MustCompile(`^[0-9]{3,}$`)
+
 // paramGroup accumulates host/id info for one parameter name.
 type paramGroup struct {
 	param    string
 	hosts    map[string]struct{}
 	ids      map[string]struct{}
 	firstURL string
+}
+
+func flagBOLA(workDir, url, param, value string) {
+	planPath := filepath.Join(workDir, "MANUAL_TEST_PLAN.md")
+
+	// Ensure template exists
+	if _, err := os.Stat(planPath); os.IsNotExist(err) {
+		template := "# Manual Test Plan\n\n## BOLA / IDOR Checks\n"
+		_ = os.WriteFile(planPath, []byte(template), 0644)
+	}
+
+	f, err := os.OpenFile(planPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	entry := fmt.Sprintf("\n- [ ] **Two-Account Test (BOLA)**\n  - URL: %s\n  - Param: `%s`\n  - Sample Value: `%s`\n  - Test: Swap this ID with an ID from a second account and check for unauthorized access.\n", url, param, value)
+	f.WriteString(entry)
 }
 
 // Run is the entry point. workDir is the rfuf work dir.
@@ -143,6 +146,14 @@ func Run(workDir string) error {
 			if !objectRefParams[strings.ToLower(name)] {
 				continue
 			}
+
+			// Auto-flag BOLA candidates
+			for _, v := range vs {
+				if v != "" && (uuidRegex.MatchString(v) || seqIDRegex.MatchString(v)) {
+					flagBOLA(workDir, raw, name, v)
+				}
+			}
+
 			g, ok := groups[name]
 			if !ok {
 				g = &paramGroup{
@@ -166,7 +177,6 @@ func Run(workDir string) error {
 
 	var csvLines, txtLines []string
 	csvLines = append(csvLines, "param,host_count,id_count,example_url")
-	// Sort by host_count desc, then id_count desc — top candidates first.
 	keys := make([]string, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
@@ -180,8 +190,6 @@ func Run(workDir string) error {
 	})
 	for _, k := range keys {
 		g := groups[k]
-		// Heuristic threshold: at least 2 hosts OR at least 3 IDs.
-		// Single-host / single-id URLs are background noise.
 		if len(g.hosts) < 2 && len(g.ids) < 3 {
 			continue
 		}

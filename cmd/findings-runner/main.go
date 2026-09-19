@@ -6,20 +6,14 @@
 //	go run ./cmd/findings-runner <finder-name> <workdir>
 //
 // and the runner dispatches to the right module's Run() function.
-//
 // This single wrapper means we don't need a per-finder main.go (which
 // would add 10 nearly-identical files). Adding a new finder = (1)
 // write `Run()` in internal/findings/<name>/ and (2) add a case to
 // the switch below. The pipeline wires the new stage by appending a
 // Step{ID: "<name>", Command: "go run ./cmd/findings-runner <name> ..."}
 // to pipeline.go's GetSteps().
-//
-// Why a single wrapper rather than per-module `go run
-// ./internal/findings/<name>`: a package with package declaration
-// `package <name>` cannot be the target of `go run` — `go run` only
-// accepts `package main` targets. Going via cmd/findings-runner keeps
-// the finder packages as testable libraries (their tests live next to
-// them) while presenting a single executable to the pipeline.
+// The runner exits 0 on no-findings so every step
+// succeeds even when the input is empty / missing.
 package main
 
 import (
@@ -43,6 +37,14 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/findings/cors2"
 	"github.com/CyberShuriken/rfuf/internal/findings/hostheader"
 	"github.com/CyberShuriken/rfuf/internal/findings/secheaders"
+	"github.com/CyberShuriken/rfuf/internal/findings/specparser"
+	"github.com/CyberShuriken/rfuf/internal/findings/bypass403"
+	"github.com/CyberShuriken/rfuf/internal/findings/paramsprayer"
+	"github.com/CyberShuriken/rfuf/internal/findings/envsecrets"
+	"github.com/CyberShuriken/rfuf/internal/findings/gitexposure"
+	"github.com/CyberShuriken/rfuf/internal/findings/nextjsbypass"
+	"github.com/CyberShuriken/rfuf/internal/findings/s3auditor"
+	"github.com/CyberShuriken/rfuf/internal/findings/apiversion"
 )
 
 func main() {
@@ -83,4 +85,12 @@ var dispatch = map[string]func(workDir string) error{
 	"businesslogic": businesslogic.Run,
 	"hostheader":    hostheader.Run,
 	"cors2":         cors2.Run,
+	"specparser":    specparser.Run,
+	"paramsprayer":    paramsprayer.Run,
+	"bypass403":    bypass403.Run,
+	"envsecrets":    envsecrets.Run,
+	"gitexposure":   gitexposure.Run,
+	"nextjsbypass":  nextjsbypass.Run,
+	"s3auditor":     s3auditor.Run,
+	"apiversion":    apiversion.Run,
 }

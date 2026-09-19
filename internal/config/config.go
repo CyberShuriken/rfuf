@@ -20,6 +20,10 @@ type Paths struct {
 	// Default for ffuf — fewer false positives and ~7x faster against the
 	// same number of hosts. Falls back to SeclistsDirWordlist at use site.
 	SeclistsDirWordlistSmall string
+	// AssetnoteWordlist is the Assetnote curated wordlist.
+	AssetnoteWordlist string
+	// UserWordlist is a wordlist override provided via CLI flag.
+	UserWordlist string
 }
 
 func ResolvePaths(domain string) (*Paths, error) {
@@ -38,7 +42,8 @@ func ResolvePaths(domain string) (*Paths, error) {
 
 	nucleiTemplates := resolveNucleiTemplates(home)
 	gfPatterns := filepath.Join(home, ".gf")
-	seclistsWordlist, seclistsWordlistSmall := resolveSeclists(home)
+		seclistsWordlist, seclistsWordlistSmall := resolveSeclists(home)
+		assetnoteWordlist := resolveAssetnote(home)
 
 	// Resolve the bundled nuclei-templates-rfuf overlay directory.
 	// We look relative to the running binary's location first (installed
@@ -55,6 +60,7 @@ func ResolvePaths(domain string) (*Paths, error) {
 		GoBin:                    goBin,
 		SeclistsDirWordlist:      seclistsWordlist,
 		SeclistsDirWordlistSmall: seclistsWordlistSmall,
+			AssetnoteWordlist: assetnoteWordlist,
 	}, nil
 }
 
@@ -122,6 +128,20 @@ func resolveNucleiTemplatesRfuf() string {
 		}
 	}
 
+	return ""
+}
+
+func resolveAssetnote(home string) string {
+	locs := []string{
+		"/usr/share/wordlists/assetnote/directories.txt",
+		filepath.Join(home, "wordlists", "assetnote", "directories.txt"),
+		filepath.Join(home, "SecLists", "Discovery", "Web-Content", "assetnote-directories.txt"),
+	}
+	for _, loc := range locs {
+		if _, err := os.Stat(loc); err == nil {
+			return loc
+		}
+	}
 	return ""
 }
 

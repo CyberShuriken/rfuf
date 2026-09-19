@@ -18,6 +18,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -25,14 +26,18 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: filter-testable <workdir> [input-file]")
+	highInterest := flag.Bool("high-interest", false, "Allow URLs without query parameters (for high-interest stream)")
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: filter-testable [--high-interest] <workdir> [input-file]")
 		os.Exit(2)
 	}
-	workDir := os.Args[1]
+	workDir := args[0]
 	inPath := workDir + "/all_urls_200.txt"
-	if len(os.Args) >= 3 {
-		inPath = os.Args[2]
+	if len(args) >= 2 {
+		inPath = args[1]
 	}
 
 	// FilterFile wants an output path on disk; write to a temp file
@@ -43,7 +48,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "filter-testable: mkdir: %v\n", err)
 		os.Exit(1)
 	}
-	if _, _, _, err := filter.FilterFile(inPath, outPath); err != nil {
+	if _, _, _, err := filter.FilterFile(inPath, outPath, *highInterest); err != nil {
 		fmt.Fprintf(os.Stderr, "filter-testable: %v\n", err)
 		os.Exit(1)
 	}

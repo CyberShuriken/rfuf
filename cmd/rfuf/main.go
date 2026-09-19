@@ -46,6 +46,24 @@ func main() {
 				os.Exit(1)
 			}
 			return
+			case "clean":
+				cleanDomain := flag.String("d", "", "Target domain to clean workspace for")
+				flag.CommandLine.Parse(os.Args[2:])
+				if *cleanDomain == "" {
+					fmt.Println("Usage: rfuf clean -d <domain>")
+					os.Exit(1)
+				}
+				paths, err := config.ResolvePaths(*cleanDomain)
+					if err != nil {
+						fmt.Printf("[!] failed to resolve paths: %v\n", err)
+						os.Exit(1)
+					}
+				if err := pipeline.CleanWorkspace(paths); err != nil {
+					fmt.Printf("[!] cleanup failed: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("[+] Workspace for %s cleaned successfully\n", *cleanDomain)
+				return
 		}
 	}
 
@@ -54,6 +72,7 @@ func main() {
 	stepTimeout := flag.Duration("step-timeout", 30*time.Minute, "Maximum runtime for each pipeline step (0 disables the limit). Default lowered from 2h so a single hung tool can't block the dashboard; bump to 2h on big targets with `rfuf -d X -step-timeout 2h`.")
 	maxTargets := flag.Int("max-targets", 10000, "Maximum URLs retained in the final scoped target streams.")
 	maxStageRequests := flag.Int("max-stage-requests", 300, "Per-tool request-rate ceiling passed to scanners that support a rate flag.")
+		userWordlist := flag.String("wordlist", "", "Override the default directory wordlist with a specific file path.")
 	skipInstall := flag.Bool("skip-install", false, "Skip dependency installation entirely (fastest resume path — use only if you trust your $PATH)")
 
 	// Auth mode — injected as env vars into every shell command. Stage
@@ -142,6 +161,7 @@ func main() {
 	// 1. Resolve Paths using the normalized root so wildcard and non-wildcard
 	// invocations resume into the same per-domain work directory.
 	paths, err := config.ResolvePaths(normalizedDomain)
+		paths.UserWordlist = *userWordlist
 	if err != nil {
 		fmt.Printf("[!] Error resolving paths: %v\n", err)
 		os.Exit(1)
@@ -418,7 +438,6 @@ func startInteractsh(server string, startupTimeout time.Duration) error {
 	}
 	cmd := exec.Command("interactsh-client",
 		"-server", server,
-		"-no-http-server",
 		"-v",
 	)
 	stdoutR, err := cmd.StdoutPipe()
@@ -434,15 +453,19 @@ func startInteractsh(server string, startupTimeout time.Duration) error {
 	// Scan the first ~50 lines for the URL pattern. interactsh-client
 	// prints it within the first second of startup.
 	urlCh := make(chan string, 1)
-	go func() {
-		scanner := bufio.NewScanner(stdoutR)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if i := strings.Index(line, "https://"); i >= 0 {
-				candidate := strings.TrimSpace(line[i:])
-				// Strip trailing punctuation/quotes that may trail
-				candidate = strings.TrimRight(candidate, " \t\r\n,;]})\"]'")
-				if strings.Contains(candidate, ".oast.fun") || strings.Contains(candidate, ".") {
+		go func() {
+			scanner := bufio.NewScanner(stdoutR)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.Contains(line, ".oast.fun") || (strings.Contains(line, "https://") && strings.Contains(line, ".oast.fun")) {
+					candidate := strings.TrimSpace(line)
+					words := strings.Fields(candidate)
+					if len(words) > 0 {
+						candidate = words[len(words)-1]
+					}
+					if !strings.HasPrefix(candidate, "http") {
+						candidate = "https://" + candidate
+					}
 					select {
 					case urlCh <- candidate:
 					default:
@@ -450,8 +473,7 @@ func startInteractsh(server string, startupTimeout time.Duration) error {
 					return
 				}
 			}
-		}
-	}()
+		}()
 
 	select {
 	case url := <-urlCh:

@@ -61,7 +61,7 @@ func TestIsTestableURL(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got := IsTestableURL(c.url)
 			if got != c.want {
-				got2, _ := ClassifyURL(c.url)
+				got2, _ := ClassifyURL(c.url, false)
 				t.Errorf("IsTestableURL(%q) = %v, want %v (reason: %s)", c.url, got, c.want, got2.Reason)
 			}
 		})
@@ -80,7 +80,7 @@ func TestClassifyURL_ReasonString(t *testing.T) {
 		{"https://community.example.com/t/foo/123?ref=1", "discourse public path"},
 	}
 	for _, c := range cases {
-		r, ok := ClassifyURL(c.url)
+		r, ok := ClassifyURL(c.url, false)
 		if ok {
 			t.Errorf("expected %q to be rejected, was passed", c.url)
 			continue
@@ -99,7 +99,7 @@ https://example.com/article?page=2
 https://example.com/about
 `)
 	var out bytes.Buffer
-	dropped, totalIn, totalOut, err := FilterURLs(in, &out)
+	dropped, totalIn, totalOut, err := FilterURLs(in, &out, false)
 	if err != nil {
 		t.Fatalf("FilterURLs: %v", err)
 	}
@@ -129,7 +129,7 @@ https://example.com/about
 func TestFilterURLs_BlankLinesIgnored(t *testing.T) {
 	in := strings.NewReader("\n\nhttps://example.com/?id=1\n\n\nhttps://example.com/?id=2\n\n")
 	var out bytes.Buffer
-	_, totalIn, totalOut, err := FilterURLs(in, &out)
+	_, totalIn, totalOut, err := FilterURLs(in, &out, false)
 	if err != nil {
 		t.Fatalf("FilterURLs: %v", err)
 	}
@@ -142,14 +142,10 @@ func TestFilterURLs_BlankLinesIgnored(t *testing.T) {
 }
 
 func TestFilterURLs_LongLine(t *testing.T) {
-	// Build a 700-char URL with a query string. Default scanner buffer is
-	// 64 KiB so this is fine, but we want to confirm long URLs work.
-	// Note: values >200 chars are rejected as "no fuzzable value" — that's
-	// correct behavior. We test 150-char value to stay under the cap.
 	long := "https://example.com/api?q=" + strings.Repeat("a", 150)
 	in := strings.NewReader(long + "\n")
 	var out bytes.Buffer
-	_, totalIn, totalOut, err := FilterURLs(in, &out)
+	_, totalIn, totalOut, err := FilterURLs(in, &out, false)
 	if err != nil {
 		t.Fatalf("FilterURLs: %v", err)
 	}
@@ -159,12 +155,10 @@ func TestFilterURLs_LongLine(t *testing.T) {
 }
 
 func TestFilterURLs_OverlongValueRejected(t *testing.T) {
-	// Values >200 chars are excluded — sqlmap/nuclei can't fuzz meaningfully
-	// past 200 chars and they bloat the target list.
 	long := "https://example.com/api?q=" + strings.Repeat("a", 700)
 	in := strings.NewReader(long + "\n")
 	var out bytes.Buffer
-	dropped, totalIn, totalOut, err := FilterURLs(in, &out)
+	dropped, totalIn, totalOut, err := FilterURLs(in, &out, false)
 	if err != nil {
 		t.Fatalf("FilterURLs: %v", err)
 	}
