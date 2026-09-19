@@ -63,72 +63,74 @@ type Step struct {
 var (
 	uiLock sync.Mutex
 
-		stepTools = map[string]string{
-			"subfinder":            "subfinder",
-			"assetfinder":         "assetfinder",
-			"crtsh":               "curl",
-			"scope_guard":          "awk",
-			"katana_crawl":         "katana",
-			"gau_urls":             "gau",
-			"wayback_urls":         "waybackurls",
-			"dirbrute_ffuf":        "ffuf",
-			"sqlmap_scan":          "sqlmap",
-			"xss_scan":             "dalfox",
-			"nuclei_exposures":     "nuclei",
-			"nuclei_misconfigs":    "nuclei",
-			"nuclei_auth_scan":     "nuclei",
-			"nuclei_graphql_scan":   "nuclei",
-			"nuclei_rfuf_pass":     "nuclei",
-			"waf_detect":           "wafw00f",
-			"port_scan_naabu":      "naabu",
-			"hidden_params_arjun":  "arjun",
-			"ghauri_sqli":          "ghauri",
-		}
-			softStages = map[string]bool{
-			"scope_guard":          true,
-			"crtsh":               true,
-			"subfinder":            true,
-			"assetfinder":         true,
-			"jsmap_scrape":         true,
-			"hidden_params_arjun":  true,
-			"katana_crawl":         true,
-			"merge_brute_subs":     true,
-			"merge_js_endpoints":   true,
-			"dirbrute_ffuf":        true,
-			"gau_urls":             true,
-			"wayback_urls":         true,
-			"sqlmap_scan":          true,
-			"xss_scan":             true,
-			"nuclei_exposures":     true,
-			"nuclei_misconfigs":    true,
-			"nuclei_auth_scan":     true,
-			"nuclei_graphql_scan":   true,
-			"nuclei_rfuf_pass":     true,
-			"env_secrets_run":       true,
-			"git_exposure_run":      true,
-			"nextjs_bypass_run":    true,
-			"paramsprayer_run":      true,
-			"s3_audit_run":         true,
-			"api_version_gen":      true,
-			"idor_run":             true,
-			"waf_detect":            true,
-			"port_scan_naabu":      true,
-		}
+	stepTools = map[string]string{
+		"subfinder":           "subfinder",
+		"assetfinder":         "assetfinder",
+		"amass_enum":          "amass",
+		"crtsh":               "curl",
+		"scope_guard":         "awk",
+		"katana_crawl":        "katana",
+		"gau_urls":            "gau",
+		"wayback_urls":        "waybackurls",
+		"dirbrute_ffuf":       "ffuf",
+		"sqlmap_scan":         "sqlmap",
+		"xss_scan":            "dalfox",
+		"nuclei_exposures":    "nuclei",
+		"nuclei_misconfigs":   "nuclei",
+		"nuclei_auth_scan":    "nuclei",
+		"nuclei_graphql_scan": "nuclei",
+		"nuclei_rfuf_pass":    "nuclei",
+		"waf_detect":          "wafw00f",
+		"port_scan_naabu":     "naabu",
+		"hidden_params_arjun": "arjun",
+		"ghauri_sqli":         "ghauri",
+	}
+	softStages = map[string]bool{
+		"scope_guard":         true,
+		"crtsh":               true,
+		"subfinder":           true,
+		"assetfinder":         true,
+		"amass_enum":          true,
+		"jsmap_scrape":        true,
+		"hidden_params_arjun": true,
+		"katana_crawl":        true,
+		"merge_brute_subs":    true,
+		"merge_js_endpoints":  true,
+		"dirbrute_ffuf":       true,
+		"gau_urls":            true,
+		"wayback_urls":        true,
+		"sqlmap_scan":         true,
+		"xss_scan":            true,
+		"nuclei_exposures":    true,
+		"nuclei_misconfigs":   true,
+		"nuclei_auth_scan":    true,
+		"nuclei_graphql_scan": true,
+		"nuclei_rfuf_pass":    true,
+		"env_secrets_run":     true,
+		"git_exposure_run":    true,
+		"nextjs_bypass_run":   true,
+		"paramsprayer_run":    true,
+		"s3_audit_run":        true,
+		"api_version_gen":     true,
+		"idor_run":            true,
+		"waf_detect":          true,
+		"port_scan_naabu":     true,
+	}
 
-	nucleiOptimized = " -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 50 -bs 25 -timeout 5 -retries 1 -silent -stats -stats-interval 30"
-	maxScanTargets = 5000
-	urlMinerTimeout = "10m"
-	sqlmapScanTimeout = "15m"
-	xssScanTimeout = "10m"
-	xssScanTargetCap = 500
-	sqlmapTargetCap = 300
+	nucleiOptimized        = " -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 50 -bs 25 -timeout 5 -retries 1 -silent -stats -stats-interval 30"
+	maxScanTargets         = 5000
+	urlMinerTimeout        = "10m"
+	sqlmapScanTimeout      = "15m"
+	xssScanTimeout         = "10m"
+	xssScanTargetCap       = 500
+	sqlmapTargetCap        = 300
 	sqlmapHighSignalParams = "[?&](id|uid|user|account|order|doc|product|category|page|article|comment|msg|post|search|query|sort|filter|view|file|path|load|page_id|item_id|news_id|report_id|invoice)="
-	ghauriTargetCap = 200
-	jsAssetTotalCap     = 5000
-	nucleiTargetCap     = 10000
-	katanaTargetCap     = 200
-	katanaCrawlDuration = "10m"
-	katanaStepTimeout   = 12 * time.Minute
+	ghauriTargetCap        = 200
+	jsAssetTotalCap        = 5000
+	nucleiTargetCap        = 10000
+	katanaTargetCap        = 200
+	katanaCrawlDuration    = "10m"
+	katanaStepTimeout      = 12 * time.Minute
 )
 
 const filterTestableRef = "go run ./cmd/filter-testable"
@@ -204,8 +206,10 @@ exit 0`, wordlist, domain, wordlist)
 		{"setup_directories", fmt.Sprintf("mkdir -p %s", paths.WorkDir), "default", "default", nil, 0},
 		{"subfinder", disc("subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "subfinder.txt"), "subfinder", "default", []string{"setup_directories"}, 0},
 		{"assetfinder", disc("assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "assetfinder.txt"), "assetfinder", "default", []string{"setup_directories"}, 0},
+		{"amass_enum", disc("amass_enum", fmt.Sprintf("if ! timeout --foreground 10m amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "amass_raw.txt"), "amass", "default", []string{"setup_directories"}, 0},
+		{"amass_parse", disc("amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "amass_sub.txt"), "grep", "grep", []string{"amass_enum"}, 0},
 		{"crtsh", fmt.Sprintf("curl -s \"https://crt.sh/?q=%%25.%s&output=json\" | jq -r '.[] | .name_value' | sort -u > crtsh.txt", domain), "curl", "default", []string{"setup_directories"}, 0},
-		{"merge_subs", "touch subfinder.txt assetfinder.txt crtsh.txt; cat subfinder.txt assetfinder.txt crtsh.txt | sort -u > subs.txt", "cat", "default", []string{"subfinder", "assetfinder", "crtsh"}, 0},
+		{"merge_subs", "touch subfinder.txt assetfinder.txt amass_sub.txt crtsh.txt; cat subfinder.txt assetfinder.txt amass_sub.txt crtsh.txt | sort -u > subs.txt", "cat", "default", []string{"subfinder", "assetfinder", "amass_parse", "crtsh"}, 0},
 		{"scope_guard", `set +e
 ROOT=$(printf '%s' "$RFUF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
 [ -f subs.txt ] || : > subs.txt
@@ -624,7 +628,20 @@ exit 0`, "grep", "grep", []string{"merge_all_urls"}, 0},
   | grep -Ev '\.(eot|woff2?|ttf|svg|otf|png|jpe?g|gif|ico|css|js|pdf|map|mp[34])([?#]|$)' \
   | sort -u > manual_business_logic_review.txt
 exit 0`, "grep", "grep", []string{"merge_all_urls"}, 0},
-		{"waf_detect", "if command -v wafw00f >/dev/null 2>&1; then head -n 200 alive.txt > waf_targets_tmp.txt; wafw00f -i waf_targets_tmp.txt -o waf_detections.txt; else : > waf_targets_tmp.txt : > waf_detections.txt; fi", "wafw00f", "grep", []string{"httpx_probe"}, 0},
+		{"waf_detect", `set +e
+: > waf_targets_tmp.txt
+: > waf_detections.txt
+if command -v wafw00f >/dev/null 2>&1; then
+  # alive.txt contains httpx metadata (status, title, and technologies),
+  # while wafw00f expects one URL per line. Keep only the URL column and
+  # retain a bounded input so a wildcard scope cannot create an unbounded
+  # WAF fingerprinting stage.
+  awk '{print $1}' alive.txt 2>/dev/null | sed '/^$/d' | head -n 200 > waf_targets_tmp.txt
+  if [ -s waf_targets_tmp.txt ]; then
+    wafw00f -i waf_targets_tmp.txt -o waf_detections.txt >/dev/null 2>&1 || :
+  fi
+fi
+exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
 		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt; else : > naabu_ports.txt; fi", "naabu", "grep", []string{"httpx_probe"}, 0},
 		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -oT hidden_params.txt -t 10 --rate-limit 10; rm -f arjun_targets_tmp.txt; else : > hidden_params.txt; fi", "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt; else : > ghauri_results.txt; fi", "ghauri", "grep", []string{"sqli_targets_replace"}, 0},
@@ -856,15 +873,15 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					continue
 				}
 
-					if tool, ok := stepTools[s.ID]; ok {
-						if _, err := exec.LookPath(tool); err != nil {
-							now := time.Now()
-							_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: s.ID, Required: stageRequired(s.ID), Dependencies: s.Deps, Status: coverage.StatusSkipped, StartedAt: now, FinishedAt: now, SkipReason: "tool_missing"})
-							completed[s.ID] = true
-							cp.CompleteStep(s.ID)
-							continue
-						}
+				if tool, ok := stepTools[s.ID]; ok {
+					if _, err := exec.LookPath(tool); err != nil {
+						now := time.Now()
+						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: s.ID, Required: stageRequired(s.ID), Dependencies: s.Deps, Status: coverage.StatusSkipped, StartedAt: now, FinishedAt: now, SkipReason: "tool_missing"})
+						completed[s.ID] = true
+						cp.CompleteStep(s.ID)
+						continue
 					}
+				}
 				running[s.ID] = true
 				startedAny = true
 				wg.Add(1)
@@ -1072,7 +1089,7 @@ func stageArtifacts(step Step) (inputs, outputs []string) {
 		"scope_guard":         {"scope.json", "in_scope_hosts.txt", "out_of_scope_hosts.txt", "scoped_subs.txt"},
 		"subfinder":           {"subfinder.txt"},
 		"assetfinder":         {"assetfinder.txt"},
-			"crtsh":               {"crtsh.txt"},
+		"crtsh":               {"crtsh.txt"},
 		"amass_enum":          {"amass_raw.txt"},
 		"dnsx_resolve":        {"live_subs.txt"},
 		"httpx_probe":         {"alive.txt"},
@@ -1174,7 +1191,7 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 // CleanWorkspace removes temporary, redundant, and empty artifact directories from the work directory.
 func CleanWorkspace(paths *config.Paths) error {
 	workDir := paths.WorkDir
-	
+
 	// 1. Delete Trash (*.tmp, *.log, *.status)
 	files, err := os.ReadDir(workDir)
 	if err != nil {
