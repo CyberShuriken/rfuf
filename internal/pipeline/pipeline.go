@@ -912,6 +912,15 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					inputMetrics := coverage.MeasureArtifacts(paths.WorkDir, inputs)
 					outputMetrics := coverage.MeasureArtifacts(paths.WorkDir, outputs)
 					if err != nil {
+						if softStages[step.ID] {
+							_ = ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs)
+							outputMetrics = coverage.MeasureArtifacts(paths.WorkDir, outputs)
+							_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusCompletedEmpty, StartedAt: started, FinishedAt: time.Now(), ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+							completed[step.ID] = true
+							cp.CompleteStep(step.ID)
+							mu.Unlock()
+							return
+						}
 						now := time.Now()
 						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusFailed, StartedAt: started, FinishedAt: now, ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						mu.Unlock()
@@ -1035,6 +1044,7 @@ func stageRequired(stepID string) bool {
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	materializeStages := map[string]bool{
 		"scope_guard":         true,
+		"amass_enum":          true,
 		"jsmap_scrape":        true,
 		"hidden_params_arjun": true,
 		"merge_brute_subs":    true,
