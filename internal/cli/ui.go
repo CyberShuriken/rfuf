@@ -39,6 +39,9 @@ type Stats struct {
 	OpenPorts       int
 	HiddenParams    int
 	GhauriSQLi      int
+	Misconfigs      int
+	Credentials     int
+	NucleiPass      int
 	CoverageStatus  string
 	TotalStages     int
 	CompletedStages int

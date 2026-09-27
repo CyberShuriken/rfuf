@@ -133,8 +133,19 @@ var (
 	katanaStepTimeout      = 12 * time.Minute
 )
 
-const filterTestableRef = "go run ./cmd/filter-testable"
-const findingsRunnerRef = "go run ./cmd/findings-runner"
+// selfBin returns the absolute path to the running rfuf binary so
+// pipeline stages can invoke `rfuf findings` / `rfuf filter-testable`
+// without `go run` (which fails when cmd.Dir is the per-domain work dir).
+func selfBin() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "rfuf"
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		return resolved
+	}
+	return exe
+}
 
 func buildAuthHeaderSnippet() string {
 	return `
@@ -176,6 +187,9 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
 	wordlist := pickWordlist(paths)
 	authSnip := buildAuthHeaderSnippet()
+	self := selfBin()
+	filterTestableRef := self + " filter-testable"
+	findingsRunnerRef := self + " findings"
 	wildcardPattern := fmt.Sprintf(`^https?://([^/]+\.)?%s(/|$|[[:space:]])`, domainEscaped)
 	if scanScope.Mode == scope.ExactMode {
 		wildcardPattern = fmt.Sprintf(`^https?://%s(/|$|[[:space:]])`, domainEscaped)
@@ -241,7 +255,7 @@ touch scope.json in_scope_hosts.txt out_of_scope_hosts.txt scoped_subs.txt`, "aw
 		{"subdomain_brute", subdomainBruteCmd, "dnsx", "grep", []string{"dnsx_resolve"}, 0},
 		{"merge_brute_subs", "cat scoped_subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "cat", "default", []string{"subdomain_brute"}, 0},
 		{"httpx_probe", fmt.Sprintf("%s\nhttpx -l live_subs.txt -silent -status-code -title -tech-detect -o alive.txt", authSnip), "httpx", "default", []string{"merge_brute_subs"}, 0},
-		{"s3_audit_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner s3auditor .", authSnip), "findings-runner", "default", []string{"httpx_probe"}, 0},
+		{"s3_audit_run", fmt.Sprintf("%s\n%s s3auditor .\nexit 0", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"httpx_probe"}, 0},
 		{"tech_fingerprint", "httpx -l alive.txt -silent -tech-detect -o tech_fingerprint.txt", "httpx", "default", []string{"httpx_probe"}, 0},
 		{"api_discovery", fmt.Sprintf(`%s
 set +e
@@ -249,18 +263,30 @@ mkdir -p api_specs
 fetch_spec() {
   HOST=$1
   SAFE_HOST=$(echo "$HOST" | sed 's|https\?://||;s|[:/.]|_|g')
-  for PATH in /openapi.json /swagger.json /api/openapi.json /api/swagger.json /sitemap.xml /robots.txt /.well-known/openid-configuration; do
-    URL="${HOST}${PATH}"
-    if curl -sk --max-time 5 -o "${SAFE_HOST}$(echo $PATH | sed 's|^/||;s|/|_|g').json" "$URL" && [ -s "${SAFE_HOST}$(echo $PATH | sed 's|^/||;s|/|_|g').json" ]; then
+  for SPEC_PATH in /openapi.json /swagger.json /api/openapi.json /api/swagger.json /sitemap.xml /robots.txt /.well-known/openid-configuration; do
+    URL="${HOST}${SPEC_PATH}"
+    OUT="api_specs/${SAFE_HOST}$(echo "$SPEC_PATH" | sed 's|^/||;s|/|_|g').json"
+    if curl -sk --max-time 5 -o "$OUT" "$URL" && [ -s "$OUT" ]; then
       echo "[+] Found spec: $URL"
     fi
   done
 }
 export -f fetch_spec
-cat alive.txt | xargs -P 10 -I{} bash -c 'fetch_spec "{}"'
+cat alive.txt | awk '{print $1}' | xargs -P 10 -I{} bash -c 'fetch_spec "{}"'
 exit 0`, authSnip), "curl", "default", []string{"httpx_probe"}, 0},
 		{"jsmap_scrape", fmt.Sprintf(`%s
 set +e
+mkdir -p js_bundles endpoints_found js_secrets
+: > js_assets.txt
+: > js_asset_errors.txt
+: > js_endpoints.txt
+: > js_secrets.txt
+fetch_asset() {
+  URL="$1"; OUT="$2"
+  mkdir -p "$(dirname "$OUT")"
+  curl -skL --max-time 15 "${AUTH_HEADERS[@]}" -o "$OUT" "$URL"
+  [ -s "$OUT" ]
+}
 resolve_asset() {
   REF="$1"; BASE="$2"
   case "$REF" in
@@ -285,7 +311,7 @@ while read -r HOST; do
     echo "$FULL" | grep -Eiq '\\.(js|mjs|map|json|webmanifest)([?#].*)?$|/(manifest|asset-manifest|build-manifest|routes-manifest)(\\.json)?([?#].*)?$|/_next/static/' || continue
     echo "$FULL" >> js_assets.txt
   done
-done < alive.txt
+done < <(awk '{print $1}' alive.txt)
 sort -u js_assets.txt -o js_assets.txt
 head -n %d js_assets.txt > js_assets.capped && mv js_assets.capped js_assets.txt
 while read -r FULL_URL; do
