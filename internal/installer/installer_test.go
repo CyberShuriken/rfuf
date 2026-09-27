@@ -1,7 +1,9 @@
 package installer
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -113,4 +115,81 @@ func TestEveryInstalledDependencyIsPinned(t *testing.T) {
 			t.Errorf("core dependency %s must not be optional", tool.Name)
 		}
 	}
+}
+
+func TestPinnedGitFallbackCommitsAreImmutable(t *testing.T) {
+	for name, commit := range map[string]string{"GF patterns": GFPatternsCommit, "SecLists": SecListsCommit} {
+		if len(commit) != 40 {
+			t.Errorf("%s fallback commit is not a full SHA-1: %q", name, commit)
+		}
+		for _, r := range commit {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+				t.Errorf("%s fallback commit is not hexadecimal: %q", name, commit)
+				break
+			}
+		}
+	}
+}
+
+func TestInstalledVersionUsesBoundedFakeExecutable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fake-tool")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho fake-tool v1.2.3\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := installedVersion(path); got != "fake-tool v1.2.3" {
+		t.Fatalf("installedVersion() = %q", got)
+	}
+}
+
+func TestSupportedGoVersionFloor(t *testing.T) {
+	for _, version := range []string{"go1.22.2", "go1.23.0", "go2.0.0"} {
+		if err := validateGoVersion(version); err != nil {
+			t.Errorf("supported Go %s rejected: %v", version, err)
+		}
+	}
+	for _, version := range []string{"go1.22.1", "go1.21.13", "invalid"} {
+		if err := validateGoVersion(version); err == nil {
+			t.Errorf("unsupported Go version %q accepted", version)
+		}
+	}
+}
+
+func TestDependencyPreflightWithControlledPath(t *testing.T) {
+	fakeToolPath(t, "")
+	if err := VerifyToolsPresent(); err != nil {
+		t.Fatalf("all controlled required tools should pass preflight: %v", err)
+	}
+}
+
+func TestDependencyPreflightFailsForMissingRequiredTool(t *testing.T) {
+	binDir := fakeToolPath(t, "dnsx")
+	if err := VerifyToolsPresent(); err == nil || !containsCmd(err.Error(), "dnsx") {
+		t.Fatalf("missing required dnsx must fail preflight clearly, got %v", err)
+	}
+	_ = binDir
+}
+
+func fakeToolPath(t *testing.T, omit string) string {
+	t.Helper()
+	binDir := t.TempDir()
+	names := append([]string{"bash"}, toolBinaries()...)
+	for _, name := range names {
+		if name == omit {
+			continue
+		}
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n[ \"$1\" = \"--version\" ] && echo fixture-v1\nexit 0\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir)
+	return binDir
+}
+
+func toolBinaries() []string {
+	var names []string
+	for _, tool := range GetRequiredTools("") {
+		names = append(names, tool.CheckBinary)
+	}
+	return append(names, "curl", "jq", "timeout", "awk", "grep", "sort", "sed", "xargs", "git", "sqlmap")
 }

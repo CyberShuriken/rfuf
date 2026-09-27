@@ -1,5 +1,10 @@
 bin/
-rfuf
+/rfuf
+/findings-runner
+/filter-testable
+*.test
+coverage.out
+/dist/
 *.log
 .rfuf/
 /Bug_Bounty/

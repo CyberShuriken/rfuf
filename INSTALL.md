@@ -21,6 +21,16 @@ Or build and install in a single command (from the repo root):
 make build && ./bin/rfuf install
 ```
 
+For CI and isolated bootstrap checks, use the non-interactive install mode:
+
+```bash
+./bin/rfuf install --non-interactive
+```
+
+It builds from the current source tree, installs the binary and symlink under
+`$HOME`, and does not read stdin or modify shell startup files. Run
+`rfuf preflight` afterward to verify dependencies without starting a scan.
+
 ### What `rfuf install` does
 
 1. **Builds the binary** from the current source tree (uses `go build`).
@@ -74,6 +84,7 @@ executor code.
 ```bash
 which rfuf        # → ~/.local/bin/rfuf
 rfuf -v            # → rfuf version 2.4.10
+rfuf preflight     # dependency table; nonzero if a required tool is missing
 ```
 
 Run a no-op help check from an unrelated directory to confirm:
@@ -119,14 +130,38 @@ add that directory to your shell's `PATH` export.
 
 ## Requirements recap
 
-- Go 1.22+ (only needed if you build from source)
+- Go 1.22.2+ (only needed if you build from source or bootstrap Go tools)
 - a writable home directory
 - A POSIX shell — bash or zsh
 
 Recon tools (`subfinder`, `dnsx`, `httpx`, etc.) are **not** installed
-by `rfuf install`. Those are bootstrapped automatically the first time
-you run `rfuf -d <domain>`. See the main [README](README.md) for the
-full pipeline.
+by the `rfuf install` command. They are bootstrapped before pipeline start
+on the first ordinary `rfuf -d <domain>` run. The installer pins tool
+versions, sets `GOTOOLCHAIN=local`, and checks the local Go version before
+installing Go tools. Its final table marks missing optional tools as
+`skipped_optional`; a missing required tool stops before scanning. See the
+main [README](README.md) for pipeline and local fixture details.
+
+## Clean local bootstrap verification
+
+Use a fresh checkout and temporary home to validate binary installation
+without a live target or real credentials:
+
+```bash
+git clone https://github.com/CyberShuriken/rfuf.git /tmp/rfuf-bootstrap-checkout
+cd /tmp/rfuf-bootstrap-checkout
+export HOME=/tmp/rfuf-bootstrap-home
+mkdir -p "$HOME"
+make preflight build test vet fmtcheck
+./bin/rfuf install --non-interactive
+"$HOME/.local/share/rfuf/rfuf" -v
+"$HOME/.local/share/rfuf/rfuf" preflight
+```
+
+Preflight may return nonzero when scanner tools are absent; it must identify
+required and optional tools and must not start a scan. To test successful
+preflight in unit or integration tests, provide controlled fake executables
+on `PATH`. Do not enter a real domain or credentials for bootstrap checks.
 
 ---
 

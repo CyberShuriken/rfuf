@@ -12,13 +12,13 @@ It does not wrap tool APIs — each stage runs a **bash one-liner** via `interna
 cmd/rfuf/main.go
   → scope.NormalizeDomain()
   → config.ResolvePaths(normalized root)
-  → installer.EnsureTools() / EnsureSeclists()
+  → installer.EnsureTools() / EnsureSeclists() / preflight check
   → pipeline.Run()
        → checkpoint load/save (.rfuf/checkpoint.json) [Thread-Safe]
        → pipeline.ExecuteGraph()
             → scope_guard filters discovered hosts before active probing
-            → concurrently run steps whose dependencies are met
-            → executor.RunCommand() per stage
+       → concurrently run steps whose dependencies are met
+       → executor.RunCommand() per stage
        → evidence.BuildIndex()
        → owasp.Generate() → OWASP_2025_COVERAGE.md + MANUAL_TEST_PLAN.md
        → summary.Generate() → SUMMARY.md
@@ -31,10 +31,10 @@ Output root: `~/Desktop/Bug_Bounty/<normalized-root-domain>/`. Both `example.com
 | Package | Role |
 |---------|------|
 | `cmd/rfuf` | CLI flags: `-d`, `-resume`, `-v`, `-h`, `install` subcommand |
-| `cmd/filter-testable` | `package main` wrapper for `internal/filter`; reads stdin, writes pass-through URLs to stdout. Replaces the broken `go run ./internal/filter` reference. |
+| `cmd/filter-testable` | Standalone wrapper for `internal/filter`; the production pipeline dispatches the equivalent internal command through the absolute running RFUF binary. |
 | `internal/scope` | Normalizes root or wildcard domains and matches only the exact root or proper subdomains. |
 | `internal/owasp` | Maps redacted evidence and stage health to OWASP Top 10:2025 coverage and generates the manual validation plan. |
-| `cmd/findings-runner` | `package main` wrapper that dispatches `<finder-name>` to `internal/findings/<name>.Run()`. One wrapper handles all 15+ finder modules. |
+| `cmd/findings-runner` | Standalone development/build target for finder dispatch. Production stages use `<absolute-rfuf-binary> findings <finder-name> <workdir>`. |
 | `internal/config` | Resolves work dir, GOPATH/bin, nuclei templates, seclists wordlist |
 | `internal/installer` | Auto-installs missing Go/apt tools and GF patterns |
 | `internal/pipeline` | **Single source of truth** for all 60+ stage definitions |
@@ -67,7 +67,9 @@ The dependency installer uses `GOTOOLCHAIN=local` for Go-based tools and pins Nu
 10. **Cap large-host stages** — any stage that performs one-request-per-host must cap its input (`head -n N`) to a safe ceiling. Current limits: CORS=500, WAF=200, Arjun=100.
 11. **Artifact contracts must match producers** — the stage-health map must validate the exact files a command writes (`subfinder.txt`, `amass_raw.txt`, and so on). A zero-line existing artifact is `completed_empty`; a missing declared artifact is a real failure.
 12. **Fedora package installs need terminal-aware sudo** — package names must not be mistaken for executable names, and interactive installs must pass `os.Stdin` to `sudo`; non-interactive runs must print a manual-install recovery message instead of waiting for an unreadable password.
-13. **Single-command long-runners need a shell timeout** — `sqlmap`/`dalfox`/`nuclei`-over-thousands-of-urls stages that have no natural early-exit must be wrapped with `timeout --foreground <duration> … ; || true` so they cannot pin the dashboard past the cap. The `|| true` is critical: without it the stage records a failure and the next `-resume` re-runs it from scratch, looping forever. With it, partial output on disk counts as a successful checkpoint.
+13. **Timeout and exit status are authoritative** — long-running commands have bounded timeouts. A timeout remains `timed_out` even if a wrapper returns zero; nonzero scanner exits and missing declared outputs remain failures. Preserve partial output and stderr for diagnosis rather than masking errors with an unconditional success exit.
+14. **Resume binds to the inputs and run mode** — a stage record is reusable only when command, tool identity/version, contract, outputs, and input-content fingerprint match. Run metadata also binds the selected root/scope mode, exclusions, and public/cookie/bearer auth mode without storing credential values.
+15. **Bootstrap has a separate terminal status** — when required dependency setup prevents stages from starting, write `BOOTSTRAP_FAILED` and preserve summary, coverage, evidence, artifact-manifest, and diagnostic metadata. `rfuf preflight` reports dependencies without starting a pipeline.
 
 ## Data Flow
 

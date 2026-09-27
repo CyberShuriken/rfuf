@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/CyberShuriken/rfuf/internal/findings/internal/iohelp"
 )
 
 // Run parses OpenAPI/Swagger specs and sitemaps found in the workDir/api_specs directory
@@ -18,7 +20,7 @@ func Run(workDir string) error {
 	files, err := os.ReadDir(specsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return iohelp.WriteLines(outPath, nil)
 		}
 		return fmt.Errorf("failed to read specs dir: %w", err)
 	}

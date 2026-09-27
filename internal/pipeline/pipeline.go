@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -72,10 +74,15 @@ const (
 )
 
 type StageContract struct {
-	Inputs          []string    `json:"inputs"`
-	Outputs         []string    `json:"outputs"`
-	Policy          StagePolicy `json:"policy"`
-	EmptyInputValid bool        `json:"empty_input_valid"`
+	Inputs            []string    `json:"inputs"`
+	Outputs           []string    `json:"outputs"`
+	Dependencies      []string    `json:"dependencies"`
+	Policy            StagePolicy `json:"policy"`
+	EmptyInputValid   bool        `json:"empty_input_valid"`
+	Timeout           string      `json:"timeout"`
+	Tool              string      `json:"tool"`
+	DirectoryOutputs  []string    `json:"directory_outputs"`
+	ZeroResultOutputs []string    `json:"zero_result_outputs"`
 }
 
 //go:embed stage_contracts.json
@@ -91,6 +98,14 @@ func init() {
 
 func commandDigest(command string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(command)))
+}
+
+func stageContractDigest(stageID string) string {
+	data, err := json.Marshal(stageContracts[stageID])
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 func writeStageRecordOrReport(workDir string, record coverage.StageRecord, errChan chan<- error) {
@@ -166,6 +181,23 @@ func recordHasSuccessfulStatus(status coverage.StageStatus) bool {
 	return status == coverage.StatusCompleted || status == coverage.StatusCompletedEmpty || status == coverage.StatusCompletedNoInput
 }
 
+func classifyStageResult(exitCode int, timedOut, grepStage, missingOutput, emptyInput bool, outputCount int) coverage.StageStatus {
+	if timedOut {
+		return coverage.StatusTimedOut
+	}
+	success := exitCode == 0 || (grepStage && exitCode == 1)
+	if !success || missingOutput {
+		return coverage.StatusFailed
+	}
+	if emptyInput {
+		return coverage.StatusCompletedNoInput
+	}
+	if outputCount == 0 {
+		return coverage.StatusCompletedEmpty
+	}
+	return coverage.StatusCompleted
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -191,9 +223,69 @@ func allArtifactsExist(workDir string, paths []string) bool {
 	return true
 }
 
+// fingerprintInputs binds resume records to the content of every declared
+// input. Names are sorted so filesystem enumeration order cannot affect it.
+func fingerprintInputs(workDir string, paths []string) (string, error) {
+	h := sha256.New()
+	for _, name := range paths {
+		clean := filepath.Clean(name)
+		if filepath.IsAbs(clean) || clean == "." || strings.HasPrefix(clean, "..") {
+			return "", fmt.Errorf("unsafe input artifact path %q", name)
+		}
+		full := filepath.Join(workDir, clean)
+		_, _ = fmt.Fprintf(h, "path:%s\x00", clean)
+		info, err := os.Stat(full)
+		if os.IsNotExist(err) {
+			_, _ = h.Write([]byte("missing\x00"))
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("stat input artifact %s: %w", clean, err)
+		}
+		files := []string{}
+		if info.IsDir() {
+			err = filepath.WalkDir(full, func(path string, entry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if entry.IsDir() {
+					return nil
+				}
+				rel, err := filepath.Rel(full, path)
+				if err != nil {
+					return err
+				}
+				files = append(files, rel)
+				return nil
+			})
+			if err != nil {
+				return "", fmt.Errorf("walk input artifact %s: %w", clean, err)
+			}
+			sort.Strings(files)
+		} else {
+			files = append(files, "")
+		}
+		for _, rel := range files {
+			path := full
+			if rel != "" {
+				path = filepath.Join(full, rel)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("read input artifact %s: %w", filepath.Join(clean, rel), err)
+			}
+			_, _ = fmt.Fprintf(h, "file:%s:%d:", rel, len(data))
+			_, _ = h.Write(data)
+			_, _ = h.Write([]byte{0})
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func resumeRecordValid(workDir string, step Step, record coverage.StageRecord, depsComplete bool) bool {
 	inputs, outputs := stageArtifacts(step)
-	return depsComplete && record.CommandHash == commandDigest(step.Command) && record.ToolIdentity == stageToolIdentity(step.Tool) && record.ToolVersion == stageToolVersion(step.Tool) && equalStrings(record.InputContract, inputs) && equalStrings(record.OutputContract, outputs) && recordHasSuccessfulStatus(record.Status) && allArtifactsExist(workDir, outputs)
+	fingerprint, err := fingerprintInputs(workDir, inputs)
+	return err == nil && depsComplete && record.InputFingerprint == fingerprint && record.ContractHash == stageContractDigest(step.ID) && record.CommandHash == commandDigest(step.Command) && record.ToolIdentity == stageToolIdentity(step.Tool) && record.ToolVersion == stageToolVersion(step.Tool) && equalStrings(record.InputContract, inputs) && equalStrings(record.OutputContract, outputs) && recordHasSuccessfulStatus(record.Status) && allArtifactsExist(workDir, outputs)
 }
 
 var (
@@ -269,7 +361,6 @@ var (
 		"waf_detect":          true,
 		"port_scan_naabu":     true,
 	}
-
 	nucleiOptimized        = " -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 50 -bs 25 -timeout 5 -retries 1 -silent -stats -stats-interval 30"
 	maxScanTargets         = 5000
 	urlMinerTimeout        = "10m"
@@ -842,6 +933,107 @@ func validateResumeScope(workDir string, expected scope.Scope) error {
 	return nil
 }
 
+type runConfiguration struct {
+	RootDomain         string     `json:"root_domain"`
+	ScopeMode          scope.Mode `json:"scope_mode"`
+	ExclusionHash      string     `json:"exclusion_hash"`
+	AuthenticationMode string     `json:"authentication_mode"`
+	AuthVerified       bool       `json:"auth_verified"`
+}
+
+func writeOrValidateRunConfiguration(workDir string, scanScope scope.Scope, resume bool) error {
+	exclusionHash := ""
+	if exclusion := executor.AuthEnv["RFUF_EXCLUDE_URL_REGEX"]; exclusion != "" {
+		exclusionHash = commandDigest(exclusion)
+	}
+	authMode := "public"
+	if executor.AuthEnv["RFUF_AUTH_COOKIE"] != "" {
+		authMode = "cookie"
+	}
+	if executor.AuthEnv["RFUF_AUTH_HEADER"] != "" {
+		if authMode == "cookie" {
+			authMode = "cookie_and_bearer"
+		} else {
+			authMode = "bearer"
+		}
+	}
+	current := runConfiguration{RootDomain: scanScope.RootDomain, ScopeMode: scanScope.Mode, ExclusionHash: exclusionHash, AuthenticationMode: authMode, AuthVerified: executor.AuthEnv["RFUF_AUTH_VERIFIED"] == "true"}
+	path := filepath.Join(workDir, ".rfuf", "run_configuration.json")
+	if resume {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("cannot resume: run configuration is missing: %w", err)
+		}
+		var previous runConfiguration
+		if err := json.Unmarshal(data, &previous); err != nil {
+			return fmt.Errorf("cannot resume: invalid run configuration: %w", err)
+		}
+		if previous != current {
+			return fmt.Errorf("cannot resume: scope, exclusion, or authentication mode changed; start a fresh run")
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(current, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
+}
+
+// RecordBootstrapFailure leaves a machine-readable terminal report when
+// dependency setup prevents pipeline stages from starting.
+func RecordBootstrapFailure(domain string, paths *config.Paths, cause error) error {
+	return recordPreflightFailure(domain, paths, "bootstrap", coverage.StatusBootstrapFailed, "dependency_bootstrap_failed", cause)
+}
+
+// RecordAuthPreflightFailure preserves an INCOMPLETE report when required
+// session verification fails before any pipeline stage is allowed to run.
+func RecordAuthPreflightFailure(domain string, paths *config.Paths, cause error) error {
+	return recordPreflightFailure(domain, paths, "auth_preflight", coverage.StatusFailed, "required_authentication_check_failed", cause)
+}
+
+func recordPreflightFailure(domain string, paths *config.Paths, stageID string, status coverage.StageStatus, category string, cause error) error {
+	if err := os.MkdirAll(paths.WorkDir, 0755); err != nil {
+		return err
+	}
+	now := time.Now()
+	record := coverage.StageRecord{StageID: stageID, Required: true, Policy: string(PolicyRequired), Status: status, StartedAt: now, FinishedAt: now, Error: category, SkipReason: "pipeline_not_started"}
+	if err := coverage.WriteStageRecord(paths.WorkDir, record); err != nil {
+		return err
+	}
+	report := coverage.Evaluate(domain, now, time.Now(), []coverage.StageRecord{record})
+	if authMode, authErr := authenticationMode(paths.WorkDir); authErr == nil {
+		report.Authentication = authMode
+	}
+	var failures []error
+	if err := coverage.WriteReport(paths.WorkDir, report); err != nil {
+		failures = append(failures, err)
+	}
+	if err := coverage.WriteArtifactManifest(paths.WorkDir, []coverage.StageRecord{record}); err != nil {
+		failures = append(failures, err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.WorkDir, ".rfuf", "diagnostic.json"), []byte(fmt.Sprintf("{\"category\":%q}\n", category)), 0600); err != nil {
+		failures = append(failures, err)
+	}
+	if entries, err := evidence.BuildIndex(paths.WorkDir); err != nil {
+		failures = append(failures, err)
+	} else if err := evidence.WriteIndex(paths.WorkDir, entries); err != nil {
+		failures = append(failures, err)
+	}
+	cp, err := checkpoint.Load(paths.WorkDir, domain)
+	if err == nil {
+		err = summary.Generate(paths.WorkDir, cp)
+	}
+	if err != nil {
+		failures = append(failures, err)
+	}
+	_ = cause // Only the safe category is persisted; raw errors can include command output.
+	return errors.Join(failures...)
+}
+
 func applyWafStealth(paths *config.Paths) bool {
 	wafFile := filepath.Join(paths.WorkDir, "waf_detections.txt")
 	data, err := os.ReadFile(wafFile)
@@ -856,6 +1048,9 @@ func applyWafStealth(paths *config.Paths) bool {
 
 func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTimeout time.Duration) error {
 	domain := scanScope.RootDomain
+	if err := writeOrValidateRunConfiguration(paths.WorkDir, scanScope, resume); err != nil {
+		return err
+	}
 	cp, err := checkpoint.Load(paths.WorkDir, domain)
 	if err != nil {
 		return err
@@ -998,12 +1193,24 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 		if step, ok := stepMap[record.StageID]; ok {
 			inputs, outputs := stageArtifacts(step)
 			record.Policy = string(stagePolicy(step.ID))
-			record.EmptyInputValid = true
+			record.EmptyInputValid = stageContracts[step.ID].EmptyInputValid
 			record.CommandHash = commandDigest(step.Command)
+			record.ContractHash = stageContractDigest(step.ID)
 			record.ToolIdentity = stageToolIdentity(step.Tool)
 			record.ToolVersion = stageToolVersion(step.Tool)
 			record.InputContract = inputs
 			record.OutputContract = outputs
+			fingerprint, err := fingerprintInputs(paths.WorkDir, inputs)
+			if err != nil {
+				errChan <- fmt.Errorf("fingerprint stage inputs %s: %w", record.StageID, err)
+			} else {
+				record.InputFingerprint = fingerprint
+			}
+		}
+		if record.Status == coverage.StatusCompletedEmpty && record.EmptyReason == "" {
+			record.EmptyReason = "stage produced no output records"
+		} else if record.Status == coverage.StatusCompletedNoInput && record.EmptyReason == "" {
+			record.EmptyReason = "declared inputs contained no records"
 		}
 		writeStageRecordOrReport(paths.WorkDir, record, errChan)
 	}
@@ -1106,25 +1313,24 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 						return
 					}
 
-					success := false
-					if step.Type == "grep" {
-						if res.ExitCode == 0 || res.ExitCode == 1 {
-							success = true
-						}
-					} else {
-						if res.ExitCode == 0 {
-							success = true
-						}
-					}
-					status := coverage.StatusCompleted
 					missingOutput := false
 					for _, metric := range outputMetrics {
-						if !metric.Exists {
+						if !metric.Exists || metric.Error != "" {
+							missingOutput = true
+							break
+						}
+					}
+					for _, metric := range inputMetrics {
+						if metric.Error != "" {
 							missingOutput = true
 							break
 						}
 					}
 					emptyInput := coverage.CountMetrics(inputMetrics) == 0
+					if emptyInput && !stageContracts[step.ID].EmptyInputValid {
+						missingOutput = true
+					}
+					status := classifyStageResult(res.ExitCode, res.TimedOut, step.Type == "grep", missingOutput, emptyInput, coverage.CountMetrics(outputMetrics))
 					if res.TimedOut {
 						if softStages[step.ID] {
 							status = coverage.StatusTimedOut
@@ -1136,12 +1342,6 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 						} else {
 							status = coverage.StatusTimedOut
 						}
-					} else if emptyInput && !missingOutput {
-						status = coverage.StatusCompletedNoInput
-					} else if res.ExitCode != 0 {
-						status = coverage.StatusFailed
-					} else if missingOutput || coverage.CountMetrics(outputMetrics) == 0 {
-						status = coverage.StatusCompletedEmpty
 					}
 
 					if status == coverage.StatusCompletedEmpty || status == coverage.StatusCompletedNoInput {
@@ -1152,7 +1352,7 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 						return
 					}
 
-					if !success || res.TimedOut || missingOutput {
+					if status == coverage.StatusFailed || res.TimedOut || missingOutput {
 						if softStages[step.ID] {
 							writeRecord(coverage.StageRecord{StageID: step.ID, Required: false, Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 							completed[step.ID] = true
@@ -1233,73 +1433,22 @@ func stageRequired(stepID string) bool {
 }
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
-	materializeStages := map[string]bool{
-		"scope_guard":          true,
-		"subfinder":            true,
-		"assetfinder":          true,
-		"crtsh":                true,
-		"amass_enum":           true,
-		"dnsx_resolve":         true,
-		"httpx_probe":          true,
-		"tech_fingerprint":     true,
-		"api_discovery":        true,
-		"jsmap_scrape":         true,
-		"spec_parser":          true,
-		"merge_all_urls":       true,
-		"url_filter_alive":     true,
-		"merge_js_endpoints":   true,
-		"scope_filter":         true,
-		"nuclei_target_merge":  true,
-		"sqlmap_scan":          true,
-		"trufflehog_scan":      true,
-		"hidden_params_arjun":  true,
-		"merge_brute_subs":     true,
-		"dirbrute_ffuf":        true,
-		"nuclei_exposures":     true,
-		"nuclei_misconfigs":    true,
-		"nuclei_auth_scan":     true,
-		"nuclei_graphql_scan":  true,
-		"sqli_targets_replace": true,
-		"filter_testable_sqli": true,
-		"xss_targets":          true,
-		"rce_targets":          true,
-		"idor_targets":         true,
-		"ssrf_targets":         true,
-		"redirect_targets":     true,
-		"lfi_targets":          true,
-		"ghauri_sqli":          true,
-		"cors_check":           true,
-		"js_endpoints_scan":    true,
-		"dirbrute_verify_200":  true,
-		"nextjs_bypass_run":    true,
-		"bypass403":            true,
-		"s3_audit_run":         true,
-		"env_secrets_run":      true,
-		"git_exposure_run":     true,
-		"paramsprayer_run":     true,
-		"api_version_gen":      true,
-		"reflection_run":       true,
-		"paramshape_run":       true,
-		"authshape_run":        true,
-		"signup_takeover_run":  true,
-		"idor_surface_run":     true,
-		"oauth_audit_run":      true,
-		"race_scan":            true,
-		"bucket_guess_run":     true,
-		"takeover_v2_run":      true,
-		"js_mine_run":          true,
-		"secheaders_run":       true,
-		"backupscan_run":       true,
-		"businesslogic_run":    true,
-		"hostheader_run":       true,
-		"cors2_run":            true,
-		"waf_detect":           true,
-		"port_scan_naabu":      true,
+	contract, ok := stageContracts[stepID]
+	if !ok {
+		return fmt.Errorf("stage %s has no output contract", stepID)
 	}
-	if !materializeStages[stepID] {
-		return nil
+	materialized := make(map[string]bool, len(contract.ZeroResultOutputs))
+	for _, path := range contract.ZeroResultOutputs {
+		materialized[path] = true
+	}
+	directories := make(map[string]bool, len(contract.DirectoryOutputs))
+	for _, path := range contract.DirectoryOutputs {
+		directories[path] = true
 	}
 	for _, path := range outputs {
+		if !materialized[path] {
+			continue
+		}
 		if filepath.IsAbs(path) || strings.HasPrefix(path, "..") {
 			continue
 		}
@@ -1310,7 +1459,7 @@ func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 			if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
 				return err
 			}
-			if filepath.Ext(path) == "" {
+			if directories[path] {
 				if err := os.MkdirAll(full, 0755); err != nil {
 					return err
 				}
@@ -1320,8 +1469,49 @@ func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 			if err != nil {
 				return err
 			}
-			file.Close()
+			if err := file.Close(); err != nil {
+				return err
+			}
 		} else {
+			return err
+		}
+	}
+	for _, path := range contract.DirectoryOutputs {
+		if path == "." || filepath.IsAbs(path) || strings.HasPrefix(path, "..") {
+			continue
+		}
+		full := filepath.Join(workDir, path)
+		info, err := os.Stat(full)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("declared directory output %s is not a directory", path)
+		}
+		manifest := struct {
+			StageID   string    `json:"stage_id"`
+			Generated time.Time `json:"generated_at"`
+			FileCount int       `json:"file_count"`
+			ByteCount int64     `json:"byte_count"`
+			Content   string    `json:"content_status"`
+		}{StageID: stepID, Generated: time.Now().UTC()}
+		metrics := coverage.MeasureArtifacts(workDir, []string{path})
+		if len(metrics) != 1 || metrics[0].Error != "" {
+			return fmt.Errorf("measure directory output %s: unavailable", path)
+		}
+		manifest.FileCount, manifest.ByteCount = metrics[0].Files, metrics[0].Bytes
+		manifest.Content = "empty"
+		if manifest.FileCount > 1 || manifest.ByteCount > 0 {
+			manifest.Content = "nonempty"
+		}
+		data, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(full, ".rfuf-manifest.json"), append(data, '\n'), 0600); err != nil {
 			return err
 		}
 	}
@@ -1352,6 +1542,21 @@ func ValidateStepContracts(steps []Step) error {
 		if len(contract.Outputs) == 0 {
 			return fmt.Errorf("stage %s has no declared outputs", step.ID)
 		}
+		if !equalStrings(contract.Dependencies, step.Deps) {
+			return fmt.Errorf("stage %s dependency contract differs from scheduler graph", step.ID)
+		}
+		wantTimeout := step.Timeout.String()
+		if step.Timeout == 0 {
+			wantTimeout = "inherit"
+		}
+		if contract.Timeout != wantTimeout || contract.Tool != step.Tool {
+			return fmt.Errorf("stage %s tool/timeout contract does not match execution definition", step.ID)
+		}
+		for _, path := range append(append([]string(nil), contract.DirectoryOutputs...), contract.ZeroResultOutputs...) {
+			if !containsPath(contract.Outputs, path) {
+				return fmt.Errorf("stage %s classifies undeclared output %s", step.ID, path)
+			}
+		}
 		if contract.Policy != PolicyRequired && contract.Policy != PolicyOptional && contract.Policy != PolicyConditional {
 			return fmt.Errorf("stage %s has invalid policy %q", step.ID, contract.Policy)
 		}
@@ -1373,6 +1578,15 @@ func ValidateStepContracts(steps []Step) error {
 		return fmt.Errorf("declarative contracts contain %d stages but pipeline defines %d", len(stageContracts), len(seen))
 	}
 	return nil
+}
+
+func containsPath(paths []string, expected string) bool {
+	for _, path := range paths {
+		if path == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func writeBlockedRecords(workDir string, steps []Step) error {

@@ -21,6 +21,11 @@ type payload struct {
 func Run(workDir string) error {
 	inPath := filepath.Join(workDir, "high_interest_urls.txt")
 	outPath := filepath.Join(workDir, "403_bypass_results.txt")
+	out, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer out.Close()
 
 	file, err := os.Open(inPath)
 	if err != nil {
@@ -31,11 +36,6 @@ func Run(workDir string) error {
 	}
 	defer file.Close()
 
-	out, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer out.Close()
 	writer := bufio.NewWriter(out)
 	defer writer.Flush()
 

@@ -42,6 +42,17 @@ const (
 //     ~/.local/bin is on $PATH in every new shell.
 //  5. Prints a summary of what was changed.
 func Install() error {
+	return install(true)
+}
+
+// InstallNonInteractive installs the binary and symlink without reading
+// stdin or editing shell startup files. It is suitable for CI/bootstrap
+// checks and prints the exact installed path for automation.
+func InstallNonInteractive() error {
+	return install(false)
+}
+
+func install(interactive bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("could not resolve home directory: %w", err)
@@ -106,6 +117,10 @@ func Install() error {
 		return fmt.Errorf("could not symlink %s -> %s: %w", absBinLink, relTarget, err)
 	}
 	fmt.Printf("[+] Linked %s -> %s\n", absBinLink, relTarget)
+
+	if !interactive {
+		return printSummary(false, "", absInstallBin, absBinLink)
+	}
 
 	// 5. Detect shell and patch rc file.
 	shell, rcPath, err := detectShell()

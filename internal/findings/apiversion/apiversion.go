@@ -3,6 +3,7 @@ package apiversion
 import (
 	"fmt"
 	"regexp"
+	"sort"
 
 	"github.com/CyberShuriken/rfuf/internal/findings/internal/iohelp"
 )
@@ -13,8 +14,8 @@ var aliases = []string{"v0", "beta", "dev", "staging", "alpha", "test", "preview
 // Run identifies API versions and generates alternative targets.
 func Run(workDir string) error {
 	urls, err := iohelp.ReadLines(workDir + "/all_urls.txt")
-	if err != nil || len(urls) == 0 {
-		return nil
+	if err != nil {
+		return iohelp.WriteLines(workDir+"/all_urls.txt", nil)
 	}
 
 	newUrls := make(map[string]struct{})
@@ -55,17 +56,13 @@ func Run(workDir string) error {
 		}
 	}
 
-	if len(newUrls) == 0 {
-		return nil
-	}
-
 	var result []string
 	for u := range newUrls {
 		result = append(result, u)
 	}
+	sort.Strings(result)
 
-	currentUrls, _ := iohelp.ReadLines(workDir + "/all_urls.txt")
-	all := append(currentUrls, result...)
+	all := append(urls, result...)
 
 	unique := make(map[string]struct{})
 	var final []string

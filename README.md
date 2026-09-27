@@ -45,7 +45,7 @@ step, and can resume exactly where it stopped.
 - **Single command, parallel pipeline** — intelligent dependency tracking
   allows multiple tools to run simultaneously (e.g., `subfinder`, `assetfinder`,
   and `amass` run in parallel) while ensuring data integrity.
-- **Hunter Pipeline with Feedback Loops** — shifts from a "200 OK only" filter to a high-interest stream (401, 403, 500) that feeds specialized bypass and spraying modules, incorporating OpenAPI specs and JS endpoints into a recursive discovery loop.
+- **Scoped pipeline inputs** — preserves 401, 403, and 500 responses as separate review candidates and merges API and JavaScript discoveries only after scope and exclusion filtering.
 - **Crash-safe checkpoints** — every completed step is written to
   `checkpoint.json`. Kill the process, restart, pick up where you stopped.
 - **Self-installing** — missing tools are detected and installed via
@@ -140,7 +140,7 @@ credentialed CORS preflight.
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Go          | 1.22+   | `sudo dnf install -y golang` (Fedora) / `sudo apt install -y golang-go` (Kali/Debian/Ubuntu) |
+| Go          | 1.22.2+ | Required local toolchain; installs set `GOTOOLCHAIN=local` and reject older versions |
 | Linux       | Fedora 41+ or Kali / Debian / Ubuntu 22.04+ | macOS likely works but is untested |
 | `sudo`      | —       | Required for installing `seclists` / `sqlmap` via `apt`/`dnf` |
 | Disk        | ~2 GB   | Tool binaries + nuclei templates + SecLists |
@@ -161,6 +161,7 @@ git clone https://github.com/CyberShuriken/rfuf.git
 cd rfuf
 make build          # produces ./bin/rfuf
 ./bin/rfuf install  # builds, copies to ~/.local/share/rfuf, patches your shell rc
+./bin/rfuf install --non-interactive # installs without prompting or editing shell rc files
 ```
 
 `rfuf install` will:
@@ -177,6 +178,11 @@ Open a new shell, then verify:
 which rfuf        # → ~/.local/bin/rfuf
 rfuf -v           # → rfuf version 2.4.10
 ```
+
+For automation, `rfuf install --non-interactive` performs the build and
+binary/symlink installation without reading stdin or editing shell startup
+files. `rfuf preflight` prints required and optional dependency status and
+exits nonzero if a required tool is missing; it never starts a pipeline.
 
 For full details, troubleshooting, and uninstall instructions see
 [INSTALL.md](INSTALL.md).
@@ -272,9 +278,27 @@ The final run writes `.rfuf/coverage_report.json`, `CoverageReport.md`, `evidenc
 
 When a session is supplied, `-auth-check-url` makes a bounded request to an operator-selected authenticated health-check endpoint. Add `-auth-check-marker` when the response must contain a known marker. RFUF stores only authentication mode, HTTP status, and a safe error class in `.rfuf/auth_check.json`; it never stores the marker, response body, or credential value. `-auth-required` requires the URL and a successful check before active scanning. Coverage labels authentication `public`, `authenticated_unverified`, or `authenticated_verified`.
 
+Auth health metadata includes a UTC timestamp and safe error category. A
+required auth check failure writes an `INCOMPLETE` preflight report before
+exiting. Bootstrap failures write `BOOTSTRAP_FAILED`. Resume compares scope,
+exclusion settings, authentication mode, command/tool contract, and
+fingerprints of declared input contents. Configuration metadata contains no
+cookie or bearer value.
+
 Use `-max-targets` to cap final scoped URL streams and `-max-stage-requests` to set the rate ceiling for scanners that support a rate option. These controls are conservative bounds, not a universal request counter for tools that do not expose a compatible budget interface.
 
+Development verification uses only local fixtures, fake scanner commands,
+loopback HTTP servers, and temporary directories. No live bug-bounty target
+was scanned during the reliability work described here.
+
 The dashboard shows stage health separately from finding counts and redacts noisy scanner statistics and request metadata from the live panel. Raw child output remains in `.rfuf/rfuf.log` for local troubleshooting.
+
+Installer versions are pinned in `internal/installer/installer.go`; the
+GF-Patterns and SecLists fallbacks fetch fixed commit IDs. Go installs use
+`GOTOOLCHAIN=local`, installation steps are time-bounded, and dependency
+verification prints resolved executable paths and reported versions.
+Optional tools report `skipped_optional`; missing required tools stop before
+pipeline execution.
 
 ### OWASP coverage, evidence, and manual validation
 

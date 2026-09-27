@@ -23,41 +23,47 @@ const (
 	StatusSkipped          StageStatus = "skipped"
 	StatusSkippedOptional  StageStatus = "skipped_optional"
 	StatusBlocked          StageStatus = "blocked"
+	StatusBootstrapFailed  StageStatus = "bootstrap_failed"
 )
 
 type ArtifactMetric struct {
-	Path          string `json:"path"`
-	Exists        bool   `json:"exists"`
-	Kind          string `json:"kind,omitempty"`
-	Bytes         int64  `json:"bytes,omitempty"`
-	Files         int    `json:"files,omitempty"`
-	Lines         int    `json:"lines"`
-	ContentStatus string `json:"content_status,omitempty"`
+	Path          string    `json:"path"`
+	Exists        bool      `json:"exists"`
+	Kind          string    `json:"kind,omitempty"`
+	Bytes         int64     `json:"bytes,omitempty"`
+	Files         int       `json:"files,omitempty"`
+	Lines         int       `json:"lines"`
+	ContentStatus string    `json:"content_status,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	Error         string    `json:"error,omitempty"`
 }
 
 type StageRecord struct {
-	StageID         string           `json:"stage_id"`
-	Required        bool             `json:"required"`
-	Policy          string           `json:"policy"`
-	EmptyInputValid bool             `json:"empty_input_valid"`
-	CommandHash     string           `json:"command_hash,omitempty"`
-	ToolIdentity    string           `json:"tool_identity,omitempty"`
-	ToolVersion     string           `json:"tool_version,omitempty"`
-	InputContract   []string         `json:"input_contract,omitempty"`
-	OutputContract  []string         `json:"output_contract,omitempty"`
-	Dependencies    []string         `json:"dependencies,omitempty"`
-	Status          StageStatus      `json:"status"`
-	StartedAt       time.Time        `json:"started_at,omitempty"`
-	FinishedAt      time.Time        `json:"finished_at,omitempty"`
-	ExitCode        int              `json:"exit_code"`
-	TimedOut        bool             `json:"timed_out"`
-	InputCount      int              `json:"input_count"`
-	OutputCount     int              `json:"output_count"`
-	InputArtifacts  []ArtifactMetric `json:"input_artifacts,omitempty"`
-	OutputArtifacts []ArtifactMetric `json:"output_artifacts,omitempty"`
-	Error           string           `json:"error,omitempty"`
-	SkipReason      string           `json:"skip_reason,omitempty"`
-	LogPath         string           `json:"log_path,omitempty"`
+	StageID          string           `json:"stage_id"`
+	Required         bool             `json:"required"`
+	Policy           string           `json:"policy"`
+	EmptyInputValid  bool             `json:"empty_input_valid"`
+	CommandHash      string           `json:"command_hash,omitempty"`
+	ContractHash     string           `json:"contract_hash,omitempty"`
+	InputFingerprint string           `json:"input_fingerprint,omitempty"`
+	EmptyReason      string           `json:"empty_reason,omitempty"`
+	ToolIdentity     string           `json:"tool_identity,omitempty"`
+	ToolVersion      string           `json:"tool_version,omitempty"`
+	InputContract    []string         `json:"input_contract,omitempty"`
+	OutputContract   []string         `json:"output_contract,omitempty"`
+	Dependencies     []string         `json:"dependencies,omitempty"`
+	Status           StageStatus      `json:"status"`
+	StartedAt        time.Time        `json:"started_at,omitempty"`
+	FinishedAt       time.Time        `json:"finished_at,omitempty"`
+	ExitCode         int              `json:"exit_code"`
+	TimedOut         bool             `json:"timed_out"`
+	InputCount       int              `json:"input_count"`
+	OutputCount      int              `json:"output_count"`
+	InputArtifacts   []ArtifactMetric `json:"input_artifacts,omitempty"`
+	OutputArtifacts  []ArtifactMetric `json:"output_artifacts,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	SkipReason       string           `json:"skip_reason,omitempty"`
+	LogPath          string           `json:"log_path,omitempty"`
 }
 
 type CoverageReport struct {
@@ -266,21 +272,27 @@ func MeasureArtifacts(workDir string, paths []string) []ArtifactMetric {
 		full := filepath.Join(workDir, clean)
 		info, err := os.Stat(full)
 		if err != nil {
-			metrics = append(metrics, ArtifactMetric{Path: clean})
+			metrics = append(metrics, ArtifactMetric{Path: clean, Error: err.Error(), ContentStatus: "unavailable"})
 			continue
 		}
 		if info.IsDir() {
-			files, bytes, lines := measureDirectory(full)
+			files, bytes, lines, measureErr := measureDirectory(full)
+			if measureErr != nil {
+				metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "directory", UpdatedAt: info.ModTime(), ContentStatus: "unavailable", Error: measureErr.Error()})
+				continue
+			}
 			state := "empty"
 			if files > 0 {
 				state = "nonempty"
+			} else if _, err := os.Stat(filepath.Join(full, ".rfuf-manifest.json")); err == nil {
+				state = "manifest_only"
 			}
-			metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "directory", Bytes: bytes, Files: files, Lines: lines, ContentStatus: state})
+			metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "directory", Bytes: bytes, Files: files, Lines: lines, ContentStatus: state, UpdatedAt: info.ModTime()})
 			continue
 		}
 		data, err := os.ReadFile(full)
 		if err != nil {
-			metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "file", Bytes: info.Size()})
+			metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "file", Bytes: info.Size(), UpdatedAt: info.ModTime(), Error: err.Error(), ContentStatus: "unavailable"})
 			continue
 		}
 		lines := 0
@@ -291,24 +303,34 @@ func MeasureArtifacts(workDir string, paths []string) []ArtifactMetric {
 		if len(data) > 0 {
 			state = "nonempty"
 		}
-		metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "file", Bytes: int64(len(data)), Lines: lines, ContentStatus: state})
+		metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "file", Bytes: int64(len(data)), Lines: lines, ContentStatus: state, UpdatedAt: info.ModTime()})
 	}
 	return metrics
 }
 
-func measureDirectory(root string) (files int, bytes int64, lines int) {
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+func measureDirectory(root string) (files int, bytes int64, lines int, resultErr error) {
+	resultErr = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == ".rfuf-manifest.json" {
 			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return nil
+			return err
 		}
 		files++
 		bytes += info.Size()
 		if info.Size() <= 8*1024*1024 {
-			if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if len(strings.TrimSpace(string(data))) > 0 {
 				lines += len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 			}
 		}
@@ -389,13 +411,19 @@ func Evaluate(domain string, startedAt, finishedAt time.Time, records []StageRec
 			report.SkippedStages++
 		case StatusBlocked:
 			report.BlockedStages++
+		case StatusBootstrapFailed:
+			report.FailedStages++
+			report.Status = "BOOTSTRAP_FAILED"
+			report.RequiredIssues = append(report.RequiredIssues, fmt.Sprintf("%s: %s", record.StageID, record.Status))
 		}
 		if record.Required && record.Status != StatusCompleted && record.Status != StatusCompletedEmpty && record.Status != StatusCompletedNoInput {
 			report.RequiredIssues = append(report.RequiredIssues, fmt.Sprintf("%s: %s", record.StageID, record.Status))
 		}
 	}
 	if len(report.RequiredIssues) > 0 {
-		report.Status = "INCOMPLETE"
+		if report.Status != "BOOTSTRAP_FAILED" {
+			report.Status = "INCOMPLETE"
+		}
 	}
 	return report
 }

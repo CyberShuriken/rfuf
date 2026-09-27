@@ -4,8 +4,17 @@
     "outputs": [
       "amass_raw.txt"
     ],
+    "dependencies": [
+      "setup_directories"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "amass",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "amass_raw.txt"
+    ]
   },
   "amass_parse": {
     "inputs": [
@@ -14,8 +23,15 @@
     "outputs": [
       "amass_sub.txt"
     ],
+    "dependencies": [
+      "amass_enum"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "grep",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "api_discovery": {
     "inputs": [
@@ -24,8 +40,19 @@
     "outputs": [
       "api_specs"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "curl",
+    "directory_outputs": [
+      "api_specs"
+    ],
+    "zero_result_outputs": [
+      "api_specs"
+    ]
   },
   "api_version_gen": {
     "inputs": [
@@ -34,16 +61,34 @@
     "outputs": [
       "all_urls.txt"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "all_urls.txt"
+    ]
   },
   "assetfinder": {
     "inputs": [],
     "outputs": [
       "assetfinder.txt"
     ],
+    "dependencies": [
+      "setup_directories"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "assetfinder",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "assetfinder.txt"
+    ]
   },
   "authshape_run": {
     "inputs": [
@@ -52,8 +97,17 @@
     "outputs": [
       "authshape_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "authshape_findings.txt"
+    ]
   },
   "backupscan_run": {
     "inputs": [
@@ -62,8 +116,17 @@
     "outputs": [
       "backupscan_findings.txt"
     ],
+    "dependencies": [
+      "tech_fingerprint"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "backupscan_findings.txt"
+    ]
   },
   "bola_surface_run": {
     "inputs": [
@@ -74,8 +137,15 @@
       "bola_permutations.txt",
       "bola_targets.txt"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "grep",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "bucket_guess_run": {
     "inputs": [
@@ -84,8 +154,17 @@
     "outputs": [
       "bucket_findings.txt"
     ],
+    "dependencies": [
+      "tech_fingerprint"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "bucket_findings.txt"
+    ]
   },
   "businesslogic_run": {
     "inputs": [
@@ -94,8 +173,17 @@
     "outputs": [
       "business_logic_findings.txt"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "business_logic_findings.txt"
+    ]
   },
   "bypass403": {
     "inputs": [
@@ -106,8 +194,17 @@
     "outputs": [
       "403_bypass_results.txt"
     ],
+    "dependencies": [
+      "url_filter_alive"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "403_bypass_results.txt"
+    ]
   },
   "cors2_run": {
     "inputs": [
@@ -116,8 +213,17 @@
     "outputs": [
       "cors2_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "cors2_findings.txt"
+    ]
   },
   "cors_check": {
     "inputs": [
@@ -126,16 +232,34 @@
     "outputs": [
       "cors_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "curl",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "cors_findings.txt"
+    ]
   },
   "crtsh": {
     "inputs": [],
     "outputs": [
       "crtsh.txt"
     ],
+    "dependencies": [
+      "setup_directories"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "curl",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "crtsh.txt"
+    ]
   },
   "dirbrute_ffuf": {
     "inputs": [
@@ -147,8 +271,22 @@
       "ffuf_targets.txt",
       "ffuf_results"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "conditional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "ffuf",
+    "directory_outputs": [
+      "ffuf_results"
+    ],
+    "zero_result_outputs": [
+      "ffuf_dirs_raw.txt",
+      "ffuf_results/all.json",
+      "ffuf_targets.txt",
+      "ffuf_results"
+    ]
   },
   "dirbrute_verify_200": {
     "inputs": [
@@ -160,8 +298,17 @@
     "outputs": [
       "ffuf_dirs_200.txt"
     ],
+    "dependencies": [
+      "dirbrute_ffuf"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "httpx",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "ffuf_dirs_200.txt"
+    ]
   },
   "dnsx_resolve": {
     "inputs": [
@@ -174,8 +321,17 @@
     "outputs": [
       "live_subs.txt"
     ],
+    "dependencies": [
+      "scope_guard"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "dnsx",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "live_subs.txt"
+    ]
   },
   "drf_probe": {
     "inputs": [
@@ -186,8 +342,16 @@
       "drf_findings.txt",
       "drf_idor_targets.txt"
     ],
+    "dependencies": [
+      "httpx_probe",
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "curl",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "env_secrets_run": {
     "inputs": [
@@ -199,8 +363,17 @@
     "outputs": [
       "env_secrets.txt"
     ],
+    "dependencies": [
+      "dirbrute_ffuf"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "env_secrets.txt"
+    ]
   },
   "ffuf_js_endpoints": {
     "inputs": [
@@ -217,8 +390,15 @@
       "ffuf_js_results.json",
       "js_endpoints.txt"
     ],
+    "dependencies": [
+      "jsmap_scrape"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "ffuf",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "filter_testable_sqli": {
     "inputs": [
@@ -235,8 +415,18 @@
       "sqli_targets.txt",
       "sqli_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "sqli_targets.txt",
+      "sqli_targets_filtered.txt"
+    ]
   },
   "gau_urls": {
     "inputs": [
@@ -245,8 +435,15 @@
     "outputs": [
       "gau_urls.txt"
     ],
+    "dependencies": [
+      "merge_brute_subs"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "10m0s",
+    "tool": "gau",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "ghauri_sqli": {
     "inputs": [
@@ -257,8 +454,18 @@
       "ghauri_results.txt",
       "ghauri_targets.txt"
     ],
+    "dependencies": [
+      "sqli_targets_replace"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "ghauri",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "ghauri_results.txt",
+      "ghauri_targets.txt"
+    ]
   },
   "git_exposure_run": {
     "inputs": [
@@ -267,8 +474,17 @@
     "outputs": [
       "git_exposure_findings.txt"
     ],
+    "dependencies": [
+      "env_secrets_run"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "git_exposure_findings.txt"
+    ]
   },
   "grep_secrets": {
     "inputs": [
@@ -288,8 +504,16 @@
       "js_secrets.txt",
       "potential_secrets.txt"
     ],
+    "dependencies": [
+      "katana_crawl",
+      "jsmap_scrape"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "grep",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "hidden_params_arjun": {
     "inputs": [
@@ -299,8 +523,17 @@
     "outputs": [
       "hidden_params.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "arjun",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "hidden_params.txt"
+    ]
   },
   "hostheader_run": {
     "inputs": [
@@ -309,8 +542,17 @@
     "outputs": [
       "hostheader_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "hostheader_findings.txt"
+    ]
   },
   "httpx_probe": {
     "inputs": [
@@ -319,8 +561,17 @@
     "outputs": [
       "alive.txt"
     ],
+    "dependencies": [
+      "merge_brute_subs"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "httpx",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "alive.txt"
+    ]
   },
   "idor_scan": {
     "inputs": [
@@ -330,8 +581,15 @@
     "outputs": [
       "idor_vulnerabilities.txt"
     ],
+    "dependencies": [
+      "idor_targets"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "idor_surface_run": {
     "inputs": [
@@ -340,8 +598,17 @@
     "outputs": [
       "idor_surface.txt"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "idor_surface.txt"
+    ]
   },
   "idor_targets": {
     "inputs": [
@@ -358,8 +625,18 @@
       "idor_targets.txt",
       "idor_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "idor_targets.txt",
+      "idor_targets_filtered.txt"
+    ]
   },
   "js_endpoints_scan": {
     "inputs": [
@@ -371,8 +648,17 @@
     "outputs": [
       "js_endpoint_findings.txt"
     ],
+    "dependencies": [
+      "merge_js_endpoints"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "js_endpoint_findings.txt"
+    ]
   },
   "js_mine_run": {
     "inputs": [
@@ -388,8 +674,17 @@
     "outputs": [
       "js_mine_findings.txt"
     ],
+    "dependencies": [
+      "jsmap_scrape"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "js_mine_findings.txt"
+    ]
   },
   "jsmap_scrape": {
     "inputs": [
@@ -406,8 +701,26 @@
       "jsmap_status.txt",
       "js_bundles"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [
+      "js_bundles"
+    ],
+    "zero_result_outputs": [
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt",
+      "js_bundles"
+    ]
   },
   "katana_crawl": {
     "inputs": [
@@ -418,8 +731,15 @@
       "katana_targets.txt",
       "katana_urls.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "12m0s",
+    "tool": "katana",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "lfi_scan": {
     "inputs": [
@@ -429,8 +749,15 @@
     "outputs": [
       "lfi_results.txt"
     ],
+    "dependencies": [
+      "lfi_targets"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "lfi_targets": {
     "inputs": [
@@ -447,8 +774,18 @@
       "lfi_targets.txt",
       "lfi_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "lfi_targets.txt",
+      "lfi_targets_filtered.txt"
+    ]
   },
   "manual_review_queue": {
     "inputs": [
@@ -457,8 +794,15 @@
     "outputs": [
       "manual_business_logic_review.txt"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "grep",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "merge_all_urls": {
     "inputs": [
@@ -473,8 +817,21 @@
     "outputs": [
       "all_urls.txt"
     ],
+    "dependencies": [
+      "gau_urls",
+      "wayback_urls",
+      "katana_crawl",
+      "api_discovery",
+      "spec_parser"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "cat",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "all_urls.txt"
+    ]
   },
   "merge_brute_subs": {
     "inputs": [
@@ -483,8 +840,17 @@
     "outputs": [
       "live_subs.txt"
     ],
+    "dependencies": [
+      "subdomain_brute"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "cat",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "live_subs.txt"
+    ]
   },
   "merge_js_endpoints": {
     "inputs": [
@@ -497,8 +863,20 @@
       "js_endpoints_full.txt",
       "merge_js_endpoints_status.txt"
     ],
+    "dependencies": [
+      "merge_all_urls",
+      "ffuf_js_endpoints"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "cat",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "all_urls.txt",
+      "js_endpoints_full.txt",
+      "merge_js_endpoints_status.txt"
+    ]
   },
   "merge_subs": {
     "inputs": [
@@ -510,8 +888,18 @@
     "outputs": [
       "subs.txt"
     ],
+    "dependencies": [
+      "subfinder",
+      "assetfinder",
+      "amass_parse",
+      "crtsh"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "cat",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "nextjs_bypass_run": {
     "inputs": [
@@ -522,8 +910,17 @@
     "outputs": [
       "nextjs_bypass_findings.txt"
     ],
+    "dependencies": [
+      "url_filter_alive"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "nextjs_bypass_findings.txt"
+    ]
   },
   "nextjs_plaid_jwt_probe": {
     "inputs": [
@@ -532,8 +929,15 @@
     "outputs": [
       "nextjs_plaid_jwt_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "curl",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "nuclei_auth_scan": {
     "inputs": [
@@ -543,8 +947,17 @@
     "outputs": [
       "auth_results.txt"
     ],
+    "dependencies": [
+      "nuclei_target_merge"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "auth_results.txt"
+    ]
   },
   "nuclei_exposures": {
     "inputs": [
@@ -554,8 +967,17 @@
     "outputs": [
       "credentials_found.txt"
     ],
+    "dependencies": [
+      "nuclei_target_merge"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "credentials_found.txt"
+    ]
   },
   "nuclei_graphql_scan": {
     "inputs": [
@@ -565,8 +987,17 @@
     "outputs": [
       "nuclei_graphql_scan.txt"
     ],
+    "dependencies": [
+      "nuclei_target_merge"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "nuclei_graphql_scan.txt"
+    ]
   },
   "nuclei_misconfigs": {
     "inputs": [
@@ -576,8 +1007,17 @@
     "outputs": [
       "misconfigs.txt"
     ],
+    "dependencies": [
+      "nuclei_target_merge"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "misconfigs.txt"
+    ]
   },
   "nuclei_rfuf_pass": {
     "inputs": [
@@ -587,8 +1027,15 @@
     "outputs": [
       "nuclei_rfuf_pass.txt"
     ],
+    "dependencies": [
+      "nuclei_target_merge"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "nuclei_target_merge": {
     "inputs": [
@@ -606,8 +1053,18 @@
       "nuclei_targets.txt",
       "nuclei_targets_status.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "awk",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ]
   },
   "oauth_audit_run": {
     "inputs": [
@@ -616,8 +1073,17 @@
     "outputs": [
       "oauth_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "oauth_findings.txt"
+    ]
   },
   "paramshape_run": {
     "inputs": [
@@ -626,8 +1092,17 @@
     "outputs": [
       "paramshape_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "paramshape_findings.txt"
+    ]
   },
   "paramsprayer_run": {
     "inputs": [
@@ -638,8 +1113,17 @@
     "outputs": [
       "paramsprayer_candidates.txt"
     ],
+    "dependencies": [
+      "url_filter_alive"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "paramsprayer_candidates.txt"
+    ]
   },
   "port_scan_naabu": {
     "inputs": [
@@ -648,8 +1132,17 @@
     "outputs": [
       "naabu_ports.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "naabu",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "naabu_ports.txt"
+    ]
   },
   "race_scan": {
     "inputs": [
@@ -660,8 +1153,19 @@
       "race_results.txt",
       "race_scan_status.json"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "race_candidates.txt",
+      "race_results.txt",
+      "race_scan_status.json"
+    ]
   },
   "rce_scan": {
     "inputs": [
@@ -671,8 +1175,15 @@
     "outputs": [
       "nuclei_rce_rce.txt"
     ],
+    "dependencies": [
+      "rce_targets"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "rce_targets": {
     "inputs": [
@@ -689,8 +1200,18 @@
       "rce_targets.txt",
       "rce_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "rce_targets.txt",
+      "rce_targets_filtered.txt"
+    ]
   },
   "redirect_scan": {
     "inputs": [
@@ -700,8 +1221,15 @@
     "outputs": [
       "open_redirect_results.txt"
     ],
+    "dependencies": [
+      "redirect_targets"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "redirect_targets": {
     "inputs": [
@@ -718,8 +1246,18 @@
       "redirect_targets.txt",
       "redirect_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "redirect_targets.txt",
+      "redirect_targets_filtered.txt"
+    ]
   },
   "reflection_run": {
     "inputs": [
@@ -735,8 +1273,17 @@
     "outputs": [
       "reflection_findings.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "reflection_findings.txt"
+    ]
   },
   "s3_audit_run": {
     "inputs": [
@@ -748,8 +1295,18 @@
       "s3_audit_findings.txt",
       "s3_audit_status.json"
     ],
+    "dependencies": [
+      "url_filter_alive"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "s3_audit_findings.txt",
+      "s3_audit_status.json"
+    ]
   },
   "scope_filter": {
     "inputs": [
@@ -769,8 +1326,24 @@
       "all_urls_200.txt",
       "js_endpoints.txt"
     ],
+    "dependencies": [
+      "merge_js_endpoints"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "grep",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt"
+    ]
   },
   "scope_guard": {
     "inputs": [
@@ -783,8 +1356,21 @@
       "scoped_subs.txt",
       "subs.txt"
     ],
+    "dependencies": [
+      "merge_subs"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "awk",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "in_scope_hosts.txt",
+      "out_of_scope_hosts.txt",
+      "scope.json",
+      "scoped_subs.txt",
+      "subs.txt"
+    ]
   },
   "secheaders_run": {
     "inputs": [
@@ -793,16 +1379,32 @@
     "outputs": [
       "secheaders_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "secheaders_findings.txt"
+    ]
   },
   "setup_directories": {
     "inputs": [],
     "outputs": [
       "."
     ],
+    "dependencies": [],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "default",
+    "directory_outputs": [
+      "."
+    ],
+    "zero_result_outputs": []
   },
   "signup_takeover_run": {
     "inputs": [
@@ -811,8 +1413,17 @@
     "outputs": [
       "signup_takeover_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "signup_takeover_findings.txt"
+    ]
   },
   "spec_parser": {
     "inputs": [
@@ -821,8 +1432,17 @@
     "outputs": [
       "openapi_paths.txt"
     ],
+    "dependencies": [
+      "api_discovery"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "openapi_paths.txt"
+    ]
   },
   "sqli_targets_replace": {
     "inputs": [
@@ -832,8 +1452,17 @@
     "outputs": [
       "sqli_targets.txt"
     ],
+    "dependencies": [
+      "filter_testable_sqli"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "cp",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "sqli_targets.txt"
+    ]
   },
   "sqlmap_scan": {
     "inputs": [
@@ -849,8 +1478,24 @@
       "sqlmap_targets.txt",
       "sqlmap_results"
     ],
+    "dependencies": [
+      "sqli_targets_replace",
+      "waf_detect"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "15m0s",
+    "tool": "sqlmap",
+    "directory_outputs": [
+      "sqlmap_results"
+    ],
+    "zero_result_outputs": [
+      "sqlmap_status.json",
+      "sqlmap_stderr.log",
+      "sqlmap_stdout.log",
+      "sqlmap_targets.txt",
+      "sqlmap_results"
+    ]
   },
   "ssrf_scan": {
     "inputs": [
@@ -862,8 +1507,15 @@
       "ssrf_targets_oob.txt",
       "ssrf_vulnerabilities.txt"
     ],
+    "dependencies": [
+      "ssrf_targets"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "nuclei",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "ssrf_targets": {
     "inputs": [
@@ -880,8 +1532,18 @@
       "ssrf_targets.txt",
       "ssrf_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "ssrf_targets.txt",
+      "ssrf_targets_filtered.txt"
+    ]
   },
   "subdomain_brute": {
     "inputs": [
@@ -890,16 +1552,32 @@
     "outputs": [
       "brute_subs.txt"
     ],
+    "dependencies": [
+      "dnsx_resolve"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "dnsx",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "subfinder": {
     "inputs": [],
     "outputs": [
       "subfinder.txt"
     ],
+    "dependencies": [
+      "setup_directories"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "subfinder",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "subfinder.txt"
+    ]
   },
   "takeover_v2_run": {
     "inputs": [
@@ -908,8 +1586,17 @@
     "outputs": [
       "takeover_v2_findings.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "takeover_v2_findings.txt"
+    ]
   },
   "tech_fingerprint": {
     "inputs": [
@@ -918,8 +1605,17 @@
     "outputs": [
       "tech_fingerprint.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "httpx",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "tech_fingerprint.txt"
+    ]
   },
   "trufflehog_scan": {
     "inputs": [
@@ -942,8 +1638,22 @@
       "trufflehog_stderr.log",
       "trufflehog_version.txt"
     ],
+    "dependencies": [
+      "katana_crawl",
+      "jsmap_scrape",
+      "api_discovery"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "trufflehog",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "trufflehog_results.txt",
+      "trufflehog_status.json",
+      "trufflehog_stderr.log",
+      "trufflehog_version.txt"
+    ]
   },
   "url_filter_alive": {
     "inputs": [
@@ -958,8 +1668,20 @@
       "all_urls_scannable.txt",
       "high_interest_urls.txt"
     ],
+    "dependencies": [
+      "uro_dedup",
+      "merge_js_endpoints"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "httpx",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls.txt"
+    ]
   },
   "uro_dedup": {
     "inputs": [
@@ -969,8 +1691,15 @@
       "all_urls.txt",
       "uro_urls.txt"
     ],
+    "dependencies": [
+      "merge_all_urls"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "sort",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "waf_detect": {
     "inputs": [
@@ -981,8 +1710,18 @@
       "waf_detections.txt",
       "waf_targets_tmp.txt"
     ],
+    "dependencies": [
+      "httpx_probe"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "wafw00f",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "waf_detections.txt",
+      "waf_targets_tmp.txt"
+    ]
   },
   "wayback_urls": {
     "inputs": [
@@ -991,8 +1730,15 @@
     "outputs": [
       "wayback_urls.txt"
     ],
+    "dependencies": [
+      "merge_brute_subs"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "10m0s",
+    "tool": "waybackurls",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "xss_scan": {
     "inputs": [
@@ -1005,8 +1751,16 @@
       "xss_targets_capped.txt",
       "xss_vulnerabilities.txt"
     ],
+    "dependencies": [
+      "xss_targets",
+      "waf_detect"
+    ],
     "policy": "optional",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "10m0s",
+    "tool": "dalfox",
+    "directory_outputs": [],
+    "zero_result_outputs": []
   },
   "xss_targets": {
     "inputs": [
@@ -1023,7 +1777,17 @@
       "xss_targets.txt",
       "xss_targets_filtered.txt"
     ],
+    "dependencies": [
+      "scope_filter"
+    ],
     "policy": "required",
-    "empty_input_valid": true
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "filter-testable",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "xss_targets.txt",
+      "xss_targets_filtered.txt"
+    ]
   }
 }

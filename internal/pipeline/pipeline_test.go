@@ -12,6 +12,8 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/checkpoint"
 	"github.com/CyberShuriken/rfuf/internal/config"
 	"github.com/CyberShuriken/rfuf/internal/coverage"
+	"github.com/CyberShuriken/rfuf/internal/executor"
+	"github.com/CyberShuriken/rfuf/internal/findings"
 	"github.com/CyberShuriken/rfuf/internal/scope"
 )
 
@@ -151,6 +153,45 @@ func TestEveryStageHasAnArtifactContract(t *testing.T) {
 	}
 }
 
+func TestEveryInternalFinderRunsFromAnArbitraryEmptyWorkDirectory(t *testing.T) {
+	steps := GetSteps("fixture.test", &config.Paths{})
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "scope.json"), []byte(`{"input":"fixture.test","root_domain":"fixture.test","mode":"exact"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, step := range steps {
+		if step.Tool != "findings-runner" {
+			continue
+		}
+		fields := strings.Fields(step.Command)
+		finder := ""
+		for i, field := range fields {
+			if field == "findings" && i+1 < len(fields) {
+				finder = fields[i+1]
+				break
+			}
+		}
+		if finder == "" {
+			t.Fatalf("stage %s does not declare its finder in the absolute dispatch command: %q", step.ID, step.Command)
+		}
+		if err := findings.RunFinder(finder, dir); err != nil {
+			t.Errorf("finder %s failed against empty fixture: %v", finder, err)
+			continue
+		}
+		seen[finder] = true
+		_, outputs := stageArtifacts(step)
+		for _, output := range outputs {
+			if _, err := os.Stat(filepath.Join(dir, output)); err != nil {
+				t.Errorf("finder %s (%s) did not create declared output %s: %v", finder, step.ID, output, err)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no internal finder stages were exercised")
+	}
+}
+
 func TestResumeInvalidatesChangedContractsAndMissingArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	step := Step{}
@@ -170,9 +211,14 @@ func TestResumeInvalidatesChangedContractsAndMissingArtifacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, outputs[0]), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	record := coverage.StageRecord{Status: coverage.StatusCompleted, CommandHash: commandDigest(step.Command), ToolIdentity: stageToolIdentity(step.Tool), ToolVersion: stageToolVersion(step.Tool)}
+	record := coverage.StageRecord{Status: coverage.StatusCompleted, CommandHash: commandDigest(step.Command), ContractHash: stageContractDigest(step.ID), ToolIdentity: stageToolIdentity(step.Tool), ToolVersion: stageToolVersion(step.Tool)}
 	inputs, contractOutputs := stageArtifacts(step)
 	record.InputContract, record.OutputContract = inputs, contractOutputs
+	fingerprint, err := fingerprintInputs(dir, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.InputFingerprint = fingerprint
 	if !resumeRecordValid(dir, step, record, true) {
 		t.Fatal("matching completed stage should be reusable")
 	}
@@ -180,6 +226,14 @@ func TestResumeInvalidatesChangedContractsAndMissingArtifacts(t *testing.T) {
 	changed.Command = "false"
 	if resumeRecordValid(dir, changed, record, true) {
 		t.Fatal("changed command must invalidate resume")
+	}
+	originalContract := stageContracts[step.ID]
+	defer func() { stageContracts[step.ID] = originalContract }()
+	changedContract := originalContract
+	changedContract.Timeout = "99m"
+	stageContracts[step.ID] = changedContract
+	if resumeRecordValid(dir, step, record, true) {
+		t.Fatal("changed stage contract must invalidate resume")
 	}
 	changedTool := record
 	changedTool.ToolVersion += "-changed"
@@ -194,6 +248,112 @@ func TestResumeInvalidatesChangedContractsAndMissingArtifacts(t *testing.T) {
 	}
 	if resumeRecordValid(dir, step, record, true) {
 		t.Fatal("missing output must invalidate resume")
+	}
+}
+
+func TestResumeInvalidatesChangedInputContents(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.txt")
+	output := filepath.Join(dir, "output.txt")
+	if err := os.WriteFile(input, []byte("before\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("result\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old, err := fingerprintInputs(dir, []string{"input.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(input, []byte("after!\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := fingerprintInputs(dir, []string{"input.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old == current {
+		t.Fatal("input content changes must invalidate resume fingerprints")
+	}
+}
+
+func TestStageResultStatusDoesNotHideFailuresOrMissingArtifacts(t *testing.T) {
+	cases := []struct {
+		name    string
+		code    int
+		timeout bool
+		grep    bool
+		missing bool
+		noInput bool
+		outputs int
+		want    coverage.StageStatus
+	}{
+		{name: "nonzero without input", code: 2, noInput: true, want: coverage.StatusFailed},
+		{name: "timed out despite zero exit", code: 0, timeout: true, want: coverage.StatusTimedOut},
+		{name: "missing output", code: 0, missing: true, want: coverage.StatusFailed},
+		{name: "grep no matches", code: 1, grep: true, outputs: 0, want: coverage.StatusCompletedEmpty},
+		{name: "empty input", code: 0, noInput: true, outputs: 0, want: coverage.StatusCompletedNoInput},
+		{name: "findings output", code: 0, outputs: 1, want: coverage.StatusCompleted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyStageResult(tc.code, tc.timeout, tc.grep, tc.missing, tc.noInput, tc.outputs); got != tc.want {
+				t.Fatalf("classifyStageResult() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunConfigurationInvalidatesExclusionAndAuthenticationMode(t *testing.T) {
+	oldEnv := executor.AuthEnv
+	t.Cleanup(func() { executor.AuthEnv = oldEnv })
+	parsed, err := scope.Parse("fixture.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	executor.AuthEnv = map[string]string{"RFUF_EXCLUDE_URL_REGEX": "/private", "RFUF_AUTH_COOKIE": "secret-fixture-cookie"}
+	if err := writeOrValidateRunConfiguration(dir, parsed, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".rfuf", "run_configuration.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "secret-fixture-cookie") {
+		t.Fatal("run configuration persisted authentication material")
+	}
+	if err := writeOrValidateRunConfiguration(dir, parsed, true); err != nil {
+		t.Fatalf("matching configuration should resume: %v", err)
+	}
+	executor.AuthEnv["RFUF_EXCLUDE_URL_REGEX"] = "/admin"
+	if err := writeOrValidateRunConfiguration(dir, parsed, true); err == nil {
+		t.Fatal("changed exclusion settings must invalidate resume")
+	}
+	executor.AuthEnv["RFUF_EXCLUDE_URL_REGEX"] = "/private"
+	executor.AuthEnv["RFUF_AUTH_COOKIE"] = ""
+	if err := writeOrValidateRunConfiguration(dir, parsed, true); err == nil {
+		t.Fatal("changed authentication mode must invalidate resume")
+	}
+}
+
+func TestRecordBootstrapFailureWritesTerminalReports(t *testing.T) {
+	dir := t.TempDir()
+	paths := &config.Paths{WorkDir: dir}
+	if err := RecordBootstrapFailure("fixture.test", paths, errors.New("safe test failure")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".rfuf", "coverage_report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"status": "BOOTSTRAP_FAILED"`) {
+		t.Fatalf("bootstrap report status missing: %s", data)
+	}
+	for _, name := range []string{"CoverageReport.md", "SUMMARY.md", "findings.md", "evidence.jsonl", filepath.Join(".rfuf", "artifact_manifest.json"), filepath.Join(".rfuf", "diagnostic.json")} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("missing bootstrap diagnostic %s: %v", name, err)
+		}
 	}
 }
 
@@ -827,6 +987,26 @@ func TestEnsureZeroResultArtifacts(t *testing.T) {
 		t.Fatalf("declared output artifact was not materialized: %v", err)
 	} else if info.Size() != 0 {
 		t.Fatalf("materialized zero-result artifact is not empty: %v", info.Size())
+	}
+}
+
+func TestDirectoryArtifactsReceiveStatusManifestForEmptyResults(t *testing.T) {
+	dir := t.TempDir()
+	outputs := []string{"api_specs"}
+	if err := ensureZeroResultArtifacts(dir, "api_discovery", outputs); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, "api_specs", ".rfuf-manifest.json")
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("empty directory output is missing its status manifest: %v", err)
+	}
+	if !strings.Contains(string(data), `"content_status": "empty"`) {
+		t.Fatalf("empty directory manifest has incorrect status: %s", data)
+	}
+	metrics := coverage.MeasureArtifacts(dir, outputs)
+	if len(metrics) != 1 || metrics[0].ContentStatus != "manifest_only" || metrics[0].Lines != 0 {
+		t.Fatalf("manifest metadata must not count as findings: %#v", metrics)
 	}
 }
 

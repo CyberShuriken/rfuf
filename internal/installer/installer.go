@@ -19,8 +19,10 @@ import (
 type PackageManager string
 
 const (
-	PKG_DNF PackageManager = "dnf"
-	PKG_APT PackageManager = "apt"
+	PKG_DNF          PackageManager = "dnf"
+	PKG_APT          PackageManager = "apt"
+	GFPatternsCommit                = "f686f06ae647726578920084c894100d702496cc"
+	SecListsCommit                  = "c5a05259b61cc60dee828ad1bf92c288c7e97ea0"
 )
 
 type Tool struct {
@@ -186,34 +188,93 @@ func GetRequiredTools(goBin string) []Tool {
 // terminals, and rebuilt Go tools the user already had — wasting minutes
 // before the pipeline started doing real work.
 func VerifyToolsPresent() error {
-	// bash is the universal shell for every pipeline stage; missing-bash
-	// commands would just fail silently inside the executor.
-	if _, err := exec.LookPath("bash"); err != nil {
-		return fmt.Errorf("bash is required but not found on PATH")
-	}
-
 	// Loop over every tool defined in GetRequiredTools and look up the
 	// CheckBinary on PATH. We deliberately don't try to repair anything
 	// here — if something is missing, the user should run the install
 	// path once without -resume.
+	fmt.Printf("%-20s %-10s %-20s %-32s %s\n", "TOOL", "REQUIRED", "STATUS", "VERSION", "PATH")
 	missingRequired := []string{}
 	for _, t := range GetRequiredTools("") {
-		if _, err := exec.LookPath(t.CheckBinary); err != nil {
-			state := "MISSING"
+		resolved, err := exec.LookPath(t.CheckBinary)
+		required := !optionalTools[t.Name]
+		if err != nil {
+			state := "missing_required"
 			if optionalTools[t.Name] {
-				state = "OPTIONAL MISSING"
+				state = "skipped_optional"
 			} else {
 				missingRequired = append(missingRequired, t.Name)
 			}
-			fmt.Printf("  %-18s %-16s locked=%s\n", t.Name, state, pinnedVersion(t))
-		} else {
-			fmt.Printf("  %-18s %-16s locked=%s\n", t.Name, "PRESENT", pinnedVersion(t))
+			fmt.Printf("%-20s %-10t %-20s %-32s %s\n", t.Name, required, state, "—", "—")
+			continue
 		}
+		version := installedVersion(resolved)
+		if locked := pinnedVersion(t); locked != "unlocked" {
+			version += " (pin " + locked + ")"
+		}
+		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", t.Name, required, "installed", version, resolved)
+	}
+	for _, tool := range []struct {
+		name     string
+		required bool
+	}{
+		{name: "bash", required: true}, {name: "curl", required: true},
+		{name: "jq", required: true}, {name: "timeout", required: true},
+		{name: "awk", required: true}, {name: "grep", required: true},
+		{name: "sort", required: true}, {name: "sed", required: true},
+		{name: "xargs", required: true}, {name: "git", required: true},
+		{name: "sqlmap", required: false},
+	} {
+		resolved, err := exec.LookPath(tool.name)
+		if err != nil {
+			status := "skipped_optional"
+			if tool.required {
+				status = "missing_required"
+				missingRequired = append(missingRequired, tool.name)
+			}
+			fmt.Printf("%-20s %-10t %-20s %-32s %s\n", tool.name, tool.required, status, "—", "—")
+			continue
+		}
+		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", tool.name, tool.required, "installed", installedVersion(resolved), resolved)
+	}
+	home, _ := os.UserHomeDir()
+	wordlist := ""
+	for _, candidate := range []string{"/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt", "/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories.txt", filepath.Join(home, "SecLists/Discovery/Web-Content/raft-medium-directories.txt")} {
+		if _, err := os.Stat(candidate); err == nil {
+			wordlist = candidate
+			break
+		}
+	}
+	if wordlist == "" {
+		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", "seclists", false, "skipped_optional", "—", "—")
+	} else {
+		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", "seclists", false, "installed", "operator/package", wordlist)
 	}
 	if len(missingRequired) > 0 {
 		return fmt.Errorf("missing required tools (run `rfuf -d <domain>` once WITHOUT -resume to install): %s", strings.Join(missingRequired, ", "))
 	}
 	return nil
+}
+
+func installedVersion(path string) string {
+	for _, args := range [][]string{{"--version"}, {"-version"}, {"version"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		output, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(output), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if len(line) > 120 {
+				line = line[:120]
+			}
+			return line
+		}
+	}
+	return "unreported"
 }
 
 func pinnedVersion(tool Tool) string {
@@ -292,18 +353,8 @@ func EnsureTools(goBin string) error {
 	if err != nil {
 		return fmt.Errorf("cannot determine local Go version: %w", err)
 	}
-	version := regexp.MustCompile(`^go([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`).FindStringSubmatch(strings.TrimSpace(string(versionOutput)))
-	if len(version) == 0 {
-		return fmt.Errorf("cannot parse local Go version %q", strings.TrimSpace(string(versionOutput)))
-	}
-	major, _ := strconv.Atoi(version[1])
-	minor, _ := strconv.Atoi(version[2])
-	patch := 0
-	if version[3] != "" {
-		patch, _ = strconv.Atoi(version[3])
-	}
-	if major < 1 || (major == 1 && (minor < 22 || (minor == 22 && patch < 2))) {
-		return fmt.Errorf("Go 1.22.2 or newer is required (found %s); dependency installs use GOTOOLCHAIN=local and will not fetch another toolchain", strings.TrimSpace(string(versionOutput)))
+	if err := validateGoVersion(strings.TrimSpace(string(versionOutput))); err != nil {
+		return err
 	}
 
 	// 2. Detect distro. We need this before step 3 (apt vs dnf) and again
@@ -394,12 +445,15 @@ func EnsureTools(goBin string) error {
 		// doing it once at first-install time is the right trade-off.
 		if t.Name == "nuclei" {
 			fmt.Println("[*] Updating nuclei templates (first-time setup)...")
-			// On Kali, nuclei may be installed via apt with system-wide
-			// templates at /usr/share/nuclei-templates. The -update-templates
-			// flag needs the templates directory to be writable, so we only
-			// run it if the user's templates dir is writable (not system).
-			updateCmd := exec.Command("nuclei", "-update-templates")
-			_ = updateCmd.Run()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			updateCmd := exec.CommandContext(ctx, "nuclei", "-update-templates")
+			updateCmd.Stdout = os.Stdout
+			updateCmd.Stderr = os.Stderr
+			if err := updateCmd.Run(); err != nil {
+				cancel()
+				return fmt.Errorf("failed to install nuclei templates: %w", err)
+			}
+			cancel()
 		}
 	}
 
@@ -431,6 +485,23 @@ func EnsureTools(goBin string) error {
 	return VerifyToolsPresent()
 }
 
+func validateGoVersion(output string) error {
+	version := regexp.MustCompile(`^go([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`).FindStringSubmatch(strings.TrimSpace(output))
+	if len(version) == 0 {
+		return fmt.Errorf("cannot parse local Go version %q", strings.TrimSpace(output))
+	}
+	major, _ := strconv.Atoi(version[1])
+	minor, _ := strconv.Atoi(version[2])
+	patch := 0
+	if version[3] != "" {
+		patch, _ = strconv.Atoi(version[3])
+	}
+	if major < 1 || (major == 1 && (minor < 22 || (minor == 22 && patch < 2))) {
+		return fmt.Errorf("Go 1.22.2 or newer is required (found %s); dependency installs use GOTOOLCHAIN=local and will not fetch another toolchain", strings.TrimSpace(output))
+	}
+	return nil
+}
+
 // patchRCFile appends the rfuf export line to a shell rc file unless the
 // exact export already appears. Idempotent across re-installs.
 func patchRCFile(rcPath, exportLine string) {
@@ -457,22 +528,34 @@ func patchRCFile(rcPath, exportLine string) {
 func ensureGFPatterns() error {
 	home, _ := os.UserHomeDir()
 	gfDir := filepath.Join(home, ".gf")
-	if _, err := os.Stat(gfDir); os.IsNotExist(err) {
-		fmt.Println("[*] Installing GF patterns...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "https://github.com/1ndianl33t/Gf-Patterns", gfDir)
+	if _, err := os.Stat(gfDir); err == nil {
+		// Operator-managed pattern directories are never mutated by bootstrap.
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect GF pattern directory: %w", err)
+	}
+	fmt.Printf("[*] Installing GF patterns at commit %s...\n", GFPatternsCommit)
+	return cloneAtCommit("https://github.com/1ndianl33t/Gf-Patterns.git", GFPatternsCommit, gfDir, 5*time.Minute)
+}
+
+func cloneAtCommit(repository, commit, destination string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := os.MkdirAll(destination, 0755); err != nil {
+		return fmt.Errorf("create checkout directory: %w", err)
+	}
+	commands := [][]string{
+		{"init", "--quiet"},
+		{"remote", "add", "origin", repository},
+		{"-c", "protocol.version=2", "fetch", "--depth=1", "origin", commit},
+		{"checkout", "--quiet", "--detach", "FETCH_HEAD"},
+	}
+	for _, args := range commands {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", destination}, args...)...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to clone gf patterns: %v", err)
-		}
-	} else {
-		fmt.Println("[*] Updating GF patterns...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		if err := exec.CommandContext(ctx, "git", "-C", gfDir, "pull", "--ff-only").Run(); err != nil {
-			return fmt.Errorf("GF pattern update failed: %w", err)
+			return fmt.Errorf("git %s for pinned dependency %s: %w", strings.Join(args, " "), repository, err)
 		}
 	}
 	return nil
@@ -516,13 +599,8 @@ func EnsureSeclists() (string, error) {
 	case PKG_DNF:
 		fmt.Println("[*] seclists not packaged on Fedora — cloning SecLists into ~/SecLists...")
 		cloneDst := filepath.Join(home, "SecLists")
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "https://github.com/danielmiessler/SecLists.git", cloneDst)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("failed to clone SecLists: %v", err)
+		if err := cloneAtCommit("https://github.com/danielmiessler/SecLists.git", SecListsCommit, cloneDst, 15*time.Minute); err != nil {
+			return "", fmt.Errorf("failed to clone pinned SecLists: %w", err)
 		}
 	default:
 		fmt.Println("[*] Installing seclists...")
@@ -530,20 +608,17 @@ func EnsureSeclists() (string, error) {
 		// sometimes doesn't. We don't fail the whole pipeline if this
 		// fails — the user can still run the rest of the stages.
 		aptCtx, aptCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		_ = exec.CommandContext(aptCtx, "sudo", "apt", "update").Run()
+		if err := exec.CommandContext(aptCtx, "sudo", "apt", "update").Run(); err != nil {
+			fmt.Printf("[!] apt index refresh failed (%v); trying the package once, then the pinned Git fallback\n", err)
+		}
 		aptCancel()
 		installCtx, installCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		if err := exec.CommandContext(installCtx, "sudo", "apt", "install", "-y", "seclists").Run(); err != nil {
 			installCancel()
 			fmt.Printf("[!] apt install seclists failed (%v) — falling back to git clone\n", err)
 			cloneDst := filepath.Join(home, "SecLists")
-			cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 15*time.Minute)
-			defer cloneCancel()
-			cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", "https://github.com/danielmiessler/SecLists.git", cloneDst)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				return "", fmt.Errorf("failed to install or clone seclists: %v", err)
+			if err := cloneAtCommit("https://github.com/danielmiessler/SecLists.git", SecListsCommit, cloneDst, 15*time.Minute); err != nil {
+				return "", fmt.Errorf("failed to install or clone pinned SecLists: %w", err)
 			}
 		} else {
 			installCancel()

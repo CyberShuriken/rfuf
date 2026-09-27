@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -48,8 +49,32 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "preflight":
+			if len(os.Args) != 2 {
+				fmt.Fprintln(os.Stderr, "usage: rfuf preflight")
+				os.Exit(2)
+			}
+			if err := installer.VerifyToolsPresent(); err != nil {
+				fmt.Fprintf(os.Stderr, "rfuf preflight: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "install":
-			if err := sysinstall.Install(); err != nil {
+			installFlags := flag.NewFlagSet("install", flag.ContinueOnError)
+			installFlags.SetOutput(os.Stderr)
+			nonInteractive := installFlags.Bool("non-interactive", false, "Install the binary without prompting or editing shell startup files")
+			if err := installFlags.Parse(os.Args[2:]); err != nil {
+				os.Exit(2)
+			}
+			if len(installFlags.Args()) != 0 {
+				fmt.Fprintln(os.Stderr, "usage: rfuf install [--non-interactive]")
+				os.Exit(2)
+			}
+			install := sysinstall.Install
+			if *nonInteractive {
+				install = sysinstall.InstallNonInteractive
+			}
+			if err := install(); err != nil {
 				fmt.Printf("[!] install failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -244,6 +269,9 @@ func main() {
 		if checkErr != nil {
 			fmt.Printf("[!] Auth check failed (HTTP %d): %v\n", status, checkErr)
 			if *authRequired {
+				if recordErr := pipeline.RecordAuthPreflightFailure(normalizedDomain, paths, checkErr); recordErr != nil {
+					fmt.Printf("[!] Could not write authentication failure report: %v\n", recordErr)
+				}
 				os.Exit(1)
 			}
 		} else if verified {
@@ -251,6 +279,9 @@ func main() {
 		} else {
 			fmt.Printf("[!] Auth check did not match the expected authenticated response (HTTP %d)\n", status)
 			if *authRequired {
+				if recordErr := pipeline.RecordAuthPreflightFailure(normalizedDomain, paths, errors.New("auth_check_not_verified")); recordErr != nil {
+					fmt.Printf("[!] Could not write authentication failure report: %v\n", recordErr)
+				}
 				os.Exit(1)
 			}
 		}
@@ -303,12 +334,18 @@ func main() {
 		if err := installer.VerifyToolsPresent(); err != nil {
 			fmt.Printf("[!] %v\n", err)
 			fmt.Println("[!] Drop -resume (or -skip-install) to run the installer once.")
+			if recordErr := pipeline.RecordBootstrapFailure(normalizedDomain, paths, err); recordErr != nil {
+				fmt.Printf("[!] Could not write bootstrap failure report: %v\n", recordErr)
+			}
 			os.Exit(1)
 		}
 	} else {
 		fmt.Println("[*] Checking dependencies...")
 		if err := installer.EnsureTools(paths.GoBin); err != nil {
 			fmt.Printf("[!] Error ensuring tools: %v\n", err)
+			if recordErr := pipeline.RecordBootstrapFailure(normalizedDomain, paths, err); recordErr != nil {
+				fmt.Printf("[!] Could not write bootstrap failure report: %v\n", recordErr)
+			}
 			os.Exit(1)
 		}
 
@@ -410,13 +447,14 @@ func writeValidationInputsMetadata(workDir string, secondCookie, secondBearer bo
 
 func writeAuthCheckMetadata(workDir string, configured, verified bool, status int, checkErr error) error {
 	metadata := struct {
-		Configured  bool   `json:"configured"`
-		Verified    bool   `json:"verified"`
-		Mode        string `json:"mode"`
-		HealthCheck string `json:"health_check"`
-		StatusCode  int    `json:"status_code,omitempty"`
-		ErrorClass  string `json:"error_class,omitempty"`
-	}{Configured: configured, Verified: verified, StatusCode: status, HealthCheck: "not_requested"}
+		Configured  bool      `json:"configured"`
+		Verified    bool      `json:"verified"`
+		Timestamp   time.Time `json:"timestamp"`
+		Mode        string    `json:"mode"`
+		HealthCheck string    `json:"health_check"`
+		StatusCode  int       `json:"status_code,omitempty"`
+		ErrorClass  string    `json:"error_class,omitempty"`
+	}{Configured: configured, Verified: verified, Timestamp: time.Now().UTC(), StatusCode: status, HealthCheck: "not_requested"}
 	switch {
 	case !configured:
 		metadata.Mode = "public"
@@ -452,7 +490,7 @@ func writeAuthCheckMetadata(workDir string, configured, verified bool, status in
 func verifyAuthSession(checkURL, marker string) (bool, int, error) {
 	req, err := http.NewRequest(http.MethodGet, checkURL, nil)
 	if err != nil {
-		return false, 0, err
+		return false, 0, errors.New("invalid_check_url")
 	}
 	if cookie := strings.TrimSpace(executor.AuthEnv["RFUF_AUTH_COOKIE"]); cookie != "" {
 		req.Header.Set("Cookie", cookie)
@@ -469,12 +507,12 @@ func verifyAuthSession(checkURL, marker string) (bool, int, error) {
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return false, 0, err
+		return false, 0, errors.New("request_failed")
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return false, resp.StatusCode, err
+		return false, resp.StatusCode, errors.New("response_read_failed")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return false, resp.StatusCode, fmt.Errorf("unexpected response status")
