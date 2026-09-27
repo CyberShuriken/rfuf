@@ -116,6 +116,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -142,7 +143,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) []string {
 	for _, v := range vectors {
 		// Build the request. We use GET / so every server has a known
 		// response shape to compare against.
-		req, err := http.NewRequestWithContext(ctx, "GET", host, nil)
+		req, err := iohelp.NewRequestWithContext(ctx, "GET", host, nil)
 		if err != nil {
 			continue
 		}

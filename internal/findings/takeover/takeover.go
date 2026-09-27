@@ -196,6 +196,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -222,7 +223,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) []string {
 		// GET first to capture form-level signals. A 200 with email
 		// confirm signals is a strong indicator the app uses email
 		// verification on signup.
-		req, err := http.NewRequestWithContext(ctx, "GET", host+p, nil)
+		req, err := iohelp.NewRequestWithContext(ctx, "GET", host+p, nil)
 		if err != nil {
 			continue
 		}

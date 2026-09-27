@@ -123,6 +123,7 @@ func probeAll(ctx context.Context, urls []string) []Finding {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, raw := range urls {
 		raw := raw
@@ -172,7 +173,7 @@ func probeURL(ctx context.Context, client *http.Client, rawURL string) []Finding
 	}
 	probe.RawQuery = pq.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", probe.String(), nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", probe.String(), nil)
 	if err != nil {
 		return nil
 	}

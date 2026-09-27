@@ -49,6 +49,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "target-stream":
+			if err := runTargetStream(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "rfuf target-stream: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "preflight":
 			if len(os.Args) != 2 {
 				fmt.Fprintln(os.Stderr, "usage: rfuf preflight")
@@ -364,6 +370,84 @@ func main() {
 		fmt.Printf("[!] Pipeline failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runTargetStream(args []string) error {
+	flags := flag.NewFlagSet("target-stream", flag.ContinueOnError)
+	input := flags.String("input", "", "line-oriented candidate input")
+	output := flags.String("output", "", "canonical target output")
+	source := flags.String("source", "unknown", "candidate source label")
+	status := flags.String("status", "", "JSON stream count report")
+	provenance := flags.String("provenance", "", "JSONL target provenance output")
+	maxTargets := flags.Int("max-targets", 10000, "maximum unique targets after normalization")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *input == "" || *output == "" || *status == "" || *provenance == "" || flags.NArg() != 0 {
+		return errors.New("usage: rfuf target-stream -input FILE -output FILE -source NAME -status FILE -provenance FILE [-max-targets N]")
+	}
+	scanScope, err := scope.Parse(os.Getenv("RFUF_SCOPE_INPUT"))
+	if err != nil {
+		return errors.New("scope must be configured before canonicalizing targets")
+	}
+	lines := []string{}
+	file, err := os.Open(*input)
+	if err == nil {
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		readErr := scanner.Err()
+		closeErr := file.Close()
+		if readErr != nil {
+			return fmt.Errorf("read target input: %w", readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close target input: %w", closeErr)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("open target input: %w", err)
+	}
+	max := *maxTargets
+	if max <= 0 {
+		max = 10000
+	}
+	candidates, counts, err := scope.CanonicalizeStream(lines, *source, scanScope, os.Getenv("RFUF_EXCLUDE_URL_REGEX"), max)
+	if err != nil {
+		return err
+	}
+	var targetLines, provenanceLines strings.Builder
+	encoder := json.NewEncoder(&provenanceLines)
+	for _, candidate := range candidates {
+		targetLines.WriteString(candidate.Value)
+		targetLines.WriteByte('\n')
+		if err := encoder.Encode(candidate); err != nil {
+			return err
+		}
+	}
+	statusBytes, err := counts.JSON()
+	if err != nil {
+		return err
+	}
+	files := []struct {
+		path string
+		data []byte
+	}{
+		{path: *output, data: []byte(targetLines.String())},
+		{path: *status, data: append(statusBytes, '\n')},
+		{path: *provenance, data: []byte(provenanceLines.String())},
+	}
+	for _, file := range files {
+		path, data := file.path, file.data
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runFilterTestable(args []string) error {

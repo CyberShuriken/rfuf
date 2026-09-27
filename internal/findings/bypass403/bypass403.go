@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/CyberShuriken/rfuf/internal/findings/internal/iohelp"
 )
 
 type payload struct {
@@ -45,6 +47,7 @@ func Run(workDir string) error {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	payloads := []payload{
 		{"X-Forwarded-For", func(u *url.URL) map[string]string {
@@ -102,7 +105,7 @@ func Run(workDir string) error {
 				}
 			}
 
-			req, err := http.NewRequest(p.method, testURL, nil)
+			req, err := iohelp.NewRequest(p.method, testURL, nil)
 			if err != nil {
 				continue
 			}

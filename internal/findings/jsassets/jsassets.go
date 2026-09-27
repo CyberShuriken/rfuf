@@ -112,6 +112,7 @@ func Run(workDir string) error {
 	errorWriter, endpointWriter := bufio.NewWriter(errorFile), bufio.NewWriter(endpointFile)
 	errorTextWriter := bufio.NewWriter(errorTextFile)
 	client := newClient()
+	iohelp.HardenClient(client)
 	previousRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !parsedScope.IncludesHost(req.URL.Hostname()) || (exclude != nil && exclude.MatchString(req.URL.String())) {
@@ -289,7 +290,7 @@ func fetch(client *http.Client, rawURL, kind string, limit int64) ([]byte, asset
 	meta := assetMetadata{URL: rawURL, Host: parsed.Hostname(), Kind: kind}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, meta, err
 	}

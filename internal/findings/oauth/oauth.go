@@ -105,6 +105,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -131,7 +132,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) hostResult
 	// 1) Probe each authorize path with a HEAD. Any 2xx/3xx/401/403
 	//    is a positive signal (the path exists; auth may be required).
 	for _, p := range candidateAuthorizePaths {
-		req, err := http.NewRequestWithContext(ctx, "HEAD", host+p, nil)
+		req, err := iohelp.NewRequestWithContext(ctx, "HEAD", host+p, nil)
 		if err != nil {
 			continue
 		}
@@ -173,7 +174,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) hostResult
 }
 
 func fetchDiscovery(ctx context.Context, client *http.Client, url string) []string {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil
 	}

@@ -17,6 +17,24 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/scope"
 )
 
+func useBuiltRFUFForStages(t *testing.T) {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "rfuf")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/rfuf")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build rfuf command fixture: %v: %s", err, out)
+	}
+	previous := selfBinOverride
+	selfBinOverride = bin
+	t.Cleanup(func() { selfBinOverride = previous })
+}
+
 func TestXSSScanUsesSupportedDalfoxFlags(t *testing.T) {
 	steps := GetSteps("google.com", &config.Paths{})
 
@@ -755,7 +773,7 @@ func TestScopeFilterIsFinalBoundary(t *testing.T) {
 			mergeIndex = i
 		case "scope_filter":
 			scopeIndex = i
-			for _, marker := range []string{"RFUF_EXCLUDE_URL_REGEX", "RFUF_MAX_TARGETS", "all_urls_200.txt", "js_endpoints.txt"} {
+			for _, marker := range []string{"target-stream", "RFUF_MAX_TARGETS", "all_urls_200.txt", "js_endpoints.txt", "all_urls_provenance.jsonl"} {
 				if !strings.Contains(step.Command, marker) {
 					t.Errorf("scope_filter missing %q", marker)
 				}
@@ -770,6 +788,7 @@ func TestScopeFilterIsFinalBoundary(t *testing.T) {
 }
 
 func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
+	useBuiltRFUFForStages(t)
 	var command string
 	for _, step := range GetSteps("*.example.com", &config.Paths{}) {
 		if step.ID == "scope_filter" {
@@ -792,7 +811,7 @@ func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
 	}
 	cmd := exec.Command("bash", "-c", command)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "RFUF_EXCLUDE_URL_REGEX=(^|/)(contact|support)(/|$)", "RFUF_MAX_TARGETS=100")
+	cmd.Env = append(os.Environ(), "RFUF_SCOPE_INPUT=*.example.com", "RFUF_EXCLUDE_URL_REGEX=(^|/)(contact|support)(/|$)", "RFUF_MAX_TARGETS=100")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("scope_filter failed: %v output=%s", err, output)
 	}
@@ -807,6 +826,7 @@ func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
 }
 
 func TestLocalFixturePipelineMatrix(t *testing.T) {
+	useBuiltRFUFForStages(t)
 	cases := []struct {
 		name, input, mode, subs, urls string
 		want, wantHighInterest        []string
@@ -876,6 +896,7 @@ func TestLocalFixturePipelineMatrix(t *testing.T) {
 					got = append(got, line)
 				}
 			}
+			sort.Strings(tc.want)
 			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
 				t.Fatalf("scannable URLs=%v want %v", got, tc.want)
 			}

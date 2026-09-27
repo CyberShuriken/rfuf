@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -66,11 +67,27 @@ var (
 // logging); Stdout/Stderr are populated for callers that want to parse
 // the raw output, even though the current pipeline does not.
 type Result struct {
-	Stdout   string
-	Stderr   string
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	Duration  time.Duration
+	TimedOut  bool
+	ToolExits []ToolExit
+}
+
+// ToolExit records scanner subprocess statuses independently of the shell
+// script's final status. This detects a scanner failure even if a legacy
+// stage script continues and eventually exits zero.
+type ToolExit struct {
+	Tool     string
 	ExitCode int
-	Duration time.Duration
-	TimedOut bool
+}
+
+var trackedTools = []string{
+	"subfinder", "assetfinder", "amass", "dnsx", "subzy", "nuclei", "httpx",
+	"katana", "trufflehog", "gf", "Gxss", "dalfox", "gau", "waybackurls",
+	"ffuf", "naabu", "wafw00f", "arjun", "ghauri", "interactsh-client",
+	"sqlmap", "curl", "timeout",
 }
 
 // RunCommand executes a shell command, stopping its entire process group when
@@ -88,6 +105,11 @@ type Result struct {
 // available if a future stage needs the raw text).
 func RunCommand(parent context.Context, cmdStr string, workDir string, logFile *os.File, timeout time.Duration) (*Result, error) {
 	start := time.Now()
+	shimDir, toolStatusPath, err := makeToolStatusShims()
+	if err != nil {
+		return nil, fmt.Errorf("prepare scanner status tracking: %w", err)
+	}
+	defer os.RemoveAll(shimDir)
 
 	ctx := parent
 	cancel := func() {}
@@ -105,20 +127,17 @@ func RunCommand(parent context.Context, cmdStr string, workDir string, logFile *
 	// We append to os.Environ() rather than replacing it so PATH, HOME,
 	// and the rest of the user's shell environment still flow through.
 	cmd.Env = append(os.Environ(), rfufEnv()...)
+	if shimDir != "" {
+		cmd.Env = append(cmd.Env, "PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		cmd.Env = append(cmd.Env, "RFUF_TOOL_STATUS_FILE="+toolStatusPath)
+	}
 
 	// Ensure child processes are killed when the parent is killed.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// Soft cancellation: when the per-step deadline fires, send SIGTERM
-	// to the outer bash (not SIGKILL) and let it run the trailing
-	// `; true` fallback. Default exec.CommandContext cancels with
-	// cmd.Process.Kill() which is SIGKILL — that kills bash before
-	// `; touch xss_vulnerabilities.txt ; true` ever runs, the wrapper
-	// never produces exit code 0, and the timeout surfaces as a hard
-	// failure. SIGTERM + WaitDelay lets bash exit cleanly with status 0
-	// so the orchestrator's `; true` wrapper does its job. The
-	// process-group SIGKILL below is still the hard backstop if bash
-	// ignores SIGTERM (e.g. wedged dalfox browser pool).
+	// Send SIGTERM first so commands can flush partial output and logs;
+	// the process-group killer escalates to SIGKILL after a grace period.
+	// Timeout classification does not depend on the shell's exit status.
 	cmd.WaitDelay = 10 * time.Second
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
@@ -207,42 +226,101 @@ func RunCommand(parent context.Context, cmdStr string, workDir string, logFile *
 	footer := fmt.Sprintf("\n--- [%s] COMMAND END: EXIT %d DURATION %v ---\n", time.Now().Format(time.RFC3339), exitCode, duration)
 	logFile.WriteString(footer)
 
-	// Context timeout handling. Two cases to disambiguate:
-	//
-	//   (a) The shell `timeout --foreground N` killed the process *and* the
-	//       command returned non-zero. The orchestrator wraps the call in
-	//       `... ; true` so exitCode is 0 anyway — record this as success.
-	//
-	//   (b) The executor's `context.WithTimeout` SIGTERMed the process group
-	//       (race with shell `timeout`; same wall-clock cap). The cmd.Wait()
-	//       returned an *exec.ExitError with non-zero code (signal exit).
-	//       exitCode is -1 in that branch.
-	//
-	// Treat any per-step deadline as a soft success regardless of exit
-	// code: the orchestrator's `; true` was *meant* to make the timeout
-	// path exit 0, and honoring that intent — even when SIGTERM raced
-	// with the wrapper and bash exited via signal — keeps the pipeline
-	// moving and preserves partial output. Only signal user-initiated
-	// cancellation as an error so Ctrl-C still aborts cleanly.
+	// Preserve timeout status even when a shell wrapper swallowed a child
+	// error. Keep the shell's actual exit code for diagnostics; the
+	// scheduler must treat TimedOut as incomplete.
 	if ctx.Err() != nil {
 		if parent.Err() != nil {
 			return nil, fmt.Errorf("command interrupted")
 		}
 		return &Result{
-			Stdout:   stdoutBuf.String(),
-			Stderr:   stderrBuf.String(),
-			ExitCode: 0,
-			Duration: duration,
-			TimedOut: true,
+			Stdout:    stdoutBuf.String(),
+			Stderr:    stderrBuf.String(),
+			ExitCode:  exitCode,
+			Duration:  duration,
+			TimedOut:  true,
+			ToolExits: readToolExits(toolStatusPath),
 		}, nil
 	}
 
 	return &Result{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
-		ExitCode: exitCode,
-		Duration: duration,
+		Stdout:    stdoutBuf.String(),
+		Stderr:    stderrBuf.String(),
+		ExitCode:  exitCode,
+		Duration:  duration,
+		ToolExits: readToolExits(toolStatusPath),
 	}, nil
+}
+
+func makeToolStatusShims() (string, string, error) {
+	shimDir, err := os.MkdirTemp("", "rfuf-tool-status-")
+	if err != nil {
+		return "", "", err
+	}
+	statusPath := filepath.Join(shimDir, "tool-exits.tsv")
+	for _, tool := range trackedTools {
+		realPath, err := exec.LookPath(tool)
+		if err != nil {
+			continue
+		}
+		shim := "#!/bin/sh\n" +
+			"real=" + shellQuote(realPath) + "\n" +
+			"\"$real\" \"$@\"\n" +
+			"rfuf_status=$?\n" +
+			"printf '%s\\t%s\\n' " + shellQuote(tool) + " \"$rfuf_status\" >> \"$RFUF_TOOL_STATUS_FILE\"\n" +
+			"exit \"$rfuf_status\"\n"
+		if err := os.WriteFile(filepath.Join(shimDir, tool), []byte(shim), 0700); err != nil {
+			os.RemoveAll(shimDir)
+			return "", "", err
+		}
+	}
+	return shimDir, statusPath, nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func readToolExits(path string) []ToolExit {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var exits []ToolExit
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 2 {
+			continue
+		}
+		code, err := strconv.Atoi(fields[1])
+		if err == nil {
+			exits = append(exits, ToolExit{Tool: fields[0], ExitCode: code})
+		}
+	}
+	return exits
+}
+
+func ToolExitError(exits []ToolExit) string {
+	var failures []string
+	for _, exit := range exits {
+		if exit.ExitCode != 0 && exit.ExitCode != 124 && exit.ExitCode != 137 && exit.ExitCode != 143 {
+			failures = append(failures, fmt.Sprintf("%s=%d", exit.Tool, exit.ExitCode))
+		}
+	}
+	if len(failures) == 0 {
+		return ""
+	}
+	sortStrings(failures)
+	return "scanner_exit: " + strings.Join(failures, ",")
+}
+
+func ToolTimedOut(exits []ToolExit) bool {
+	for _, exit := range exits {
+		if exit.ExitCode == 124 || exit.ExitCode == 137 || exit.ExitCode == 143 {
+			return true
+		}
+	}
+	return false
 }
 
 // scanAndForward reads one line at a time from r, writes it to logWriter

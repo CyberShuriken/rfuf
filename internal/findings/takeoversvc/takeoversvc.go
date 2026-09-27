@@ -174,6 +174,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 		Transport: tr,
 		Timeout:   6 * time.Second,
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -195,7 +196,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 }
 
 func probeHost(ctx context.Context, client *http.Client, host string) []string {
-	req, err := http.NewRequestWithContext(ctx, "GET", host, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", host, nil)
 	if err != nil {
 		return nil
 	}

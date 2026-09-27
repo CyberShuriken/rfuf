@@ -58,6 +58,39 @@ func TestAuthHealthMetadataUsesSafeClassAndNeverPersistsSecrets(t *testing.T) {
 	}
 }
 
+func TestRunTargetStreamWritesCanonicalTargetsAndMetadata(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "input.txt")
+	if err := os.WriteFile(in, []byte("HTTPS://API.FIXTURE.TEST:443/path#fragment\nhttps://api.fixture.test/path\nhttps://outside.test/path\nhttps://api.fixture.test/private\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RFUF_SCOPE_INPUT", "*.fixture.test")
+	t.Setenv("RFUF_EXCLUDE_URL_REGEX", `/private`)
+	args := []string{"-input", in, "-output", filepath.Join(dir, "out.txt"), "-source", "fixture", "-status", filepath.Join(dir, "status.json"), "-provenance", filepath.Join(dir, "provenance.jsonl"), "-max-targets", "10"}
+	if err := runTargetStream(args); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "https://api.fixture.test/path\n" {
+		t.Fatalf("unexpected canonical stream: %q", output)
+	}
+	status, err := os.ReadFile(filepath.Join(dir, "status.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"duplicate_count": 1`, `"excluded_count": 1`, `"out_of_scope_count": 1`, `"final_count": 1`} {
+		if !strings.Contains(string(status), want) {
+			t.Errorf("status missing %s: %s", want, status)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "provenance.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVerifyAuthSessionMarkerMismatch(t *testing.T) {
 	previous := executor.AuthEnv
 	defer func() { executor.AuthEnv = previous }()

@@ -164,6 +164,7 @@ func probeAll(ctx context.Context, orgs []string) []string {
 		Transport: tr,
 		Timeout:   5 * time.Second,
 	}
+	iohelp.HardenClient(client)
 
 	for _, org := range orgs {
 		for _, kw := range keywords {
@@ -206,7 +207,7 @@ func bucketHost(provider, bucket string) string {
 }
 
 func probeOne(ctx context.Context, client *http.Client, provider, bucket, host string) string {
-	req, err := http.NewRequestWithContext(ctx, "HEAD", host, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "HEAD", host, nil)
 	if err != nil {
 		return ""
 	}

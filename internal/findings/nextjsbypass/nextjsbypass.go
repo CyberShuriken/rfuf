@@ -38,6 +38,7 @@ func Run(workDir string) error {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, urlStr := range urls {
 		// Baseline
@@ -81,7 +82,7 @@ func Run(workDir string) error {
 }
 
 func getStatusCode(client *http.Client, urlStr string, headers map[string]string) int {
-	req, err := http.NewRequest("GET", urlStr, nil)
+	req, err := iohelp.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return 0
 	}

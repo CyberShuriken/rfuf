@@ -87,6 +87,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -132,7 +133,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) []string {
 }
 
 func preflightProbe(ctx context.Context, client *http.Client, host, origin string) string {
-	req, err := http.NewRequestWithContext(ctx, "OPTIONS", host, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "OPTIONS", host, nil)
 	if err != nil {
 		return ""
 	}
@@ -174,7 +175,7 @@ func preflightProbe(ctx context.Context, client *http.Client, host, origin strin
 }
 
 func originProbe(ctx context.Context, client *http.Client, host, origin string) string {
-	req, err := http.NewRequestWithContext(ctx, "GET", host, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", host, nil)
 	if err != nil {
 		return ""
 	}

@@ -115,7 +115,7 @@ func writeStageRecordOrReport(workDir string, record coverage.StageRecord, errCh
 }
 
 func stageToolIdentity(tool string) string {
-	if tool == "" || tool == "findings-runner" || tool == "filter-testable" {
+	if tool == "" || tool == "findings-runner" || tool == "filter-testable" || tool == "rfuf" {
 		return selfBin()
 	}
 	path, err := exec.LookPath(tool)
@@ -131,7 +131,7 @@ func stageToolIdentity(tool string) string {
 
 func stageToolVersion(tool string) string {
 	path := tool
-	if tool == "findings-runner" || tool == "filter-testable" {
+	if tool == "findings-runner" || tool == "filter-testable" || tool == "rfuf" {
 		path = selfBin()
 	} else if resolved, err := exec.LookPath(tool); err == nil {
 		path = resolved
@@ -196,6 +196,19 @@ func classifyStageResult(exitCode int, timedOut, grepStage, missingOutput, empty
 		return coverage.StatusCompletedEmpty
 	}
 	return coverage.StatusCompleted
+}
+
+func stageError(toolError string, exitCode int, timedOut bool) string {
+	if timedOut {
+		if toolError != "" {
+			return toolError + "; timeout"
+		}
+		return "timeout"
+	}
+	if toolError != "" {
+		return toolError
+	}
+	return fmt.Sprintf("exit_code=%d", exitCode)
 }
 
 func equalStrings(a, b []string) bool {
@@ -298,6 +311,7 @@ var (
 		"amass_enum":             "amass",
 		"crtsh":                  "curl",
 		"scope_guard":            "awk",
+		"scope_filter":           "rfuf",
 		"dnsx_resolve":           "dnsx",
 		"subdomain_brute":        "dnsx",
 		"httpx_probe":            "httpx",
@@ -380,7 +394,12 @@ var (
 // selfBin returns the absolute path to the running rfuf binary so
 // pipeline stages can invoke `rfuf findings` / `rfuf filter-testable`
 // without `go run` (which fails when cmd.Dir is the per-domain work dir).
+var selfBinOverride string
+
 func selfBin() string {
+	if selfBinOverride != "" {
+		return selfBinOverride
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
@@ -574,18 +593,13 @@ touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt
 cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt 2>/dev/null | sort -u > all_urls.txt
 exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", "api_discovery", "spec_parser"}, 0},
 		{"uro_dedup", "sort -u all_urls.txt -o all_urls.txt; cp all_urls.txt uro_urls.txt", "sort", "grep", []string{"merge_all_urls"}, 0},
-		{"url_filter_alive", fmt.Sprintf(`%s
-grep -Ei '%s' all_urls.txt > all_urls_scope_candidates.txt || :
-if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
-  grep -Ev -- "$RFUF_EXCLUDE_URL_REGEX" all_urls_scope_candidates.txt > all_urls_scannable.txt || :
-else
-  cp all_urls_scope_candidates.txt all_urls_scannable.txt
-fi
-rm -f all_urls_scope_candidates.txt
+		{"url_filter_alive", fmt.Sprintf(`set -eu
+%s target-stream -input all_urls.txt -output all_urls_scannable.txt -source merged_discovery -status all_urls_alive_stream_status.json -provenance all_urls_alive_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
+%s
 httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405,500 "${AUTH_HEADERS[@]}" > all_urls_status.txt
-grep -E " \[(200|301|302)\]" all_urls_status.txt | awk '{print $1}' > all_urls_200.txt
-grep -E " \[(401|403|500)\]" all_urls_status.txt > high_interest_urls.txt
-rm -f all_urls_status.txt`, authSnip, wildcardPattern), "httpx", "grep", []string{"uro_dedup", "merge_js_endpoints"}, 0},
+awk '/ \[(200|301|302)\]/ {print $1}' all_urls_status.txt > all_urls_200.txt
+awk '/ \[(401|403|500)\]/ {print}' all_urls_status.txt > high_interest_urls.txt
+rm -f all_urls_status.txt`, self, authSnip), "httpx", "default", []string{"uro_dedup", "merge_js_endpoints"}, 0},
 		{"nextjs_bypass_run", fmt.Sprintf("%s\n%s nextjsbypass .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
 		{"bypass403", fmt.Sprintf("%s bypass403 .", findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
 		{"ffuf_js_endpoints", fmt.Sprintf(`%s
@@ -601,33 +615,16 @@ if [ -s js_endpoints.txt ]; then
 						mv all_urls_with_js.txt all_urls.txt
 						printf 'js_endpoints=%s all_urls=%s\\n' "$(wc -l < js_endpoints_full.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" > merge_js_endpoints_status.txt
 						exit 0`, "cat", "grep", []string{"merge_all_urls", "ffuf_js_endpoints"}, 0},
-		{"scope_filter", fmt.Sprintf(`set +e
-filter_stream() {
-  IN="$1"; OUT="$2"; TMP="$OUT.tmp"
-  : > "$TMP"
-  [ -f "$IN" ] || { : > "$OUT"; return 0; }
-  if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
-    grep -Eiv -- "$RFUF_EXCLUDE_URL_REGEX" "$IN" > "$TMP" || :
-  else
-    cp "$IN" "$TMP"
-  fi
-  grep -E '%s' "$TMP" > "$OUT" || :
-  rm -f "$TMP"
-}
-filter_stream all_urls.txt all_urls_scannable.txt
-filter_stream all_urls_200.txt all_urls_200_scannable.txt
-filter_stream high_interest_urls.txt high_interest_urls_scannable.txt
-filter_stream js_endpoints.txt js_endpoints_scannable.txt
-head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_scannable.txt > all_urls_scannable.capped 2>/dev/null && mv all_urls_scannable.capped all_urls_scannable.txt || :
-head -n "${RFUF_MAX_TARGETS:-10000}" all_urls_200_scannable.txt > all_urls_200_scannable.capped 2>/dev/null && mv all_urls_200_scannable.capped all_urls_200_scannable.txt || :
-head -n "${RFUF_MAX_TARGETS:-10000}" high_interest_urls_scannable.txt > high_interest_urls_scannable.capped 2>/dev/null && mv high_interest_urls_scannable.capped high_interest_urls_scannable.txt || :
-head -n "${RFUF_MAX_TARGETS:-10000}" js_endpoints_scannable.txt > js_endpoints_scannable.capped 2>/dev/null && mv js_endpoints_scannable.capped js_endpoints_scannable.txt || :
-cp all_urls_scannable.txt all_urls.txt 2>/dev/null || :
-cp all_urls_200_scannable.txt all_urls_200.txt 2>/dev/null || :
-cp high_interest_urls_scannable.txt high_interest_urls.txt 2>/dev/null || :
-cp js_endpoints_scannable.txt js_endpoints.txt 2>/dev/null || :
-printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt
-exit 0`, wildcardPattern), "grep", "grep", []string{"merge_js_endpoints"}, 0},
+		{"scope_filter", fmt.Sprintf(`set -eu
+%s target-stream -input all_urls.txt -output all_urls_scannable.txt -source merged_discovery -status all_urls_stream_status.json -provenance all_urls_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
+%s target-stream -input all_urls_200.txt -output all_urls_200_scannable.txt -source http_status -status all_urls_200_stream_status.json -provenance all_urls_200_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
+%s target-stream -input high_interest_urls.txt -output high_interest_urls_scannable.txt -source http_status -status high_interest_stream_status.json -provenance high_interest_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
+%s target-stream -input js_endpoints.txt -output js_endpoints_scannable.txt -source javascript_api -status js_endpoints_stream_status.json -provenance js_endpoints_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
+cp all_urls_scannable.txt all_urls.txt
+cp all_urls_200_scannable.txt all_urls_200.txt
+cp high_interest_urls_scannable.txt high_interest_urls.txt
+cp js_endpoints_scannable.txt js_endpoints.txt
+printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt)" "$(wc -l < all_urls_200.txt)" "$(wc -l < js_endpoints.txt)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt`, self, self, self, self), "rfuf", "default", []string{"merge_js_endpoints"}, 0},
 		{"nuclei_target_merge", fmt.Sprintf(`set +e
 {
   awk '{print $1}' alive.txt 2>/dev/null
@@ -1254,7 +1251,11 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 				}
 
 				if tool, ok := stepTools[s.ID]; ok {
-					if _, err := exec.LookPath(tool); err != nil {
+					resolvedTool := tool
+					if tool == "rfuf" {
+						resolvedTool = selfBin()
+					}
+					if _, err := exec.LookPath(resolvedTool); err != nil {
 						now := time.Now()
 						if stageRequired(s.ID) {
 							writeRecord(coverage.StageRecord{StageID: s.ID, Required: true, Dependencies: s.Deps, Status: coverage.StatusFailed, StartedAt: now, FinishedAt: now, SkipReason: "required_tool_missing", Error: err.Error()})
@@ -1285,7 +1286,13 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					defer func() { <-semaphore }()
 
 					res, err := executor.RunCommand(ctx, step.Command, paths.WorkDir, logFile, effectiveStepTimeout(stepTimeout, step.Timeout))
-					if err == nil && res.ExitCode == 0 {
+					toolError := ""
+					toolTimedOut := false
+					if err == nil {
+						toolError = executor.ToolExitError(res.ToolExits)
+						toolTimedOut = executor.ToolTimedOut(res.ToolExits)
+					}
+					if err == nil && res.ExitCode == 0 && toolError == "" && !toolTimedOut {
 						_, outputs := stageArtifacts(step)
 						if materializeErr := ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs); materializeErr != nil {
 							err = materializeErr
@@ -1330,11 +1337,15 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					if emptyInput && !stageContracts[step.ID].EmptyInputValid {
 						missingOutput = true
 					}
-					status := classifyStageResult(res.ExitCode, res.TimedOut, step.Type == "grep", missingOutput, emptyInput, coverage.CountMetrics(outputMetrics))
-					if res.TimedOut {
+					if toolError != "" || toolTimedOut {
+						missingOutput = true
+					}
+					timedOut := res.TimedOut || toolTimedOut
+					status := classifyStageResult(res.ExitCode, timedOut, step.Type == "grep", missingOutput, emptyInput, coverage.CountMetrics(outputMetrics))
+					if timedOut {
 						if softStages[step.ID] {
 							status = coverage.StatusTimedOut
-							writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+							writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, TimedOut: true, Error: "scanner_timeout", InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 							completed[step.ID] = true
 							completeCheckpoint(step.ID)
 							mu.Unlock()
@@ -1354,7 +1365,7 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 
 					if status == coverage.StatusFailed || res.TimedOut || missingOutput {
 						if softStages[step.ID] {
-							writeRecord(coverage.StageRecord{StageID: step.ID, Required: false, Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+							writeRecord(coverage.StageRecord{StageID: step.ID, Required: false, Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, TimedOut: timedOut, Error: stageError(toolError, res.ExitCode, timedOut), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 							completed[step.ID] = true
 							completeCheckpoint(step.ID)
 							mu.Unlock()
@@ -1364,9 +1375,9 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 							status = coverage.StatusFailed
 						}
 						now := time.Now()
-						writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: now, ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+						writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: now, ExitCode: res.ExitCode, TimedOut: timedOut, Error: stageError(toolError, res.ExitCode, timedOut), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						mu.Unlock()
-						errChan <- fmt.Errorf("step %s incomplete (status=%s exit_code=%d)", step.ID, status, res.ExitCode)
+						errChan <- fmt.Errorf("step %s incomplete (status=%s exit_code=%d: %s)", step.ID, status, res.ExitCode, stageError(toolError, res.ExitCode, timedOut))
 						return
 					}
 

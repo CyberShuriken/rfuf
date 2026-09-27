@@ -2,6 +2,7 @@ package findings
 
 import (
 	"fmt"
+	"github.com/CyberShuriken/rfuf/internal/findings/internal/iohelp"
 
 	"github.com/CyberShuriken/rfuf/internal/findings/apiversion"
 	"github.com/CyberShuriken/rfuf/internal/findings/authshape"
@@ -65,6 +66,9 @@ func RunFinder(name, workDir string) error {
 	run, ok := Dispatch[name]
 	if !ok {
 		return fmt.Errorf("unknown finder %q", name)
+	}
+	if err := iohelp.ConfigureFromWorkDir(workDir); err != nil {
+		return err
 	}
 	return run(workDir)
 }

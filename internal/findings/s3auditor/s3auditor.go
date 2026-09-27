@@ -30,6 +30,7 @@ func Run(workDir string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
+	iohelp.HardenClient(client)
 
 	for _, urlStr := range urls {
 		if !isS3Bucket(urlStr) {
@@ -79,7 +80,7 @@ func isS3Bucket(url string) bool {
 }
 
 func getStatusCode(client *http.Client, url string) int {
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := iohelp.NewRequest("GET", url, nil)
 	if err != nil {
 		return 0
 	}

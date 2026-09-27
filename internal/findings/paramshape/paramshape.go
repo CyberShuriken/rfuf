@@ -106,6 +106,7 @@ func probeAll(ctx context.Context, hosts []string) []string {
 		Transport: tr,
 		Timeout:   8 * time.Second,
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -147,7 +148,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) []string {
 		for _, shape := range shapes(p) {
 			probe := *u
 			probe.RawQuery = shape
-			req, err := http.NewRequestWithContext(ctx, "GET", probe.String(), nil)
+			req, err := iohelp.NewRequestWithContext(ctx, "GET", probe.String(), nil)
 			if err != nil {
 				continue
 			}

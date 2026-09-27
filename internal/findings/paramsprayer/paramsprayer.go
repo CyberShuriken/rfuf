@@ -38,6 +38,7 @@ func Run(workDir string) error {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, urlStr := range urls {
 		// Baseline

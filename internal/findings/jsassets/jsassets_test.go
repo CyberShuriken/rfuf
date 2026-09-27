@@ -65,6 +65,7 @@ func TestRunCollectsOnlyScopedAuthenticatedAssets(t *testing.T) {
 	}
 	t.Cleanup(func() { newClient = oldClient })
 	t.Setenv("RFUF_AUTH_COOKIE", "sid=fixture")
+	t.Setenv("RFUF_SCOPE_INPUT", "*.fixture.test")
 	t.Setenv("RFUF_EXCLUDE_URL_REGEX", `/blocked\.js`)
 	work := t.TempDir()
 	if err := os.WriteFile(filepath.Join(work, "scope.json"), []byte(`{"input":"*.fixture.test","root_domain":"fixture.test","mode":"wildcard"}`), 0600); err != nil {

@@ -112,6 +112,7 @@ func probeAll(ctx context.Context, hosts []string) []Finding {
 			}
 		}()
 	}
+	iohelp.HardenClient(client)
 	wg.Wait()
 	return out
 }
@@ -120,7 +121,7 @@ func probeHost(ctx context.Context, client *http.Client, host string) []Finding 
 	// GET a typical page so the response includes the cookie-bearing
 	// headers. A 404 is fine — the Set-Cookie / Authorization headers
 	// are set on the response path before the application code.
-	req, err := http.NewRequestWithContext(ctx, "GET", host, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", host, nil)
 	if err != nil {
 		return nil
 	}

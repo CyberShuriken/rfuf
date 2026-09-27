@@ -210,6 +210,7 @@ func probeAll(ctx context.Context, hosts []string, paths []pathEntry) []string {
 			return http.ErrUseLastResponse
 		},
 	}
+	iohelp.HardenClient(client)
 
 	for _, h := range hosts {
 		h := h
@@ -236,7 +237,7 @@ func probeHost(ctx context.Context, client *http.Client, host string, paths []pa
 		// Build the URL. host already has scheme + host + optional path.
 		url := strings.TrimRight(host, "/") + "/" + p.path
 
-		req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+		req, err := iohelp.NewRequestWithContext(ctx, "HEAD", url, nil)
 		if err != nil {
 			continue
 		}
@@ -263,7 +264,7 @@ func probeHost(ctx context.Context, client *http.Client, host string, paths []pa
 }
 
 func verifyGet(ctx context.Context, client *http.Client, url string) (int, string) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return 0, ""
 	}

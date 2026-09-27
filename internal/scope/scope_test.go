@@ -98,3 +98,42 @@ func TestFilterLinesPreservesMode(t *testing.T) {
 		t.Fatalf("wildcard FilterLines returned %d in-scope and %d out-of-scope lines, want 2 and 2", len(in), len(out))
 	}
 }
+
+func TestCanonicalizeStreamNormalizesScopesDeduplicatesAndCaps(t *testing.T) {
+	scanScope, err := Parse("*.fixture.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		"HTTPS://API.FIXTURE.TEST:443/path#fragment",
+		"https://api.fixture.test/path",
+		"https://app.fixture.test/private",
+		"https://outside.test/path",
+		"not a URL",
+		"https://other.fixture.test/one",
+	}
+	got, counts, err := CanonicalizeStream(lines, "fixture", scanScope, `/private`, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Value != "https://api.fixture.test/path" {
+		t.Fatalf("canonical targets = %#v", got)
+	}
+	if len(got[0].Sources) != 1 || got[0].Sources[0] != "fixture" {
+		t.Fatalf("provenance missing: %#v", got[0])
+	}
+	if counts.Input != 6 || counts.InScope != 4 || counts.Excluded != 1 || counts.OutOfScope != 1 || counts.Duplicate != 1 || counts.Capped != 1 || counts.Invalid != 1 || counts.Final != 1 {
+		t.Fatalf("unexpected canonical stream counts: %+v", counts)
+	}
+}
+
+func TestCanonicalizeStreamExplainsEmptyResults(t *testing.T) {
+	scanScope, _ := Parse("example.test")
+	_, counts, err := CanonicalizeStream(nil, "empty", scanScope, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Reason != "no_input" || counts.Final != 0 {
+		t.Fatalf("empty stream reason=%q counts=%+v", counts.Reason, counts)
+	}
+}
