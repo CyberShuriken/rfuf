@@ -646,6 +646,115 @@ func TestScopeFilterFixtureRemovesExcludedAndOutOfDomainURLs(t *testing.T) {
 	}
 }
 
+func TestLocalFixturePipelineMatrix(t *testing.T) {
+	cases := []struct {
+		name, input, mode, subs, urls string
+		want, wantHighInterest        []string
+	}{
+		{"wildcard", "*.fixture.test", "wildcard", "fixture.test\napp.fixture.test\noutside.test\n", "https://fixture.test/public\nhttps://app.fixture.test/private\nhttps://app.fixture.test/login\nhttps://app.fixture.test/excluded\nhttps://outside.test/out\n", []string{"https://fixture.test/public", "https://app.fixture.test/private", "https://app.fixture.test/login"}, []string{"https://app.fixture.test/private [403]", "https://app.fixture.test/login [401]"}},
+		{"exact", "fixture.test", "exact", "fixture.test\napp.fixture.test\n", "https://fixture.test/public\nhttps://app.fixture.test/private\n", []string{"https://fixture.test/public"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			if err := os.MkdirAll(bin, 0755); err != nil {
+				t.Fatal(err)
+			}
+			mock := `#!/bin/sh
+			input=
+			printf '%s\n' "$@" >> "$RFUF_FIXTURE_ARGS"
+			while [ "$#" -gt 0 ]; do
+			  if [ "$1" = "-l" ]; then input="$2"; shift 2; else shift; fi
+			done
+			cat "$input" >> "$RFUF_FIXTURE_INPUTS"
+			while IFS= read -r url; do
+			  case "$url" in
+			    */public) printf '%s [200]\n' "$url" ;;
+			    */private) printf '%s [403]\n' "$url" ;;
+			    */login) printf '%s [401]\n' "$url" ;;
+			  esac
+			done < "$input"
+			`
+			if err := os.WriteFile(filepath.Join(bin, "httpx"), []byte(mock), 0755); err != nil {
+				t.Fatal(err)
+			}
+			commands := map[string]string{}
+			for _, step := range GetSteps(tc.input, &config.Paths{}) {
+				if step.ID == "scope_guard" || step.ID == "scope_filter" || step.ID == "url_filter_alive" {
+					commands[step.ID] = step.Command
+				}
+			}
+			env := append(os.Environ(), "RFUF_DOMAIN=fixture.test", "RFUF_SCOPE_INPUT="+tc.input, "RFUF_SCOPE_MODE="+tc.mode, "RFUF_EXCLUDE_URL_REGEX=/excluded", "RFUF_MAX_TARGETS=100", "RFUF_MAX_STAGE_REQUESTS=10", "RFUF_AUTH_COOKIE=session=fixture", "RFUF_FIXTURE_ARGS="+filepath.Join(dir, "httpx-args.log"), "RFUF_FIXTURE_INPUTS="+filepath.Join(dir, "httpx-inputs.log"), "PATH="+bin+":"+os.Getenv("PATH"))
+			run := func(id string) {
+				t.Helper()
+				cmd := exec.Command("bash", "-c", commands[id])
+				cmd.Dir = dir
+				cmd.Env = env
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("%s failed: %v: %s", id, err, out)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, "subs.txt"), []byte(tc.subs), 0600); err != nil {
+				t.Fatal(err)
+			}
+			run("scope_guard")
+			for name, data := range map[string]string{"all_urls.txt": tc.urls, "all_urls_200.txt": "", "high_interest_urls.txt": "", "js_endpoints.txt": ""} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run("scope_filter")
+			run("url_filter_alive")
+			data, err := os.ReadFile(filepath.Join(dir, "all_urls_scannable.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				if line != "" {
+					got = append(got, line)
+				}
+			}
+			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+				t.Fatalf("scannable URLs=%v want %v", got, tc.want)
+			}
+			status, err := os.ReadFile(filepath.Join(dir, "all_urls_200.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(status), "/public") || strings.Contains(string(status), "/excluded") || strings.Contains(string(status), "outside.test") {
+				t.Fatalf("unexpected status targets: %s", status)
+			}
+			interest, err := os.ReadFile(filepath.Join(dir, "high_interest_urls.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotInterest := strings.Split(strings.TrimSpace(string(interest)), "\n")
+			if len(interest) == 0 {
+				gotInterest = nil
+			}
+			if strings.Join(gotInterest, "\n") != strings.Join(tc.wantHighInterest, "\n") {
+				t.Fatalf("high-interest statuses=%v want %v", gotInterest, tc.wantHighInterest)
+			}
+			args, err := os.ReadFile(filepath.Join(dir, "httpx-args.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(args), "session=fixture") {
+				t.Fatalf("auth cookie did not reach fake scanner: %s", args)
+			}
+			inputLog, err := os.ReadFile(filepath.Join(dir, "httpx-inputs.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(inputLog), "excluded") || strings.Contains(string(inputLog), "outside.test") {
+				t.Fatalf("unsafe URLs reached fake scanner: %s", inputLog)
+			}
+		})
+	}
+}
+
 func TestScopeGuardCreatesDeclaredArtifacts(t *testing.T) {
 	var command string
 	for _, step := range GetSteps("admin.wickr.com", &config.Paths{}) {
