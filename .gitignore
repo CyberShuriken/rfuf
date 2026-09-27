@@ -1,4 +1,5 @@
 bin/
+rfuf
 *.log
 .rfuf/
 /Bug_Bounty/

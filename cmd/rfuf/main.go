@@ -15,6 +15,8 @@ import (
 
 	"github.com/CyberShuriken/rfuf/internal/config"
 	"github.com/CyberShuriken/rfuf/internal/executor"
+	"github.com/CyberShuriken/rfuf/internal/filter"
+	"github.com/CyberShuriken/rfuf/internal/findings"
 	"github.com/CyberShuriken/rfuf/internal/installer"
 	"github.com/CyberShuriken/rfuf/internal/installer/sysinstall"
 	"github.com/CyberShuriken/rfuf/internal/pipeline"
@@ -26,10 +28,26 @@ var (
 )
 
 func main() {
-	// Subcommand dispatch: `rfuf install` and `rfuf update` are handled
-	// before flag parsing so neither flow needs -d, -resume, -v, or -h.
+	// Internal, maintenance, and cleanup commands are handled before the
+	// normal scan flags are parsed.
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "findings":
+			if len(os.Args) != 4 {
+				fmt.Fprintln(os.Stderr, "usage: rfuf findings <finder-name> <workdir>")
+				os.Exit(2)
+			}
+			if err := findings.RunFinder(os.Args[2], os.Args[3]); err != nil {
+				fmt.Fprintf(os.Stderr, "rfuf findings %s: %v\n", os.Args[2], err)
+				os.Exit(1)
+			}
+			return
+		case "filter-testable":
+			if err := runFilterTestable(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "rfuf filter-testable: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "install":
 			if err := sysinstall.Install(); err != nil {
 				fmt.Printf("[!] install failed: %v\n", err)
@@ -46,24 +64,24 @@ func main() {
 				os.Exit(1)
 			}
 			return
-			case "clean":
-				cleanDomain := flag.String("d", "", "Target domain to clean workspace for")
-				flag.CommandLine.Parse(os.Args[2:])
-				if *cleanDomain == "" {
-					fmt.Println("Usage: rfuf clean -d <domain>")
-					os.Exit(1)
-				}
-				paths, err := config.ResolvePaths(*cleanDomain)
-					if err != nil {
-						fmt.Printf("[!] failed to resolve paths: %v\n", err)
-						os.Exit(1)
-					}
-				if err := pipeline.CleanWorkspace(paths); err != nil {
-					fmt.Printf("[!] cleanup failed: %v\n", err)
-					os.Exit(1)
-				}
-				fmt.Printf("[+] Workspace for %s cleaned successfully\n", *cleanDomain)
-				return
+		case "clean":
+			cleanDomain := flag.String("d", "", "Target domain to clean workspace for")
+			flag.CommandLine.Parse(os.Args[2:])
+			if *cleanDomain == "" {
+				fmt.Println("Usage: rfuf clean -d <domain>")
+				os.Exit(1)
+			}
+			paths, err := config.ResolvePaths(*cleanDomain)
+			if err != nil {
+				fmt.Printf("[!] failed to resolve paths: %v\n", err)
+				os.Exit(1)
+			}
+			if err := pipeline.CleanWorkspace(paths); err != nil {
+				fmt.Printf("[!] cleanup failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("[+] Workspace for %s cleaned successfully\n", *cleanDomain)
+			return
 		}
 	}
 
@@ -72,7 +90,7 @@ func main() {
 	stepTimeout := flag.Duration("step-timeout", 30*time.Minute, "Maximum runtime for each pipeline step (0 disables the limit). Default lowered from 2h so a single hung tool can't block the dashboard; bump to 2h on big targets with `rfuf -d X -step-timeout 2h`.")
 	maxTargets := flag.Int("max-targets", 10000, "Maximum URLs retained in the final scoped target streams.")
 	maxStageRequests := flag.Int("max-stage-requests", 300, "Per-tool request-rate ceiling passed to scanners that support a rate flag.")
-		userWordlist := flag.String("wordlist", "", "Override the default directory wordlist with a specific file path.")
+	userWordlist := flag.String("wordlist", "", "Override the default directory wordlist with a specific file path.")
 	skipInstall := flag.Bool("skip-install", false, "Skip dependency installation entirely (fastest resume path — use only if you trust your $PATH)")
 
 	// Auth mode — injected as env vars into every shell command. Stage
@@ -161,11 +179,11 @@ func main() {
 	// 1. Resolve Paths using the normalized root so wildcard and non-wildcard
 	// invocations resume into the same per-domain work directory.
 	paths, err := config.ResolvePaths(normalizedDomain)
-		paths.UserWordlist = *userWordlist
 	if err != nil {
 		fmt.Printf("[!] Error resolving paths: %v\n", err)
 		os.Exit(1)
 	}
+	paths.UserWordlist = *userWordlist
 
 	// 2. Build auth env map (used by executor to inject into every shell).
 	//    Only populated when explicitly requested — empty AuthEnv means
@@ -194,6 +212,10 @@ func main() {
 		fmt.Println("[!] authenticated testing was required but no cookie or bearer token was supplied")
 		os.Exit(1)
 	}
+	if *authRequired && strings.TrimSpace(*authCheckURL) == "" {
+		fmt.Println("[!] -auth-required needs -auth-check-url so RFUF can verify the supplied session before scanning")
+		os.Exit(1)
+	}
 	buildAuthEnv(cookieValue, bearerValue, *bugBountyUsername, *testAccountEmail)
 	executor.AuthEnv["RFUF_DOMAIN"] = normalizedDomain
 	executor.AuthEnv["RFUF_SCOPE_INPUT"] = parsedScope.Input
@@ -215,7 +237,10 @@ func main() {
 	if strings.TrimSpace(*authCheckURL) != "" {
 		verified, status, checkErr := verifyAuthSession(*authCheckURL, *authCheckMarker)
 		executor.AuthEnv["RFUF_AUTH_VERIFIED"] = fmt.Sprintf("%t", verified)
-		_ = writeAuthCheckMetadata(paths.WorkDir, true, verified, status, checkErr)
+		if err := writeAuthCheckMetadata(paths.WorkDir, cookieValue != "" || bearerValue != "", verified, status, checkErr); err != nil {
+			fmt.Printf("[!] failed to write auth-check metadata: %v\n", err)
+			os.Exit(1)
+		}
 		if checkErr != nil {
 			fmt.Printf("[!] Auth check failed (HTTP %d): %v\n", status, checkErr)
 			if *authRequired {
@@ -232,7 +257,10 @@ func main() {
 	}
 
 	if strings.TrimSpace(*authCheckURL) == "" {
-		_ = writeAuthCheckMetadata(paths.WorkDir, false, false, 0, nil)
+		if err := writeAuthCheckMetadata(paths.WorkDir, cookieValue != "" || bearerValue != "", false, 0, nil); err != nil {
+			fmt.Printf("[!] failed to write auth-check metadata: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// 3. Start interactsh-client for OOB / blind detection. The allocated
@@ -301,6 +329,40 @@ func main() {
 	}
 }
 
+func runFilterTestable(args []string) error {
+	filterFlags := flag.NewFlagSet("filter-testable", flag.ContinueOnError)
+	filterFlags.SetOutput(os.Stderr)
+	highInterest := filterFlags.Bool("high-interest", false, "Allow URLs without query parameters")
+	if err := filterFlags.Parse(args); err != nil {
+		return err
+	}
+	parsed := filterFlags.Args()
+	if len(parsed) < 1 || len(parsed) > 2 {
+		return fmt.Errorf("usage: rfuf filter-testable [--high-interest] <workdir> [input-file]")
+	}
+	workDir := parsed[0]
+	inPath := filepath.Join(workDir, "all_urls_200.txt")
+	if len(parsed) == 2 {
+		inPath = parsed[1]
+		if !filepath.IsAbs(inPath) {
+			inPath = filepath.Join(workDir, inPath)
+		}
+	}
+	outPath := filepath.Join(workDir, ".rfuf", "filter-testable.out")
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return err
+	}
+	if _, _, _, err := filter.FilterFile(inPath, outPath, *highInterest); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(data)
+	return err
+}
+
 // buildAuthEnv populates the executor's AuthEnv map from the -auth-cookie
 // and -auth-bearer flags. Stage commands reference these via:
 //
@@ -348,13 +410,33 @@ func writeValidationInputsMetadata(workDir string, secondCookie, secondBearer bo
 
 func writeAuthCheckMetadata(workDir string, configured, verified bool, status int, checkErr error) error {
 	metadata := struct {
-		Configured bool   `json:"configured"`
-		Verified   bool   `json:"verified"`
-		StatusCode int    `json:"status_code,omitempty"`
-		Error      string `json:"error,omitempty"`
-	}{Configured: configured, Verified: verified, StatusCode: status}
+		Configured  bool   `json:"configured"`
+		Verified    bool   `json:"verified"`
+		Mode        string `json:"mode"`
+		HealthCheck string `json:"health_check"`
+		StatusCode  int    `json:"status_code,omitempty"`
+		ErrorClass  string `json:"error_class,omitempty"`
+	}{Configured: configured, Verified: verified, StatusCode: status, HealthCheck: "not_requested"}
+	switch {
+	case !configured:
+		metadata.Mode = "public"
+	case verified:
+		metadata.Mode = "authenticated_verified"
+	default:
+		metadata.Mode = "authenticated_unverified"
+	}
 	if checkErr != nil {
-		metadata.Error = checkErr.Error()
+		metadata.HealthCheck = "failed"
+		if status != 0 {
+			metadata.ErrorClass = "unexpected_http_status"
+		} else {
+			metadata.ErrorClass = "request_failed"
+		}
+	} else if configured && !verified && status != 0 {
+		metadata.HealthCheck = "failed"
+		metadata.ErrorClass = "auth_check_not_verified"
+	} else if status != 0 && verified {
+		metadata.HealthCheck = "verified"
 	}
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
@@ -453,27 +535,27 @@ func startInteractsh(server string, startupTimeout time.Duration) error {
 	// Scan the first ~50 lines for the URL pattern. interactsh-client
 	// prints it within the first second of startup.
 	urlCh := make(chan string, 1)
-		go func() {
-			scanner := bufio.NewScanner(stdoutR)
-			for scanner.Scan() {
-				line := scanner.Text()
-				if strings.Contains(line, ".oast.fun") || (strings.Contains(line, "https://") && strings.Contains(line, ".oast.fun")) {
-					candidate := strings.TrimSpace(line)
-					words := strings.Fields(candidate)
-					if len(words) > 0 {
-						candidate = words[len(words)-1]
-					}
-					if !strings.HasPrefix(candidate, "http") {
-						candidate = "https://" + candidate
-					}
-					select {
-					case urlCh <- candidate:
-					default:
-					}
-					return
+	go func() {
+		scanner := bufio.NewScanner(stdoutR)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, ".oast.fun") || (strings.Contains(line, "https://") && strings.Contains(line, ".oast.fun")) {
+				candidate := strings.TrimSpace(line)
+				words := strings.Fields(candidate)
+				if len(words) > 0 {
+					candidate = words[len(words)-1]
 				}
+				if !strings.HasPrefix(candidate, "http") {
+					candidate = "https://" + candidate
+				}
+				select {
+				case urlCh <- candidate:
+				default:
+				}
+				return
 			}
-		}()
+		}
+	}()
 
 	select {
 	case url := <-urlCh:

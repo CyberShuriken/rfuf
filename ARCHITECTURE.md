@@ -78,7 +78,7 @@ subzy + nuclei takeovers → validated_takeovers.txt
 httpx → alive.txt
 nuclei (exposures/misconfigs/auth/graphql) → various *.txt
 katana → katana_urls.txt → clean_katana_urls.txt
-HTML + Next.js/static-js/manifest collection → js_assets.txt → js_bundles/
+Scope-checked HTML + Next.js/static-js/manifest collection → js_assets.txt + metadata/errors/provenance JSONL → js_bundles/
 gau + waybackurls + katana + OpenAPI + JS endpoints → all_urls.txt
 all_urls.txt + alive.txt + JS endpoints → nuclei_targets.txt
 gf + filter → *_targets.txt
@@ -194,10 +194,10 @@ Each module exposes `Run(workDir string) error`, reads from the work
 dir (`alive.txt`, `all_urls.txt`, `all_urls_200.txt`, `js_bundles/`,
 `tech_fingerprint.txt`, `live_subs.txt`, `waf_detections.txt`), and
 writes its own `<name>_findings.txt` (or `<name>_results.txt`).
-The pipeline invokes them through `cmd/findings-runner`:
+The production pipeline invokes them through the installed RFUF binary:
 
 ```
-go run ./cmd/findings-runner <finder-name> <workdir>
+rfuf findings <finder-name> <workdir>
 ```
 
 The runner is a single `package main` wrapper that dispatches to
@@ -366,10 +366,10 @@ After URL, JavaScript, manifest, and API merging, `scope_filter` applies the con
 
 ## Authentication verification and evidence
 
-RFUF can replay operator-supplied cookie or bearer material and optionally verify it using `-auth-check-url` and `-auth-check-marker`. The health check sends program attribution headers when configured and writes only safe metadata to `.rfuf/auth_check.json`. It never stores credentials or marker text. `-auth-required` converts a failed or mismatched check into a pre-scan error.
+RFUF can replay operator-supplied cookie or bearer material and verify it using `-auth-check-url` with an optional `-auth-check-marker`. The health check sends program attribution headers when configured and writes only safe metadata to `.rfuf/auth_check.json`. It never stores credentials, response bodies, or marker text. `-auth-required` requires the URL and converts a failed or mismatched check into a pre-scan error. Coverage labels authentication as `public`, `authenticated_unverified`, or `authenticated_verified`.
 
 Finalization builds `evidence.jsonl` from high- and medium-impact artifact categories. Records contain category, source artifact, safely extracted target, severity, candidate confidence, validation state, and line reference. Secret values, cookies, tokens, and response bodies are excluded. Business-logic, BOLA/IDOR, and workflow findings remain manual validation tasks and are never auto-confirmed by RFUF.
 
 ## Known limitations
 
-Dependency installation is bounded against Go toolchain switching and Nuclei is pinned, but some upstream tools remain independently versioned by their own release channels. The run-limit flags cannot impose one universal request budget on binaries that do not expose a compatible rate-control interface. Authenticated workflow creation, MFA, cross-account authorization testing, impact confirmation, and HackerOne submission remain intentionally operator-controlled.
+Installer-managed Go, Python, and release dependencies use explicit version pins, and Go installs disable automatic toolchain switching. Pins require deliberate maintenance when compatibility updates are needed. The run-limit flags cannot impose one universal request budget on binaries that do not expose a compatible rate-control interface. Authenticated workflow creation, MFA, cross-account authorization testing, impact confirmation, and HackerOne submission remain intentionally operator-controlled.

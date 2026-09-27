@@ -6,11 +6,11 @@
 // account_id, order_id, doc_id, etc.) and probes each parameter with
 // five shapes:
 //
-//   1. baseline        ?id=1
-//   2. array           ?id[]=1
-//   3. duplicate key   ?id=1&id=2
-//   4. mixed case      ?id=1&ID=2
-//   5. null byte       ?id=1%00
+//  1. baseline        ?id=1
+//  2. array           ?id[]=1
+//  3. duplicate key   ?id=1&id=2
+//  4. mixed case      ?id=1&ID=2
+//  5. null byte       ?id=1%00
 //
 // Any two shapes that produce a different response body hash are
 // reported. PHP/ASP/J2EE handle duplicate keys differently, so a hit

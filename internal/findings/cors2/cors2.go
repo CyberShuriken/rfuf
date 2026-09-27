@@ -19,14 +19,14 @@
 //
 // What this module does:
 //
-//  - For each alive host, issue an OPTIONS request with a CORS
-//    request signature: `Origin: https://attacker.example` plus
-//    `Access-Control-Request-Method: POST` and a custom header
-//    (`X-Requested-With`). The OPTIONS response is the preflight
-//    response.
-//  - Read ACAO, ACAC, ACA-Methods, ACA-Headers from the preflight.
-//  - Issue a simple GET with Origin too (for null-origin cases) and
-//    record the ACAO.
+//   - For each alive host, issue an OPTIONS request with a CORS
+//     request signature: `Origin: https://attacker.example` plus
+//     `Access-Control-Request-Method: POST` and a custom header
+//     (`X-Requested-With`). The OPTIONS response is the preflight
+//     response.
+//   - Read ACAO, ACAC, ACA-Methods, ACA-Headers from the preflight.
+//   - Issue a simple GET with Origin too (for null-origin cases) and
+//     record the ACAO.
 //
 // Output: cors2_findings.txt with rows:
 //

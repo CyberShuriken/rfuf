@@ -6,20 +6,20 @@
 // Categories reported (in authshape_findings.txt):
 //
 //   - cookie-no-httponly      session cookie missing HttpOnly → XSS-
-//                             stealable
+//     stealable
 //   - cookie-no-secure        session cookie missing Secure → MITM-
-//                             stealable on plain HTTP
+//     stealable on plain HTTP
 //   - cookie-samesite-none    SameSite=None without Secure → cross-
-//                             site request can carry the cookie
+//     site request can carry the cookie
 //   - cookie-missing-samesite modern browser default is SameSite=Lax
-//                             but explicit is best-practice
+//     but explicit is best-practice
 //   - jwt-alg-none            JWT header advertises alg:none →
-//                             signature bypass
+//     signature bypass
 //   - jwt-no-exp              JWT payload lacks exp claim → tokens
-//                             never expire
+//     never expire
 //   - jwt-weak-hs256          JWT uses HS256 with a public-key-shaped
-//                             secret (heuristic — often the public
-//                             key as HMAC key)
+//     secret (heuristic — often the public
+//     key as HMAC key)
 //
 // Everything is local parsing — no JWT validation against a server.
 // "jwt-weak-hs256" is a heuristic signal, not a confirmation; the

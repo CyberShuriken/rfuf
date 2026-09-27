@@ -5,10 +5,8 @@
 // `*_findings.txt` files that the report generator surfaces.
 //
 // Conventions:
-//   - Each module exposes a Run(workDir string) error function so the
-//     pipeline can call it via a `go run ./internal/findings/<name>`
-//     shell wrapper. The wrapper is a single line in pipeline.go — see
-//     the existing `filterTestableRef` pattern.
+//   - Each module exposes a Run(workDir string) error function and is
+//     dispatched through `rfuf findings <name> <workdir>`.
 //   - Output filenames are stable: `<name>_findings.txt` for the main
 //     report and `<name>_<artifact>.csv` for tabular data. The summary
 //     generator reads those filenames directly.

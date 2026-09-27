@@ -1,5 +1,5 @@
 // filter-testable is the CLI wrapper for internal/filter. The pipeline
-// invokes it as `go run ./cmd/filter-testable <workdir>` and the
+// invokes it as `rfuf filter-testable <workdir>` and the
 // command reads from `<workdir>/all_urls_200.txt` (or another file
 // passed as arg), runs every line through IsTestableURL, and writes
 // pass-through URLs to stdout.

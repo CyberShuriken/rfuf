@@ -18,11 +18,11 @@ func TestBucketHost(t *testing.T) {
 
 func TestExtractHost(t *testing.T) {
 	cases := map[string]string{
-		"https://www.acme.com/path":  "acme.com",
-		"http://api.acme.io:8080":    "acme.io",
-		"https://acme.com":           "acme.com",
-		"https://cdn.acme.com/x.js":  "acme.com",
-		"https://deep.sub.acme.com":  "acme.com",
+		"https://www.acme.com/path": "acme.com",
+		"http://api.acme.io:8080":   "acme.io",
+		"https://acme.com":          "acme.com",
+		"https://cdn.acme.com/x.js": "acme.com",
+		"https://deep.sub.acme.com": "acme.com",
 	}
 	for in, want := range cases {
 		if got := extractHost(in); got != want {

@@ -10,19 +10,19 @@
 //
 // What the module does (passive only, no auth attempt):
 //
-//   1. Probes each alive host for common signup endpoints.
-//   2. For endpoints that respond, records:
-//      - the response status (201 = signup accepted, 200/302 = form)
-//      - any token-shaped strings in the response body
-//      - any email-verification URL patterns
-//   3. Cross-references against the page's email-template signals
-//      (search for "verify", "confirm", "activate", "click here",
-//      "?token=", "?code=", "?key=") to find the URL pattern.
-//   4. Records each (host, signup_path, verify_url_pattern) tuple in
-//      signup_takeover_findings.txt with a "MANUAL_RETEST_REQUIRED"
-//      tag — the hunter signs up, intercepts the verification email
-//      from a Mailtrap inbox, and confirms whether the token is
-//      predictable or reusable.
+//  1. Probes each alive host for common signup endpoints.
+//  2. For endpoints that respond, records:
+//     - the response status (201 = signup accepted, 200/302 = form)
+//     - any token-shaped strings in the response body
+//     - any email-verification URL patterns
+//  3. Cross-references against the page's email-template signals
+//     (search for "verify", "confirm", "activate", "click here",
+//     "?token=", "?code=", "?key=") to find the URL pattern.
+//  4. Records each (host, signup_path, verify_url_pattern) tuple in
+//     signup_takeover_findings.txt with a "MANUAL_RETEST_REQUIRED"
+//     tag — the hunter signs up, intercepts the verification email
+//     from a Mailtrap inbox, and confirms whether the token is
+//     predictable or reusable.
 //
 // We deliberately do NOT actually create accounts on the target. The
 // data we want is the *response shape* — what does signup look like
@@ -306,7 +306,7 @@ func extractURLPattern(body string) string {
 				start--
 			}
 			start++ // step over the quote
-			return body[start : i+len(q)] + "..."
+			return body[start:i+len(q)] + "..."
 		}
 	}
 	return ""

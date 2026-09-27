@@ -149,6 +149,7 @@ func buildSelf() (string, error) {
 
 	cmd := exec.Command("go", "build", "-o", tmp.Name(), "./cmd/rfuf")
 	cmd.Dir = sourceDir
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

@@ -7,10 +7,10 @@
 //
 //   - html-body       — marker rendered between tags → XSS class
 //   - attr-quoted     — marker in attribute value (still XSS-class
-//                       for dalfox with quote-breaker payloads)
+//     for dalfox with quote-breaker payloads)
 //   - attr-unquoted   — marker in unquoted attribute → easy XSS
 //   - json-value      — marker in JSON response value → scan for
-//                       JSON injection / prototype pollution
+//     JSON injection / prototype pollution
 //   - none            — not reflected (skip)
 //
 // The output is reflection_findings.txt with tab-separated

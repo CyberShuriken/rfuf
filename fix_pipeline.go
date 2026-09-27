@@ -2,9 +2,9 @@ package pipeline
 
 import (
 	"fmt"
-	"time"
 	"github.com/CyberShuriken/rfuf/internal/config"
 	"github.com/CyberShuriken/rfuf/internal/scope"
+	"time"
 )
 
 type Step struct {

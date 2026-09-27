@@ -51,7 +51,7 @@ func TestAmassFailureDoesNotAbortPipeline(t *testing.T) {
 		if step.ID != "amass_enum" {
 			continue
 		}
-			if !strings.Contains(step.Command, "if !") && !strings.Contains(step.Command, "amass enum") && !strings.Contains(step.Command, "echo") { 
+		if !strings.Contains(step.Command, "if !") && !strings.Contains(step.Command, "amass enum") && !strings.Contains(step.Command, "echo") {
 			t.Fatalf("amass_enum must handle a non-zero Amass exit: %q", step.Command)
 		}
 		if !strings.Contains(step.Command, "touch amass_raw.txt") {
@@ -95,6 +95,122 @@ func TestReconArtifactContractsMatchProducerFiles(t *testing.T) {
 			t.Fatalf("%s must not require cleaned-up temporary input, got %v", want.id, outputs)
 		}
 
+	}
+}
+
+func TestStepIDsAreUniqueAndFindersUseInstalledBinary(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	if err := ValidateStepContracts(steps); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if step.Tool == "findings-runner" && strings.Contains(step.Command, "go run ./cmd/findings-runner") {
+			t.Fatalf("%s depends on source checkout from work directory: %q", step.ID, step.Command)
+		}
+	}
+}
+
+func TestOptionalStagePolicyIsExplicit(t *testing.T) {
+	if stageRequired("subfinder") {
+		t.Fatal("subfinder should be optional and classified as such")
+	}
+	if !stageRequired("httpx_probe") {
+		t.Fatal("httpx_probe is a required core stage")
+	}
+}
+
+func TestEveryStageHasAnArtifactContract(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{WorkDir: t.TempDir(), SeclistsDirWordlistSmall: "/tmp/words"})
+	outputsByID := make(map[string][]string, len(steps))
+	for _, step := range steps {
+		_, outputsByID[step.ID] = stageArtifacts(step)
+	}
+	for _, step := range steps {
+		if stagePolicy(step.ID) == "" {
+			t.Errorf("%s has no policy", step.ID)
+		}
+		_, outputs := stageArtifacts(step)
+		if len(outputs) == 0 {
+			t.Errorf("%s has no declared or inferred output contract", step.ID)
+		}
+		inputsSet := map[string]bool{}
+		inputs, _ := stageArtifacts(step)
+		for _, input := range inputs {
+			inputsSet[input] = true
+		}
+		for _, dep := range step.Deps {
+			for _, output := range outputsByID[dep] {
+				if output == "." {
+					continue
+				}
+				if !inputsSet[output] {
+					t.Errorf("%s contract omits dependency artifact %s from %s", step.ID, output, dep)
+				}
+			}
+		}
+	}
+}
+
+func TestResumeInvalidatesChangedContractsAndMissingArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	step := Step{}
+	for _, candidate := range GetSteps("example.com", &config.Paths{}) {
+		if candidate.ID == "subfinder" {
+			step = candidate
+			break
+		}
+	}
+	if step.ID == "" {
+		t.Fatal("subfinder step not found")
+	}
+	_, outputs := stageArtifacts(step)
+	if len(outputs) == 0 {
+		t.Fatal("test stage requires output contract")
+	}
+	if err := os.WriteFile(filepath.Join(dir, outputs[0]), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	record := coverage.StageRecord{Status: coverage.StatusCompleted, CommandHash: commandDigest(step.Command), ToolIdentity: stageToolIdentity(step.Tool), ToolVersion: stageToolVersion(step.Tool)}
+	inputs, contractOutputs := stageArtifacts(step)
+	record.InputContract, record.OutputContract = inputs, contractOutputs
+	if !resumeRecordValid(dir, step, record, true) {
+		t.Fatal("matching completed stage should be reusable")
+	}
+	changed := step
+	changed.Command = "false"
+	if resumeRecordValid(dir, changed, record, true) {
+		t.Fatal("changed command must invalidate resume")
+	}
+	changedTool := record
+	changedTool.ToolVersion += "-changed"
+	if resumeRecordValid(dir, step, changedTool, true) {
+		t.Fatal("changed tool version must invalidate resume")
+	}
+	if resumeRecordValid(dir, step, record, false) {
+		t.Fatal("incomplete dependency must invalidate resume")
+	}
+	if err := os.Remove(filepath.Join(dir, outputs[0])); err != nil {
+		t.Fatal(err)
+	}
+	if resumeRecordValid(dir, step, record, true) {
+		t.Fatal("missing output must invalidate resume")
+	}
+}
+
+func TestStageRecordWriteErrorsArePropagated(t *testing.T) {
+	errChan := make(chan error, 1)
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeStageRecordOrReport(blocked, coverage.StageRecord{StageID: "fixture"}, errChan)
+	select {
+	case err := <-errChan:
+		if err == nil || !strings.Contains(err.Error(), "write stage record fixture") {
+			t.Fatalf("unexpected write error: %v", err)
+		}
+	default:
+		t.Fatal("stage-record persistence error was discarded")
 	}
 }
 
@@ -155,8 +271,8 @@ func TestDirbruteUsesRecursion(t *testing.T) {
 	if !strings.Contains(cmd, "-maxtime 1200") {
 		t.Errorf("dirbrute_ffuf must set -maxtime 1200 (20-min ceiling): %q", cmd)
 	}
-	if !strings.Contains(cmd, "alive.txt:HOST") {
-		t.Errorf("dirbrute_ffuf should use two-wordlist mode (-w alive.txt:HOST): %q", cmd)
+	if !strings.Contains(cmd, "ffuf_targets.txt:HOST") || !strings.Contains(cmd, "awk '{print $1}' alive.txt > ffuf_targets.txt") {
+		t.Errorf("dirbrute_ffuf must pass normalized host URLs to ffuf: %q", cmd)
 	}
 	if strings.Contains(cmd, "while read") {
 		t.Errorf("dirbrute_ffuf regressed to per-host bash loop: %q", cmd)
@@ -354,10 +470,8 @@ func TestJavaScriptCollectionCoversModernAssets(t *testing.T) {
 		if s.ID != "jsmap_scrape" {
 			continue
 		}
-		for _, marker := range []string{"manifest.json", "asset-manifest.json", "/_next/static/", "/static/js/", "RFUF_AUTH_COOKIE", "js_assets.txt"} {
-			if !strings.Contains(s.Command, marker) {
-				t.Errorf("jsmap_scrape missing %q: %q", marker, s.Command)
-			}
+		if !strings.Contains(s.Command, "findings jsassets .") || s.Tool != "findings-runner" {
+			t.Errorf("jsmap_scrape must dispatch to the built-in scoped collector: %+v", s)
 		}
 		return
 	}
@@ -371,7 +485,7 @@ func TestKatanaCrawlIsBounded(t *testing.T) {
 			continue
 		}
 		for _, marker := range []string{
-			"head -n 200 alive.txt > katana_targets.txt",
+			"awk '{print $1}' alive.txt | head -n 200 > katana_targets.txt",
 			"-list katana_targets.txt",
 			"-jc",
 			"-kf all",
@@ -444,7 +558,7 @@ func TestTrufflehogRecordsStatusAndDiagnostics(t *testing.T) {
 func TestProgramHeadersReachShellStages(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	for _, s := range steps {
-		if s.ID != "httpx_probe" && s.ID != "nuclei_exposures" && s.ID != "jsmap_scrape" {
+		if s.ID != "httpx_probe" && s.ID != "nuclei_exposures" {
 			continue
 		}
 		if !strings.Contains(s.Command, "X-Bug-Bounty") {
@@ -600,8 +714,10 @@ func TestEnsureZeroResultArtifacts(t *testing.T) {
 	if err := ensureZeroResultArtifacts(dir, "httpx_probe", []string{"alive.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "alive.txt")); !os.IsNotExist(err) {
-		t.Fatalf("non-discovery stage unexpectedly materialized an artifact: %v", err)
+	if info, err := os.Stat(filepath.Join(dir, "alive.txt")); err != nil {
+		t.Fatalf("declared output artifact was not materialized: %v", err)
+	} else if info.Size() != 0 {
+		t.Fatalf("materialized zero-result artifact is not empty: %v", info.Size())
 	}
 }
 
@@ -656,6 +772,28 @@ func TestFinalizeRunWritesIncompleteCoverageArtifacts(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("missing final artifact %s: %v", name, err)
 		}
+	}
+}
+
+func TestFinalizeRequiresSafeAuthenticationStatus(t *testing.T) {
+	dir := t.TempDir()
+	cp, err := checkpoint.Load(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coverage.WriteStageRecord(dir, coverage.StageRecord{StageID: "complete_stage", Required: true, Status: coverage.StatusCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	err = finalizeRun("example.com", &config.Paths{WorkDir: dir}, cp, []Step{{ID: "complete_stage"}}, time.Now(), nil)
+	if err == nil {
+		t.Fatal("missing auth metadata must prevent a complete final report")
+	}
+	report, readErr := os.ReadFile(filepath.Join(dir, ".rfuf", "coverage_report.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(report), `"status": "INCOMPLETE"`) || !strings.Contains(string(report), `"authentication": ""`) {
+		t.Fatalf("auth metadata failure not reflected in report: %s", report)
 	}
 }
 

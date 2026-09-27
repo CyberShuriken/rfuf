@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/CyberShuriken/rfuf/internal/executor"
@@ -30,6 +34,27 @@ func TestVerifyAuthSessionSendsConfiguredHeaders(t *testing.T) {
 	verified, status, err := verifyAuthSession(server.URL, "AUTHENTICATED")
 	if err != nil || !verified || status != http.StatusOK {
 		t.Fatalf("verified=%v status=%d err=%v", verified, status, err)
+	}
+}
+
+func TestAuthHealthMetadataUsesSafeClassAndNeverPersistsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	secretURL := "https://example.test/check?token=top-secret-value"
+	checkErr := errors.New("Get " + secretURL + ": connection refused")
+	if err := writeAuthCheckMetadata(dir, true, false, 0, checkErr); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".rfuf", "auth_check.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "top-secret-value") || strings.Contains(string(data), secretURL) || strings.Contains(string(data), "connection refused") {
+		t.Fatalf("auth metadata persisted raw error or secret: %s", data)
+	}
+	for _, want := range []string{`"mode": "authenticated_unverified"`, `"error_class": "request_failed"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("metadata missing %s: %s", want, data)
+		}
 	}
 }
 

@@ -17,6 +17,36 @@ func TestExtractArtifactPaths(t *testing.T) {
 	}
 }
 
+func TestMeasureArtifactsReportsDirectoriesAndEmptyFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "empty_dir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	metrics := MeasureArtifacts(root, []string{"empty_dir", "empty.txt", "missing.txt"})
+	if len(metrics) != 3 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+	if !metrics[0].Exists || metrics[0].Kind != "directory" || metrics[0].ContentStatus != "empty" {
+		t.Fatalf("empty directory state = %#v", metrics[0])
+	}
+	if !metrics[1].Exists || metrics[1].Kind != "file" || metrics[1].ContentStatus != "empty" {
+		t.Fatalf("empty file state = %#v", metrics[1])
+	}
+	if metrics[2].Exists {
+		t.Fatalf("missing artifact reported present: %#v", metrics[2])
+	}
+}
+
+func TestOptionalFailureDoesNotFailCoverage(t *testing.T) {
+	report := Evaluate("example.com", time.Now(), time.Now(), []StageRecord{{StageID: "optional", Required: false, Status: StatusFailed}})
+	if report.Status != "COMPLETE" || report.FailedStages != 1 {
+		t.Fatalf("optional failure must stay visible without failing required coverage: %#v", report)
+	}
+}
+
 // Regression: shell commands routinely use `>&2` for stderr redirection and
 // chain statements with `;`. The redirect-extraction regex used to treat
 // `>&2` as an output redirect to a file named `&2` (with stray punctuation)

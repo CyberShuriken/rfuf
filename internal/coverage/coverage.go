@@ -14,24 +14,37 @@ import (
 type StageStatus string
 
 const (
-	StatusRunning        StageStatus = "running"
-	StatusCompleted      StageStatus = "completed"
-	StatusCompletedEmpty StageStatus = "completed_empty"
-	StatusFailed         StageStatus = "failed"
-	StatusTimedOut       StageStatus = "timed_out"
-	StatusSkipped        StageStatus = "skipped"
-	StatusBlocked        StageStatus = "blocked"
+	StatusRunning          StageStatus = "running"
+	StatusCompleted        StageStatus = "completed"
+	StatusCompletedEmpty   StageStatus = "completed_empty"
+	StatusCompletedNoInput StageStatus = "completed_no_input"
+	StatusFailed           StageStatus = "failed"
+	StatusTimedOut         StageStatus = "timed_out"
+	StatusSkipped          StageStatus = "skipped"
+	StatusSkippedOptional  StageStatus = "skipped_optional"
+	StatusBlocked          StageStatus = "blocked"
 )
 
 type ArtifactMetric struct {
-	Path   string `json:"path"`
-	Exists bool   `json:"exists"`
-	Lines  int    `json:"lines"`
+	Path          string `json:"path"`
+	Exists        bool   `json:"exists"`
+	Kind          string `json:"kind,omitempty"`
+	Bytes         int64  `json:"bytes,omitempty"`
+	Files         int    `json:"files,omitempty"`
+	Lines         int    `json:"lines"`
+	ContentStatus string `json:"content_status,omitempty"`
 }
 
 type StageRecord struct {
 	StageID         string           `json:"stage_id"`
 	Required        bool             `json:"required"`
+	Policy          string           `json:"policy"`
+	EmptyInputValid bool             `json:"empty_input_valid"`
+	CommandHash     string           `json:"command_hash,omitempty"`
+	ToolIdentity    string           `json:"tool_identity,omitempty"`
+	ToolVersion     string           `json:"tool_version,omitempty"`
+	InputContract   []string         `json:"input_contract,omitempty"`
+	OutputContract  []string         `json:"output_contract,omitempty"`
 	Dependencies    []string         `json:"dependencies,omitempty"`
 	Status          StageStatus      `json:"status"`
 	StartedAt       time.Time        `json:"started_at,omitempty"`
@@ -44,22 +57,42 @@ type StageRecord struct {
 	OutputArtifacts []ArtifactMetric `json:"output_artifacts,omitempty"`
 	Error           string           `json:"error,omitempty"`
 	SkipReason      string           `json:"skip_reason,omitempty"`
+	LogPath         string           `json:"log_path,omitempty"`
 }
 
 type CoverageReport struct {
 	Domain          string        `json:"domain"`
+	Authentication  string        `json:"authentication"`
 	StartedAt       time.Time     `json:"started_at"`
 	FinishedAt      time.Time     `json:"finished_at"`
 	Status          string        `json:"status"`
 	TotalStages     int           `json:"total_stages"`
 	CompletedStages int           `json:"completed_stages"`
 	EmptyStages     int           `json:"empty_stages"`
+	NoInputStages   int           `json:"no_input_stages"`
 	FailedStages    int           `json:"failed_stages"`
 	TimedOutStages  int           `json:"timed_out_stages"`
 	SkippedStages   int           `json:"skipped_stages"`
 	BlockedStages   int           `json:"blocked_stages"`
 	RequiredIssues  []string      `json:"required_issues,omitempty"`
 	Stages          []StageRecord `json:"stages"`
+}
+
+type ArtifactManifest struct {
+	GeneratedAt time.Time     `json:"generated_at"`
+	Stages      []StageRecord `json:"stages"`
+}
+
+func WriteArtifactManifest(workDir string, records []StageRecord) error {
+	dir := filepath.Join(workDir, ".rfuf")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(ArtifactManifest{GeneratedAt: time.Now(), Stages: records}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "artifact_manifest.json"), append(data, '\n'), 0644)
 }
 
 var (
@@ -231,18 +264,57 @@ func MeasureArtifacts(workDir string, paths []string) []ArtifactMetric {
 			continue
 		}
 		full := filepath.Join(workDir, clean)
-		data, err := os.ReadFile(full)
+		info, err := os.Stat(full)
 		if err != nil {
 			metrics = append(metrics, ArtifactMetric{Path: clean})
+			continue
+		}
+		if info.IsDir() {
+			files, bytes, lines := measureDirectory(full)
+			state := "empty"
+			if files > 0 {
+				state = "nonempty"
+			}
+			metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "directory", Bytes: bytes, Files: files, Lines: lines, ContentStatus: state})
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "file", Bytes: info.Size()})
 			continue
 		}
 		lines := 0
 		if len(strings.TrimSpace(string(data))) > 0 {
 			lines = len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 		}
-		metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Lines: lines})
+		state := "empty"
+		if len(data) > 0 {
+			state = "nonempty"
+		}
+		metrics = append(metrics, ArtifactMetric{Path: clean, Exists: true, Kind: "file", Bytes: int64(len(data)), Lines: lines, ContentStatus: state})
 	}
 	return metrics
+}
+
+func measureDirectory(root string) (files int, bytes int64, lines int) {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		files++
+		bytes += info.Size()
+		if info.Size() <= 8*1024*1024 {
+			if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+				lines += len(strings.Split(strings.TrimSpace(string(data)), "\n"))
+			}
+		}
+		return nil
+	})
+	return
 }
 
 func CountMetrics(metrics []ArtifactMetric) int {
@@ -254,6 +326,9 @@ func CountMetrics(metrics []ArtifactMetric) int {
 }
 
 func WriteStageRecord(workDir string, record StageRecord) error {
+	if record.LogPath == "" {
+		record.LogPath = filepath.Join(".rfuf", "rfuf.log")
+	}
 	path := filepath.Join(workDir, ".rfuf", "stages", record.StageID+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -302,16 +377,20 @@ func Evaluate(domain string, startedAt, finishedAt time.Time, records []StageRec
 			report.CompletedStages++
 		case StatusCompletedEmpty:
 			report.EmptyStages++
+		case StatusCompletedNoInput:
+			report.NoInputStages++
 		case StatusFailed:
 			report.FailedStages++
 		case StatusTimedOut:
 			report.TimedOutStages++
 		case StatusSkipped:
 			report.SkippedStages++
+		case StatusSkippedOptional:
+			report.SkippedStages++
 		case StatusBlocked:
 			report.BlockedStages++
 		}
-		if record.Required && record.Status != StatusCompleted && record.Status != StatusCompletedEmpty {
+		if record.Required && record.Status != StatusCompleted && record.Status != StatusCompletedEmpty && record.Status != StatusCompletedNoInput {
 			report.RequiredIssues = append(report.RequiredIssues, fmt.Sprintf("%s: %s", record.StageID, record.Status))
 		}
 	}
@@ -334,7 +413,7 @@ func WriteReport(workDir string, report CoverageReport) error {
 		return err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# RFUF Coverage Report\n\n- **Domain:** `%s`\n- **Status:** **%s**\n- **Stages:** %d total, %d completed, %d completed-empty, %d failed, %d timed out, %d skipped, %d blocked\n\n", report.Domain, report.Status, report.TotalStages, report.CompletedStages, report.EmptyStages, report.FailedStages, report.TimedOutStages, report.SkippedStages, report.BlockedStages)
+	fmt.Fprintf(&b, "# RFUF Coverage Report\n\n- **Domain:** `%s`\n- **Status:** **%s**\n- **Authentication:** `%s`\n- **Stages:** %d total, %d completed, %d completed-empty, %d no-input, %d failed, %d timed out, %d skipped, %d blocked\n\n", report.Domain, report.Status, report.Authentication, report.TotalStages, report.CompletedStages, report.EmptyStages, report.NoInputStages, report.FailedStages, report.TimedOutStages, report.SkippedStages, report.BlockedStages)
 	if len(report.RequiredIssues) > 0 {
 		b.WriteString("## Required-stage issues\n\n")
 		for _, issue := range report.RequiredIssues {

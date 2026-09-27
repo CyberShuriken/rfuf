@@ -46,7 +46,7 @@ func TestLooksLikeJWT(t *testing.T) {
 func TestCheckJWTAlgNone(t *testing.T) {
 	// alg:none header
 	hdr := `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0` // {"alg":"none","typ":"JWT"}
-	payload := `eyJzdWIiOiIxIn0`                   // {"sub":"1"}
+	payload := `eyJzdWIiOiIxIn0`                 // {"sub":"1"}
 	sig := ``
 	tok := hdr + "." + payload + "." + sig
 	fs := checkJWT("https://example.com", tok)

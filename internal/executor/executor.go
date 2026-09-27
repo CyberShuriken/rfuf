@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -254,7 +255,7 @@ func scanAndForward(r io.Reader, logWriter io.Writer, buf *bytes.Buffer) {
 	// (sqlmap traces can produce them).
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := redactSecrets(scanner.Text())
 		fmt.Fprintln(logWriter, line)
 		buf.WriteString(line)
 		buf.WriteByte('\n')
@@ -265,6 +266,28 @@ func scanAndForward(r io.Reader, logWriter io.Writer, buf *bytes.Buffer) {
 			}
 		}
 	}
+}
+
+func redactSecrets(text string) string {
+	secrets := make([]string, 0, len(AuthEnv)+2)
+	for key, value := range AuthEnv {
+		if strings.Contains(strings.ToLower(key), "auth") && len(value) >= 4 {
+			secrets = append(secrets, value)
+		}
+	}
+	for _, value := range []string{OOBToken} {
+		if len(value) >= 4 {
+			secrets = append(secrets, value)
+		}
+	}
+	sortStrings(secrets)
+	for i, j := 0, len(secrets)-1; i < j; i, j = i+1, j-1 {
+		secrets[i], secrets[j] = secrets[j], secrets[i]
+	}
+	for _, secret := range secrets {
+		text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	}
+	return text
 }
 
 func GetLogFile(workDir string) (*os.File, error) {

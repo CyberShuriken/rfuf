@@ -26,16 +26,16 @@
 // floods the target. One tamper per detected WAF vendor matches
 // well-known fingerprints:
 //
-//   cloudflare, cloudfront, fastly, akamai → comment-based
-//                                            bypasses (HTTP/1.1
-//                                            features most)
-//   aws                                     → case-mixed headers
-//   imperva                                 → chunked transfer
-//   f5, barracuda                           → whitespace
-//   sucuri                                  → path encoding
-//   generic (unknown vendor)                → no tamper; report
-//                                            the WAF detection but
-//                                            skip the bypass
+//	cloudflare, cloudfront, fastly, akamai → comment-based
+//	                                         bypasses (HTTP/1.1
+//	                                         features most)
+//	aws                                     → case-mixed headers
+//	imperva                                 → chunked transfer
+//	f5, barracuda                           → whitespace
+//	sucuri                                  → path encoding
+//	generic (unknown vendor)                → no tamper; report
+//	                                         the WAF detection but
+//	                                         skip the bypass
 //
 // We don't claim these bypass *work* — the right tamper depends on
 // the rule version the WAF is enforcing. The catalog is a starting
@@ -54,17 +54,17 @@ import (
 type Vendor string
 
 const (
-	UnknownVendor    Vendor = ""
-	Cloudflare       Vendor = "cloudflare"
-	AWS              Vendor = "aws"
-	Imperva          Vendor = "imperva"
-	Akamai           Vendor = "akamai"
-	F5               Vendor = "f5"
-	Barracuda        Vendor = "barracuda"
-	Sucuri           Vendor = "sucuri"
-	Fastly           Vendor = "fastly"
-	Cloudfront       Vendor = "cloudfront"
-	Generic          Vendor = "generic"
+	UnknownVendor Vendor = ""
+	Cloudflare    Vendor = "cloudflare"
+	AWS           Vendor = "aws"
+	Imperva       Vendor = "imperva"
+	Akamai        Vendor = "akamai"
+	F5            Vendor = "f5"
+	Barracuda     Vendor = "barracuda"
+	Sucuri        Vendor = "sucuri"
+	Fastly        Vendor = "fastly"
+	Cloudfront    Vendor = "cloudfront"
+	Generic       Vendor = "generic"
 )
 
 // Tamper is one mutation rule. SQLiTamper is the sqlmap `--tamper=`
@@ -141,7 +141,7 @@ var catalog = map[Vendor]Tamper{
 //
 // The detection format from wafw00f is one line per host, e.g.:
 //
-//   https://example.com	[Cloudflare (https://www.cloudflare.com)]
+//	https://example.com	[Cloudflare (https://www.cloudflare.com)]
 //
 // We substring-match against the vendor names. If multiple WAFs
 // detected across hosts, the first one wins — same trade-off as the
@@ -182,13 +182,13 @@ func For(v Vendor) Tamper {
 // right tamper flags for the detected WAF. The fragment writes three
 // env vars:
 //
-//   WAF_SQLMAP_TAMPER   — sqlmap --tamper= value (empty if no tamper)
-//   WAF_DALFOX_BYPASS   — dalfox --bypass value
-//   WAF_HEADER_TAMPER   — reserved for future header-tamper use
+//	WAF_SQLMAP_TAMPER   — sqlmap --tamper= value (empty if no tamper)
+//	WAF_DALFOX_BYPASS   — dalfox --bypass value
+//	WAF_HEADER_TAMPER   — reserved for future header-tamper use
 //
 // Stage commands interpolate these as:
 //
-//   ${WAF_SQLMAP_TAMPER:+--tamper=$WAF_SQLMAP_TAMPER}
+//	${WAF_SQLMAP_TAMPER:+--tamper=$WAF_SQLMAP_TAMPER}
 //
 // so when no WAF is detected, the flag is omitted cleanly.
 func BuildShellSnippet(workDir string) string {

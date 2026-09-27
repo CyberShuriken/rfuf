@@ -1,0 +1,1029 @@
+{
+  "amass_enum": {
+    "inputs": [],
+    "outputs": [
+      "amass_raw.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "amass_parse": {
+    "inputs": [
+      "amass_raw.txt"
+    ],
+    "outputs": [
+      "amass_sub.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "api_discovery": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "api_specs"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "api_version_gen": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "all_urls.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "assetfinder": {
+    "inputs": [],
+    "outputs": [
+      "assetfinder.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "authshape_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "authshape_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "backupscan_run": {
+    "inputs": [
+      "tech_fingerprint.txt"
+    ],
+    "outputs": [
+      "backupscan_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "bola_surface_run": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "bola_curl.txt",
+      "bola_permutations.txt",
+      "bola_targets.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "bucket_guess_run": {
+    "inputs": [
+      "tech_fingerprint.txt"
+    ],
+    "outputs": [
+      "bucket_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "businesslogic_run": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "business_logic_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "bypass403": {
+    "inputs": [
+      "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls.txt"
+    ],
+    "outputs": [
+      "403_bypass_results.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "cors2_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "cors2_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "cors_check": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "cors_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "crtsh": {
+    "inputs": [],
+    "outputs": [
+      "crtsh.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "dirbrute_ffuf": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "ffuf_dirs_raw.txt",
+      "ffuf_results/all.json",
+      "ffuf_targets.txt",
+      "ffuf_results"
+    ],
+    "policy": "conditional",
+    "empty_input_valid": true
+  },
+  "dirbrute_verify_200": {
+    "inputs": [
+      "ffuf_dirs_raw.txt",
+      "ffuf_results",
+      "ffuf_results/all.json",
+      "ffuf_targets.txt"
+    ],
+    "outputs": [
+      "ffuf_dirs_200.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "dnsx_resolve": {
+    "inputs": [
+      "in_scope_hosts.txt",
+      "out_of_scope_hosts.txt",
+      "scope.json",
+      "scoped_subs.txt",
+      "subs.txt"
+    ],
+    "outputs": [
+      "live_subs.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "drf_probe": {
+    "inputs": [
+      "alive.txt",
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "drf_findings.txt",
+      "drf_idor_targets.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "env_secrets_run": {
+    "inputs": [
+      "ffuf_dirs_raw.txt",
+      "ffuf_results",
+      "ffuf_results/all.json",
+      "ffuf_targets.txt"
+    ],
+    "outputs": [
+      "env_secrets.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "ffuf_js_endpoints": {
+    "inputs": [
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_bundles",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt"
+    ],
+    "outputs": [
+      "ffuf_js_results.json",
+      "js_endpoints.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "filter_testable_sqli": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "sqli_targets.txt",
+      "sqli_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "gau_urls": {
+    "inputs": [
+      "live_subs.txt"
+    ],
+    "outputs": [
+      "gau_urls.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "ghauri_sqli": {
+    "inputs": [
+      "ghauri_targets.txt",
+      "sqli_targets.txt"
+    ],
+    "outputs": [
+      "ghauri_results.txt",
+      "ghauri_targets.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "git_exposure_run": {
+    "inputs": [
+      "env_secrets.txt"
+    ],
+    "outputs": [
+      "git_exposure_findings.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "grep_secrets": {
+    "inputs": [
+      "clean_katana_urls.txt",
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_bundles",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt",
+      "katana_targets.txt",
+      "katana_urls.txt"
+    ],
+    "outputs": [
+      "js_secrets.txt",
+      "potential_secrets.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "hidden_params_arjun": {
+    "inputs": [
+      "alive.txt",
+      "arjun_targets_tmp.txt"
+    ],
+    "outputs": [
+      "hidden_params.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "hostheader_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "hostheader_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "httpx_probe": {
+    "inputs": [
+      "live_subs.txt"
+    ],
+    "outputs": [
+      "alive.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "idor_scan": {
+    "inputs": [
+      "idor_targets.txt",
+      "idor_targets_filtered.txt"
+    ],
+    "outputs": [
+      "idor_vulnerabilities.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "idor_surface_run": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "idor_surface.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "idor_targets": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "idor_targets.txt",
+      "idor_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "js_endpoints_scan": {
+    "inputs": [
+      "all_urls.txt",
+      "js_endpoints.txt",
+      "js_endpoints_full.txt",
+      "merge_js_endpoints_status.txt"
+    ],
+    "outputs": [
+      "js_endpoint_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "js_mine_run": {
+    "inputs": [
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_bundles",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt"
+    ],
+    "outputs": [
+      "js_mine_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "jsmap_scrape": {
+    "inputs": [
+      "alive.txt",
+      "scope.json"
+    ],
+    "outputs": [
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt",
+      "js_bundles"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "katana_crawl": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "clean_katana_urls.txt",
+      "katana_targets.txt",
+      "katana_urls.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "lfi_scan": {
+    "inputs": [
+      "lfi_targets.txt",
+      "lfi_targets_filtered.txt"
+    ],
+    "outputs": [
+      "lfi_results.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "lfi_targets": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "lfi_targets.txt",
+      "lfi_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "manual_review_queue": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "manual_business_logic_review.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "merge_all_urls": {
+    "inputs": [
+      "api_specs",
+      "clean_katana_urls.txt",
+      "gau_urls.txt",
+      "katana_targets.txt",
+      "katana_urls.txt",
+      "openapi_paths.txt",
+      "wayback_urls.txt"
+    ],
+    "outputs": [
+      "all_urls.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "merge_brute_subs": {
+    "inputs": [
+      "brute_subs.txt"
+    ],
+    "outputs": [
+      "live_subs.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "merge_js_endpoints": {
+    "inputs": [
+      "all_urls.txt",
+      "ffuf_js_results.json",
+      "js_endpoints.txt"
+    ],
+    "outputs": [
+      "all_urls.txt",
+      "js_endpoints_full.txt",
+      "merge_js_endpoints_status.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "merge_subs": {
+    "inputs": [
+      "amass_sub.txt",
+      "assetfinder.txt",
+      "crtsh.txt",
+      "subfinder.txt"
+    ],
+    "outputs": [
+      "subs.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "nextjs_bypass_run": {
+    "inputs": [
+      "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls.txt"
+    ],
+    "outputs": [
+      "nextjs_bypass_findings.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "nextjs_plaid_jwt_probe": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "nextjs_plaid_jwt_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "nuclei_auth_scan": {
+    "inputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ],
+    "outputs": [
+      "auth_results.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "nuclei_exposures": {
+    "inputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ],
+    "outputs": [
+      "credentials_found.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "nuclei_graphql_scan": {
+    "inputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ],
+    "outputs": [
+      "nuclei_graphql_scan.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "nuclei_misconfigs": {
+    "inputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ],
+    "outputs": [
+      "misconfigs.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "nuclei_rfuf_pass": {
+    "inputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ],
+    "outputs": [
+      "nuclei_rfuf_pass.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "nuclei_target_merge": {
+    "inputs": [
+      "alive.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "nuclei_targets.txt",
+      "nuclei_targets_status.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "oauth_audit_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "oauth_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "paramshape_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "paramshape_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "paramsprayer_run": {
+    "inputs": [
+      "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls.txt"
+    ],
+    "outputs": [
+      "paramsprayer_candidates.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "port_scan_naabu": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "naabu_ports.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "race_scan": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "race_candidates.txt",
+      "race_results.txt",
+      "race_scan_status.json"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "rce_scan": {
+    "inputs": [
+      "rce_targets.txt",
+      "rce_targets_filtered.txt"
+    ],
+    "outputs": [
+      "nuclei_rce_rce.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "rce_targets": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "rce_targets.txt",
+      "rce_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "redirect_scan": {
+    "inputs": [
+      "redirect_targets.txt",
+      "redirect_targets_filtered.txt"
+    ],
+    "outputs": [
+      "open_redirect_results.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "redirect_targets": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "redirect_targets.txt",
+      "redirect_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "reflection_run": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "reflection_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "s3_audit_run": {
+    "inputs": [
+      "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls.txt"
+    ],
+    "outputs": [
+      "s3_audit_findings.txt",
+      "s3_audit_status.json"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "scope_filter": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt",
+      "js_endpoints_full.txt",
+      "merge_js_endpoints_status.txt"
+    ],
+    "outputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "scope_guard": {
+    "inputs": [
+      "subs.txt"
+    ],
+    "outputs": [
+      "in_scope_hosts.txt",
+      "out_of_scope_hosts.txt",
+      "scope.json",
+      "scoped_subs.txt",
+      "subs.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "secheaders_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "secheaders_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "setup_directories": {
+    "inputs": [],
+    "outputs": [
+      "."
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "signup_takeover_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "signup_takeover_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "spec_parser": {
+    "inputs": [
+      "api_specs"
+    ],
+    "outputs": [
+      "openapi_paths.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "sqli_targets_replace": {
+    "inputs": [
+      "sqli_targets.txt",
+      "sqli_targets_filtered.txt"
+    ],
+    "outputs": [
+      "sqli_targets.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "sqlmap_scan": {
+    "inputs": [
+      "sqli_targets.txt",
+      "sqlmap_targets.txt",
+      "waf_detections.txt",
+      "waf_targets_tmp.txt"
+    ],
+    "outputs": [
+      "sqlmap_status.json",
+      "sqlmap_stderr.log",
+      "sqlmap_stdout.log",
+      "sqlmap_targets.txt",
+      "sqlmap_results"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "ssrf_scan": {
+    "inputs": [
+      "ssrf_targets.txt",
+      "ssrf_targets_filtered.txt",
+      "ssrf_targets_oob.txt"
+    ],
+    "outputs": [
+      "ssrf_targets_oob.txt",
+      "ssrf_vulnerabilities.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "ssrf_targets": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "ssrf_targets.txt",
+      "ssrf_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "subdomain_brute": {
+    "inputs": [
+      "live_subs.txt"
+    ],
+    "outputs": [
+      "brute_subs.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "subfinder": {
+    "inputs": [],
+    "outputs": [
+      "subfinder.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "takeover_v2_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "takeover_v2_findings.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "tech_fingerprint": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "tech_fingerprint.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "trufflehog_scan": {
+    "inputs": [
+      "api_specs",
+      "clean_katana_urls.txt",
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_bundles",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt",
+      "katana_targets.txt",
+      "katana_urls.txt"
+    ],
+    "outputs": [
+      "trufflehog_results.txt",
+      "trufflehog_status.json",
+      "trufflehog_stderr.log",
+      "trufflehog_version.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "url_filter_alive": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_scannable.txt",
+      "js_endpoints_full.txt",
+      "merge_js_endpoints_status.txt",
+      "uro_urls.txt"
+    ],
+    "outputs": [
+      "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "uro_dedup": {
+    "inputs": [
+      "all_urls.txt"
+    ],
+    "outputs": [
+      "all_urls.txt",
+      "uro_urls.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  },
+  "waf_detect": {
+    "inputs": [
+      "alive.txt",
+      "waf_targets_tmp.txt"
+    ],
+    "outputs": [
+      "waf_detections.txt",
+      "waf_targets_tmp.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "wayback_urls": {
+    "inputs": [
+      "live_subs.txt"
+    ],
+    "outputs": [
+      "wayback_urls.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "xss_scan": {
+    "inputs": [
+      "waf_detections.txt",
+      "waf_targets_tmp.txt",
+      "xss_targets.txt",
+      "xss_targets_filtered.txt"
+    ],
+    "outputs": [
+      "xss_targets_capped.txt",
+      "xss_vulnerabilities.txt"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true
+  },
+  "xss_targets": {
+    "inputs": [
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt"
+    ],
+    "outputs": [
+      "xss_targets.txt",
+      "xss_targets_filtered.txt"
+    ],
+    "policy": "required",
+    "empty_input_valid": true
+  }
+}

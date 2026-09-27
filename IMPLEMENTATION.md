@@ -385,6 +385,14 @@ This plan does not add credential guessing, account creation, MFA bypass, passwo
 - Tests, vet, builds, formatting, and diff checks pass.
 - The completed implementation is committed and pushed to `origin/main`.
 
-## 8. Current conclusion
+## 8. Baseline conclusion (reviewed commit)
 
-The current branch is **buildable and test-passing at package level, but not yet operationally complete**. The user’s empty output symptom is explained by both the interrupted dependency bootstrap and the remaining runtime contracts above. The next code update should implement the phases in order; fixing only SQLmap or only output directory creation will not make the pipeline reliable because the installer, internal command paths, stage policy, and artifact manifest can independently produce the same symptom.
+This section records the diagnosis at the reviewed commit, before the worktree changes described below. It is historical context; use Section 9 for current implementation and verification status.
+
+## 9. Worktree implementation status (2026-09-28)
+
+The worktree now includes pinned installer references and tests rejecting floating `@latest`, `@master`, and latest-release URLs; optional-tool installation handling; propagated stage-record and checkpoint persistence errors; an embedded declarative contract for every pipeline stage with dependency artifacts recorded as inputs; command, tool identity/version, dependency, contract, and artifact checks for resume; authenticated health metadata in coverage reports; and auth/log redaction checks.
+
+JavaScript collection is a bounded built-in Go stage. Its local fixture exercises authenticated page and asset requests, recursive manifests, endpoint provenance, HTTP failure metadata, exclusions, and out-of-scope references routed to loopback. Existing pipeline fixtures cover scope guarding, final URL exclusion/filtering, zero-input artifact creation, and resume invalidation. Installer, contract, and executor tests cover dependency pins, persistence errors, timeouts, and secret redaction. No installer dependency bootstrap or live target scan was run.
+
+The implementation is reliability-improved, but it is **not being declared production-ready**. No live target was scanned, and successful local fixtures cannot establish behavior across real scanner versions, target responses, or authorization policies. The local verification results and commit state are reported with this change; a real authorized validation remains outstanding.

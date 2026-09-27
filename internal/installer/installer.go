@@ -1,11 +1,15 @@
 package installer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // PackageManager identifies the system package manager. We support the two
@@ -23,6 +27,23 @@ type Tool struct {
 	Name           string
 	InstallCommand string
 	CheckBinary    string
+}
+
+var optionalTools = map[string]bool{
+	"subfinder": true, "assetfinder": true, "amass": true, "subzy": true,
+	"trufflehog": true, "Gxss": true, "dalfox": true, "gau": true,
+	"waybackurls": true, "ffuf": true, "naabu": true, "wafw00f": true,
+	"arjun": true, "ghauri": true, "interactsh-client": true,
+}
+
+var lockedVersions = map[string]string{
+	"subfinder": "v2.6.6", "assetfinder": "v0.1.1", "amass": "v4.2.0",
+	"dnsx": "v1.2.1", "subzy": "v1.2.0", "nuclei": "v3.3.10",
+	"httpx": "v1.6.10", "katana": "v1.1.3", "trufflehog": "v3.97.9",
+	"gf": "v0.0.0-20200618134122-dcd4c361f9f5", "Gxss": "v0.0.0-20240804155857-8ee938bf4ead",
+	"dalfox": "v2.9.3", "gau": "v2.2.4", "waybackurls": "v0.1.0", "ffuf": "v2.1.0",
+	"naabu": "v2.1.9", "wafw00f": "2.4.2", "arjun": "2.2.7",
+	"ghauri": "1.4.3", "interactsh-client": "v1.1.9",
 }
 
 // detectPackageManager returns dnf on Fedora/RHEL-family, apt elsewhere.
@@ -113,44 +134,43 @@ func distroPackages(pm PackageManager) map[string][]string {
 func GetRequiredTools(goBin string) []Tool {
 	return []Tool{
 		// Subdomain enumeration
-		{"subfinder", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", "subfinder"},
-		{"assetfinder", "GOTOOLCHAIN=local go install github.com/tomnomnom/assetfinder@latest", "assetfinder"},
-		{"amass", "GOTOOLCHAIN=local go install -v github.com/owasp-amass/amass/v4/cmd/amass@master", "amass"},
+		{"subfinder", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.6", "subfinder"},
+		{"assetfinder", "GOTOOLCHAIN=local go install github.com/tomnomnom/assetfinder@v0.1.1", "assetfinder"},
+		{"amass", "GOTOOLCHAIN=local go install -v github.com/owasp-amass/amass/v4/cmd/amass@v4.2.0", "amass"},
 		// DNS resolution + takeover checks
-		{"dnsx", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest", "dnsx"},
-		{"subzy", "GOTOOLCHAIN=local go install -v github.com/PentestPad/subzy@latest", "subzy"},
+		{"dnsx", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@v1.2.1", "dnsx"},
+		{"subzy", "GOTOOLCHAIN=local go install -v github.com/PentestPad/subzy@v1.2.0", "subzy"},
 		// Generic scanner
 		{"nuclei", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.10", "nuclei"},
 		// HTTP probing + crawling
-		{"httpx", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest", "httpx"},
-		{"katana", "GOTOOLCHAIN=local go install github.com/projectdiscovery/katana/cmd/katana@latest", "katana"},
+		{"httpx", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/httpx/cmd/httpx@v1.6.10", "httpx"},
+		{"katana", "GOTOOLCHAIN=local go install github.com/projectdiscovery/katana/cmd/katana@v1.1.3", "katana"},
 		// Secret scanning
-		{"trufflehog", fmt.Sprintf("curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b %s", goBin), "trufflehog"},
+		{"trufflehog", fmt.Sprintf("curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/v3.97.9/scripts/install.sh | sh -s -- -b %s v3.97.9", goBin), "trufflehog"},
 		// GF patterns + helpers
-		{"gf", "GOTOOLCHAIN=local go install github.com/tomnomnom/gf@latest", "gf"},
-		{"Gxss", "GOTOOLCHAIN=local go install github.com/KathanP19/Gxss@latest", "Gxss"},
-		{"dalfox", "GOTOOLCHAIN=local go install github.com/hahwul/dalfox/v2@latest", "dalfox"},
+		{"gf", "GOTOOLCHAIN=local go install github.com/tomnomnom/gf@v0.0.0-20200618134122-dcd4c361f9f5", "gf"},
+		{"Gxss", "GOTOOLCHAIN=local go install github.com/KathanP19/Gxss@v0.0.0-20240804155857-8ee938bf4ead", "Gxss"},
+		{"dalfox", "GOTOOLCHAIN=local go install github.com/hahwul/dalfox/v2@v2.9.3", "dalfox"},
 		// Historical URL mining
-		{"gau", "GOTOOLCHAIN=local go install github.com/lc/gau/v2/cmd/gau@latest", "gau"},
-		{"waybackurls", "GOTOOLCHAIN=local go install github.com/tomnomnom/waybackurls@latest", "waybackurls"},
-		// Fuzzing + URL dedup (uro collapses gau+wayback+katana noise)
-		{"ffuf", "GOTOOLCHAIN=local go install github.com/ffuf/ffuf/v2@latest", "ffuf"},
-		{"uro", "GOTOOLCHAIN=local go install github.com/szybnev/uro-go/cmd/uro@latest", "uro"},
+		{"gau", "GOTOOLCHAIN=local go install github.com/lc/gau/v2/cmd/gau@v2.2.4", "gau"},
+		{"waybackurls", "GOTOOLCHAIN=local go install github.com/tomnomnom/waybackurls@v0.1.0", "waybackurls"},
+		// Fuzzing; URL dedup has a built-in sort fallback and needs no tool.
+		{"ffuf", "GOTOOLCHAIN=local go install github.com/ffuf/ffuf/v2@v2.1.0", "ffuf"},
 		// Port scanning + WAF detection + hidden params per bb-methodology.
 		// naabu is Go-installed; wafw00f, arjun, and ghauri are all
 		// Python-based in 2026 (Go module paths were deprecated) so we
 		// install via pipx or pip3 with --user. The stages that depend
 		// on these tools gracefully no-op when the binary is missing, so
 		// a pip install failure never blocks the pipeline.
-		{"naabu", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest", "naabu"},
-		{"wafw00f", "pipx install wafw00f || pip3 install --break-system-packages wafw00f || pip3 install --user wafw00f", "wafw00f"},
-		{"arjun", "pipx install arjun || pip3 install --break-system-packages arjun || pip3 install --user arjun", "arjun"},
-		{"ghauri", "pipx install git+https://github.com/r0oth3x49/ghauri.git || pip3 install --break-system-packages git+https://github.com/r0oth3x49/ghauri.git", "ghauri"},
+		{"naabu", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.1.9", "naabu"},
+		{"wafw00f", "pipx install 'wafw00f==2.4.2' || pip3 install --break-system-packages 'wafw00f==2.4.2' || pip3 install --user 'wafw00f==2.4.2'", "wafw00f"},
+		{"arjun", "pipx install 'arjun==2.2.7' || pip3 install --break-system-packages 'arjun==2.2.7' || pip3 install --user 'arjun==2.2.7'", "arjun"},
+		{"ghauri", "pipx install 'ghauri @ git+https://github.com/r0oth3x49/ghauri.git@1.4.3' || pip3 install --break-system-packages 'ghauri @ git+https://github.com/r0oth3x49/ghauri.git@1.4.3'", "ghauri"},
 		// interactsh-client: OOB callback server used by the new SSRF/RCE/XSS
 		// stages to catch blind results that don't trip templates. Allocates
 		// a unique *.oast.fun (or self-hosted) URL at pipeline boot that
 		// becomes the substitute target for blind payloads.
-		{"interactsh-client", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest", "interactsh-client"},
+		{"interactsh-client", "GOTOOLCHAIN=local go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.1.9", "interactsh-client"},
 	}
 }
 
@@ -176,16 +196,31 @@ func VerifyToolsPresent() error {
 	// CheckBinary on PATH. We deliberately don't try to repair anything
 	// here — if something is missing, the user should run the install
 	// path once without -resume.
-	missing := []string{}
+	missingRequired := []string{}
 	for _, t := range GetRequiredTools("") {
 		if _, err := exec.LookPath(t.CheckBinary); err != nil {
-			missing = append(missing, t.Name)
+			state := "MISSING"
+			if optionalTools[t.Name] {
+				state = "OPTIONAL MISSING"
+			} else {
+				missingRequired = append(missingRequired, t.Name)
+			}
+			fmt.Printf("  %-18s %-16s locked=%s\n", t.Name, state, pinnedVersion(t))
+		} else {
+			fmt.Printf("  %-18s %-16s locked=%s\n", t.Name, "PRESENT", pinnedVersion(t))
 		}
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("missing required tools (run `rfuf -d <domain>` once WITHOUT -resume to install): %s", strings.Join(missing, ", "))
+	if len(missingRequired) > 0 {
+		return fmt.Errorf("missing required tools (run `rfuf -d <domain>` once WITHOUT -resume to install): %s", strings.Join(missingRequired, ", "))
 	}
 	return nil
+}
+
+func pinnedVersion(tool Tool) string {
+	if version := lockedVersions[tool.Name]; version != "" {
+		return version
+	}
+	return "unlocked"
 }
 
 func packageGroupPresent(pm PackageManager, logical string, packages []string) bool {
@@ -253,6 +288,23 @@ func EnsureTools(goBin string) error {
 	if _, err := exec.LookPath("go"); err != nil {
 		return fmt.Errorf("Go is not installed. Install it first: sudo dnf install -y golang  (Fedora)  |  sudo apt install -y golang-go  (Kali/Debian/Ubuntu)")
 	}
+	versionOutput, err := exec.Command("go", "env", "GOVERSION").Output()
+	if err != nil {
+		return fmt.Errorf("cannot determine local Go version: %w", err)
+	}
+	version := regexp.MustCompile(`^go([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`).FindStringSubmatch(strings.TrimSpace(string(versionOutput)))
+	if len(version) == 0 {
+		return fmt.Errorf("cannot parse local Go version %q", strings.TrimSpace(string(versionOutput)))
+	}
+	major, _ := strconv.Atoi(version[1])
+	minor, _ := strconv.Atoi(version[2])
+	patch := 0
+	if version[3] != "" {
+		patch, _ = strconv.Atoi(version[3])
+	}
+	if major < 1 || (major == 1 && (minor < 22 || (minor == 22 && patch < 2))) {
+		return fmt.Errorf("Go 1.22.2 or newer is required (found %s); dependency installs use GOTOOLCHAIN=local and will not fetch another toolchain", strings.TrimSpace(string(versionOutput)))
+	}
 
 	// 2. Detect distro. We need this before step 3 (apt vs dnf) and again
 	// at the end (seclists install path).
@@ -264,7 +316,8 @@ func EnsureTools(goBin string) error {
 	// others — sqlmap failing on Fedora (rare, but possible if the repo
 	// is stale) should not stop jq from being installed.
 	distroPkgs := distroPackages(pm)
-	for logical, names := range distroPkgs {
+	for _, logical := range []string{"build", "git", "jq", "sqlmap", "seclists"} {
+		names := distroPkgs[logical]
 		if len(names) == 0 {
 			continue
 		}
@@ -282,7 +335,8 @@ func EnsureTools(goBin string) error {
 			continue
 		}
 		installCmd := systemInstallCmd(pm, names...)
-		cmd := exec.Command("bash", "-c", installCmd)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -293,6 +347,7 @@ func EnsureTools(goBin string) error {
 			// is genuinely missing after the package install attempt.
 			fmt.Printf("[!] %s install returned %v (will check PATH next)\n", logical, err)
 		}
+		cancel()
 	}
 
 	// 4. Ensure ~/go/bin is on PATH. This is the Go default install
@@ -321,12 +376,19 @@ func EnsureTools(goBin string) error {
 			continue
 		}
 		fmt.Printf("[*] Installing %s...\n", t.Name)
-		cmd := exec.Command("bash", "-c", t.InstallCommand)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		cmd := exec.CommandContext(ctx, "bash", "-c", t.InstallCommand)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
+			cancel()
+			if optionalTools[t.Name] {
+				fmt.Printf("[!] Optional tool %s %s could not be installed: %v\n", t.Name, pinnedVersion(t), err)
+				continue
+			}
 			return fmt.Errorf("failed to install %s: %v", t.Name, err)
 		}
+		cancel()
 		// Nuclei needs templates before its first scan can do anything
 		// useful. Updating templates on every install is wasteful, but
 		// doing it once at first-install time is the right trade-off.
@@ -366,7 +428,7 @@ func EnsureTools(goBin string) error {
 		}
 	}
 
-	return nil
+	return VerifyToolsPresent()
 }
 
 // patchRCFile appends the rfuf export line to a shell rc file unless the
@@ -397,7 +459,9 @@ func ensureGFPatterns() error {
 	gfDir := filepath.Join(home, ".gf")
 	if _, err := os.Stat(gfDir); os.IsNotExist(err) {
 		fmt.Println("[*] Installing GF patterns...")
-		cmd := exec.Command("git", "clone", "https://github.com/1ndianl33t/Gf-Patterns", gfDir)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "https://github.com/1ndianl33t/Gf-Patterns", gfDir)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -405,7 +469,11 @@ func ensureGFPatterns() error {
 		}
 	} else {
 		fmt.Println("[*] Updating GF patterns...")
-		_ = exec.Command("git", "-C", gfDir, "pull").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "git", "-C", gfDir, "pull", "--ff-only").Run(); err != nil {
+			return fmt.Errorf("GF pattern update failed: %w", err)
+		}
 	}
 	return nil
 }
@@ -448,7 +516,9 @@ func EnsureSeclists() (string, error) {
 	case PKG_DNF:
 		fmt.Println("[*] seclists not packaged on Fedora — cloning SecLists into ~/SecLists...")
 		cloneDst := filepath.Join(home, "SecLists")
-		cmd := exec.Command("git", "clone", "--depth=1", "https://github.com/danielmiessler/SecLists.git", cloneDst)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "https://github.com/danielmiessler/SecLists.git", cloneDst)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -459,16 +529,24 @@ func EnsureSeclists() (string, error) {
 		// Best-effort: most Kali/Debian systems ship seclists; Ubuntu
 		// sometimes doesn't. We don't fail the whole pipeline if this
 		// fails — the user can still run the rest of the stages.
-		_ = exec.Command("sudo", "apt", "update").Run()
-		if err := exec.Command("sudo", "apt", "install", "-y", "seclists").Run(); err != nil {
+		aptCtx, aptCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		_ = exec.CommandContext(aptCtx, "sudo", "apt", "update").Run()
+		aptCancel()
+		installCtx, installCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		if err := exec.CommandContext(installCtx, "sudo", "apt", "install", "-y", "seclists").Run(); err != nil {
+			installCancel()
 			fmt.Printf("[!] apt install seclists failed (%v) — falling back to git clone\n", err)
 			cloneDst := filepath.Join(home, "SecLists")
-			cmd := exec.Command("git", "clone", "--depth=1", "https://github.com/danielmiessler/SecLists.git", cloneDst)
+			cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cloneCancel()
+			cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", "https://github.com/danielmiessler/SecLists.git", cloneDst)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
 				return "", fmt.Errorf("failed to install or clone seclists: %v", err)
 			}
+		} else {
+			installCancel()
 		}
 	}
 

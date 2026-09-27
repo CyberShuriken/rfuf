@@ -1,8 +1,10 @@
 package s3auditor
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,7 +20,10 @@ var sensitiveFiles = []string{
 func Run(workDir string) error {
 	urls, err := iohelp.ReadLines(workDir + "/all_urls.txt")
 	if err != nil || len(urls) == 0 {
-		return iohelp.WriteLines(workDir+"/s3_audit_findings.txt", []string{})
+		if writeErr := iohelp.WriteLines(workDir+"/s3_audit_findings.txt", []string{}); writeErr != nil {
+			return writeErr
+		}
+		return writeStatus(workDir, "completed_no_input")
 	}
 
 	var findings []string
@@ -36,12 +41,8 @@ func Run(workDir string) error {
 			findings = append(findings, fmt.Sprintf("[LISTED] %s - Bucket listing is enabled", urlStr))
 		}
 
-		// 2. Test for PUT permissiveness (Write access)
-		if checkPutPermission(client, urlStr) {
-			findings = append(findings, fmt.Sprintf("[WRITE] %s - Bucket write access enabled (PUT successful)", urlStr))
-		}
-
-		// 3. Test for sensitive files
+		// Probe only with GET requests. Write permissions require explicit,
+		// operator-directed validation and are never tested automatically.
 		for _, file := range sensitiveFiles {
 			target := fmt.Sprintf("%s/%s", strings.TrimRight(urlStr, "/"), file)
 			if getStatusCode(client, target) == 200 {
@@ -50,7 +51,18 @@ func Run(workDir string) error {
 		}
 	}
 
-	return iohelp.WriteLines(workDir+"/s3_audit_findings.txt", findings)
+	if err := iohelp.WriteLines(workDir+"/s3_audit_findings.txt", findings); err != nil {
+		return err
+	}
+	return writeStatus(workDir, "completed")
+}
+
+func writeStatus(workDir, status string) error {
+	data, err := json.Marshal(map[string]any{"status": status, "write_permission_test": "not_performed", "reason": "non_destructive_mode"})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(workDir+"/s3_audit_status.json", append(data, '\n'), 0644)
 }
 
 func isS3Bucket(url string) bool {
@@ -66,27 +78,13 @@ func isS3Bucket(url string) bool {
 	return false
 }
 
-func checkPutPermission(client *http.Client, urlStr string) bool {
-	canaryFile := "rfuf_canary_test.txt"
-	target := fmt.Sprintf("%s/%s", strings.TrimRight(urlStr, "/"), canaryFile)
-
-	req, err := http.NewRequest("PUT", target, strings.NewReader("rfuf-test"))
-	if err != nil {
-		return false
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-
-	// 200 OK or 201 Created indicates success
-	return resp.StatusCode == 200 || resp.StatusCode == 201
-}
-
 func getStatusCode(client *http.Client, url string) int {
-	resp, err := client.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0
+	}
+	iohelp.ApplyAuth(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0
 	}

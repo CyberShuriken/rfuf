@@ -50,8 +50,8 @@ step, and can resume exactly where it stopped.
   `checkpoint.json`. Kill the process, restart, pick up where you stopped.
 - **Self-installing** — missing tools are detected and installed via
   `go install` or `apt`. GF patterns are cloned if absent.
-- **One-command system install** — `rfuf install` places the binary in
-  `/opt/rfuf/` and auto-configures your shell.
+- **One-command install** — `rfuf install` places the binary in
+  `~/.local/share/rfuf/` and auto-configures your shell.
 - **Live Multi-Stage Dashboard** — real-time tracking of all active stages
   with a visual progress bar and live vulnerability stats.
 - **Zero configuration** — no API keys, no YAML, no environment file. Pass
@@ -153,29 +153,29 @@ for each.
 
 ## Installation
 
-The recommended one-time install places the binary at `/opt/rfuf/rfuf`
+The recommended one-time install places the binary at `~/.local/share/rfuf/rfuf`
 and wires your shell so `rfuf` works from any directory:
 
 ```bash
 git clone https://github.com/CyberShuriken/rfuf.git
 cd rfuf
 make build          # produces ./bin/rfuf
-./bin/rfuf install  # builds, copies to /opt/rfuf, patches ~/.zshrc or ~/.bashrc
+./bin/rfuf install  # builds, copies to ~/.local/share/rfuf, patches your shell rc
 ```
 
 `rfuf install` will:
 
 1. Detect your shell from `$SHELL` and confirm before patching.
-2. Create `/opt/rfuf/` (via `sudo` if needed) and copy the binary in.
-3. Append `export PATH="/opt/rfuf:$PATH"` to `~/.zshrc` or `~/.bashrc`
+2. Create `~/.local/share/rfuf/` and copy the binary in.
+3. Link it into `~/.local/bin` and add that directory to your shell PATH.
    (whichever matches your shell). The append is idempotent — a marker
    comment prevents duplicates on re-runs.
 
 Open a new shell, then verify:
 
 ```bash
-which rfuf        # → /opt/rfuf/rfuf
-rfuf -v           # → rfuf version 2.4.4
+which rfuf        # → ~/.local/bin/rfuf
+rfuf -v           # → rfuf version 2.4.10
 ```
 
 For full details, troubleshooting, and uninstall instructions see
@@ -208,7 +208,7 @@ rfuf -d example.com -skip-install  # like -resume, but on a fresh scan (debug / 
 rfuf -d example.com -auth-cookie 'session=...' # replay an authorized session cookie
 rfuf -d example.com -auth-cookie-file ~/.config/rfuf/session.cookie # read cookie locally
 rfuf -d example.com -auth-bearer-file ~/.config/rfuf/token # read bearer token locally
-rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie
+rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie -auth-check-url https://example.com/account
 rfuf -d example.com -bug-bounty-username researcher -test-account-email test@example.com
 rfuf -d example.com -exclude-url-regex '(^|/)(contact|support)(/|$)'
 rfuf -v                            # print version
@@ -270,7 +270,7 @@ The final run writes `.rfuf/coverage_report.json`, `CoverageReport.md`, `evidenc
 
 ### Authentication verification and run limits
 
-When a session is supplied, `-auth-check-url` can make a bounded request to an operator-selected authenticated health-check endpoint. Add `-auth-check-marker` when the response must contain a known marker. RFUF records only boolean verification state and HTTP status in `.rfuf/auth_check.json`; it never stores the marker or credential value. With `-auth-required`, a failed or mismatched health check stops the run before active scanning.
+When a session is supplied, `-auth-check-url` makes a bounded request to an operator-selected authenticated health-check endpoint. Add `-auth-check-marker` when the response must contain a known marker. RFUF stores only authentication mode, HTTP status, and a safe error class in `.rfuf/auth_check.json`; it never stores the marker, response body, or credential value. `-auth-required` requires the URL and a successful check before active scanning. Coverage labels authentication `public`, `authenticated_unverified`, or `authenticated_verified`.
 
 Use `-max-targets` to cap final scoped URL streams and `-max-stage-requests` to set the rate ceiling for scanners that support a rate option. These controls are conservative bounds, not a universal request counter for tools that do not expose a compatible budget interface.
 
@@ -318,7 +318,7 @@ rfuf -d '*.example.com' -skip-install
 
 The interactsh callback client is optional. RFUF waits up to 20 seconds by default and continues without OOB callbacks if registration is unavailable. Use `-interactsh-timeout 0` or `-disable-interactsh` when the target, network, or bounty policy does not permit OOB callbacks. Successful interactsh startup now keeps the client alive for the scan instead of cancelling it when startup returns.
 
-If a run reports `step subfinder incomplete (status=failed exit_code=0)`, `step amass_enum incomplete (status=failed exit_code=0)`, `step jsmap_scrape incomplete (status=failed exit_code=0)`, or `step hidden_params_arjun incomplete (status=failed exit_code=0)`, update to RFUF v2.4.5 or later and rerun. If it reports `step katana_crawl incomplete (status=timed_out exit_code=0)`, update to RFUF v2.4.6 or later. If it reports `step merge_all_urls incomplete (status=failed exit_code=0)` or `step bola_surface_run incomplete (status=failed exit_code=0)`, update to RFUF v2.4.9 or later. The stage-health artifact map validates final producer outputs, materializes declared reports for legitimate zero-result stages, ignores temporary redirect files that a stage explicitly removes, ignores output-format values such as `-of json`, and rejects comments, quoted expressions, XML-like text, and diagnostic arrows as output paths. A genuinely empty result is recorded as `completed_empty`, not failed. RFUF v2.4.10 also sends HackerOne’s required `X-HackerOne-Research` attribution header on auth checks, shell stages, JavaScript fetches, and Go finder requests. RFUF v2.4.6 bounds Katana to the first 200 alive hosts, two crawl levels, a 10-minute crawl duration, a 10-second request timeout, and a 12-minute stage ceiling; partial URLs are retained when a busy target reaches the Katana limit.
+Older releases had false stage-health reports for empty outputs and timeouts. Current runs persist a record per stage under `.rfuf/stages/`, including policy, declared input/output contracts, exit state, tool identity/version, and artifact counts. Resume skips a completed stage only while its command, dependencies, tool identity/version, contracts, and declared outputs still match. JavaScript collection records asset metadata, failures, and endpoint provenance in separate JSONL artifacts. A valid zero-result stage is `completed_empty`; failures and incomplete required coverage remain visible in the final report.
 
 ### Bounded dependency installation
 
@@ -396,7 +396,7 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 9 | Crawling | `katana` | `katana_urls.txt` → `clean_katana_urls.txt` |
 | 10 | Secret scanning | `trufflehog` + grep | `trufflehog_results.txt`, `potential_secrets.txt` |
 | 11 | Historical URL mining | `gau`, `waybackurls` | `all_urls.txt` |
-| 12 | URL dedup (**new**) | `uro` | `all_urls.txt` (in place) |
+| 12 | URL dedup | `sort -u` | `all_urls.txt`, `uro_urls.txt` |
 | 13 | 200-only URL filter (**new**) | `httpx -mc 200` | `all_urls_200.txt` |
 | 14 | SQLi scan | `gf sqli` → `sqlmap` (level=3, risk=1) | `sqlmap_results/` |
 | 15 | SQLi modern scan (**new**) | `ghauri` (BT technique) | `ghauri_results.txt` |
@@ -413,21 +413,21 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 26 | Port scan (**new**) | `naabu` | `naabu_ports.txt` |
 | 27 | Hidden params (**new**) | `arjun` (capped to 100 hosts) | `hidden_params.txt` |
 | 28 | Manual review queue | `grep` | `manual_business_logic_review.txt` |
-| 29 | Reflection finder (**new**) | `go run ./cmd/findings-runner reflection` | `reflection_findings.txt` |
-| 30 | Param-shape / HPP (**new**) | `go run ./cmd/findings-runner paramshape` | `paramshape_findings.txt` |
-| 31 | Cookie/JWT misconfig (**new**) | `go run ./cmd/findings-runner authshape` | `authshape_findings.txt` |
-| 32 | Signup / email-verify takeover (**new**) | `go run ./cmd/findings-runner signup` | `signup_takeover_findings.txt` |
-| 33 | IDOR surface map (**new**) | `go run ./cmd/findings-runner idor` | `idor_surface.txt`, `idor_surface.csv` |
-| 34 | OAuth redirect_uri bypass (**new**) | `go run ./cmd/findings-runner oauth` | `oauth_findings.txt` |
-| 35 | Race-condition scan (**new**) | `go run ./cmd/findings-runner race` | `race_candidates.txt`, `race_results.txt` |
-| 36 | Public bucket guess (**new**) | `go run ./cmd/findings-runner buckets` | `bucket_findings.txt` |
-| 37 | Service takeover fingerprints (**new**) | `go run ./cmd/findings-runner takeoversvc` | `takeover_v2_findings.txt` |
-| 38 | Deep JS bundle mining (**new**) | `go run ./cmd/findings-runner jsmine` | `js_mine_findings.txt` |
-| 39 | Security headers analysis (**new**) | `go run ./cmd/findings-runner secheaders` | `secheaders_findings.txt` |
-| 40 | Backup / sensitive-file scan (**new**) | `go run ./cmd/findings-runner backupscan` | `backupscan_findings.txt` |
-| 41 | Business-logic surface (**new**) | `go run ./cmd/findings-runner businesslogic` | `business_logic_findings.txt` |
-| 42 | Host-header injection (**new**) | `go run ./cmd/findings-runner hostheader` | `hostheader_findings.txt` |
-| 43 | Credentialed CORS preflight (**new**) | `go run ./cmd/findings-runner cors2` | `cors2_findings.txt` |
+| 29 | Reflection finder (**new**) | `rfuf findings reflection <workdir>` | `reflection_findings.txt` |
+| 30 | Param-shape / HPP (**new**) | `rfuf findings paramshape <workdir>` | `paramshape_findings.txt` |
+| 31 | Cookie/JWT misconfig (**new**) | `rfuf findings authshape <workdir>` | `authshape_findings.txt` |
+| 32 | Signup / email-verify takeover (**new**) | `rfuf findings signup <workdir>` | `signup_takeover_findings.txt` |
+| 33 | IDOR surface map (**new**) | `rfuf findings idor <workdir>` | `idor_surface.txt` |
+| 34 | OAuth redirect_uri bypass (**new**) | `rfuf findings oauth <workdir>` | `oauth_findings.txt` |
+| 35 | Race-condition scan (**new**) | `rfuf findings race <workdir>` | `race_candidates.txt`, `race_results.txt` |
+| 36 | Public bucket guess (**new**) | `rfuf findings buckets <workdir>` | `bucket_findings.txt` |
+| 37 | Service takeover fingerprints (**new**) | `rfuf findings takeoversvc <workdir>` | `takeover_v2_findings.txt` |
+| 38 | Deep JS bundle mining (**new**) | `rfuf findings jsmine <workdir>` | `js_mine_findings.txt` |
+| 39 | Security headers analysis (**new**) | `rfuf findings secheaders <workdir>` | `secheaders_findings.txt` |
+| 40 | Backup / sensitive-file scan (**new**) | `rfuf findings backupscan <workdir>` | `backupscan_findings.txt` |
+| 41 | Business-logic surface (**new**) | `rfuf findings businesslogic <workdir>` | `business_logic_findings.txt` |
+| 42 | Host-header injection (**new**) | `rfuf findings hostheader <workdir>` | `hostheader_findings.txt` |
+| 43 | Credentialed CORS preflight (**new**) | `rfuf findings cors2 <workdir>` | `cors2_findings.txt` |
 | 44 | Custom nuclei template pass (**new**) | `nuclei -t nuclei-templates-rfuf/` | `nuclei_rfuf_pass.txt` |
 | 45 | OWASP coverage and manual plan (**new**) | Built-in evidence mapper | `OWASP_2025_COVERAGE.md`, `candidate_index.jsonl`, `MANUAL_TEST_PLAN.md` |
 | 46 | Summary report | (built-in) | `SUMMARY.md`, `findings.md` |
@@ -480,6 +480,9 @@ large targets (thousands of alive hosts):
 ├── all_urls_200.txt
 ├── js_assets.txt
 ├── js_endpoints.txt
+├── js_asset_metadata.jsonl
+├── js_asset_errors.jsonl
+├── js_endpoint_provenance.jsonl
 ├── jsmap_status.txt
 ├── nuclei_targets.txt
 ├── nuclei_targets_status.txt

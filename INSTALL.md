@@ -24,8 +24,7 @@ make build && ./bin/rfuf install
 ### What `rfuf install` does
 
 1. **Builds the binary** from the current source tree (uses `go build`).
-2. **Creates `/opt/rfuf/`** and copies `rfuf` there as
-   `/opt/rfuf/rfuf`. Uses `sudo` if you are not already root.
+2. **Creates `~/.local/share/rfuf/`** and copies `rfuf` there.
 3. **Detects your login shell** from `$SHELL` (zsh or bash).
 4. **Asks you to confirm** which shell to patch — defaults to the
    detected one, with options to switch.
@@ -33,7 +32,7 @@ make build && ./bin/rfuf install
 
    ```bash
    # rfuf: added by rfuf install
-   export PATH="/opt/rfuf:$PATH"
+   export PATH="$HOME/.local/bin:$PATH"
    ```
 
    The marker comment makes the patch idempotent — re-running
@@ -73,8 +72,8 @@ executor code.
 ## Verify the install
 
 ```bash
-which rfuf        # → /opt/rfuf/rfuf
-rfuf -v            # → rfuf version 2.4.4
+which rfuf        # → ~/.local/bin/rfuf
+rfuf -v            # → rfuf version 2.4.10
 ```
 
 Run a no-op help check from an unrelated directory to confirm:
@@ -88,7 +87,7 @@ cd /tmp && rfuf -h
 ## Uninstall
 
 ```bash
-sudo rm -rf /opt/rfuf
+rm -rf ~/.local/share/rfuf
 ```
 
 Then remove the two-line `rfuf` block from `~/.zshrc` or `~/.bashrc`
@@ -121,7 +120,7 @@ add that directory to your shell's `PATH` export.
 ## Requirements recap
 
 - Go 1.22+ (only needed if you build from source)
-- `sudo` access for `/opt/rfuf` (the manual fallback above avoids it)
+- a writable home directory
 - A POSIX shell — bash or zsh
 
 Recon tools (`subfinder`, `dnsx`, `httpx`, etc.) are **not** installed
@@ -152,7 +151,7 @@ The scanner does not create accounts, submit signup forms, guess credentials, or
 rfuf -d example.com -auth-cookie 'session=...'
 rfuf -d example.com -auth-cookie-file ~/.config/rfuf/session.cookie
 rfuf -d example.com -auth-bearer-file ~/.config/rfuf/token
-rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie
+rfuf -d example.com -auth-required -auth-cookie-file ~/.config/rfuf/session.cookie -auth-check-url https://example.com/account
 ```
 
 The file-based forms read a local file and use its trimmed contents as one session value. Keep those files protected with normal filesystem permissions. `-auth-required` prevents a run from silently falling back to public-only coverage when authenticated testing is mandatory.
@@ -184,6 +183,6 @@ The final status is `COMPLETE` only when all declared stages finish as `complete
 
 ### Authenticated health checks and bounds
 
-Use `-auth-check-url` with an optional `-auth-check-marker` to verify an operator-supplied session before scanning. With `-auth-required`, a failed or mismatched check stops the run. Only boolean state and HTTP status are written to `.rfuf/auth_check.json`; credentials and markers are not stored.
+Use `-auth-check-url` with an optional `-auth-check-marker` to verify an operator-supplied session before scanning. `-auth-required` requires the URL and a successful check. The coverage report labels authentication `public`, `authenticated_unverified`, or `authenticated_verified`; metadata includes only the HTTP status and a safe error class. Credentials, response bodies, and marker text are not persisted.
 
 Use `-max-targets` to cap final URL streams and `-max-stage-requests` to configure the request-rate ceiling for scanners that support it. These are explicit bounds for RFUF-controlled streams and compatible tools; they are not a universal budget for every third-party binary.

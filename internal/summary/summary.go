@@ -110,15 +110,20 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	authState := "not_configured"
 	if data, err := os.ReadFile(filepath.Join(workDir, ".rfuf", "auth_check.json")); err == nil {
 		var auth struct {
-			Configured bool `json:"configured"`
-			Verified   bool `json:"verified"`
+			Configured bool   `json:"configured"`
+			Verified   bool   `json:"verified"`
+			Mode       string `json:"mode"`
 		}
 		if json.Unmarshal(data, &auth) == nil {
-			switch {
-			case auth.Verified:
-				authState = "verified"
-			case auth.Configured:
-				authState = "unverified"
+			if auth.Mode != "" {
+				authState = auth.Mode
+			} else {
+				switch {
+				case auth.Verified:
+					authState = "authenticated_verified"
+				case auth.Configured:
+					authState = "authenticated_unverified"
+				}
 			}
 		}
 	}

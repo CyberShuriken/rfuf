@@ -8,20 +8,20 @@
 // What's checked:
 //
 //   - Content-Security-Policy    missing = reportable (XSS-class)
-//                                unsafe-inline = reportable (XSS bypass)
-//                                unsafe-eval = reportable (XSS bypass)
-//                                no-https/None over HTTP = reportable
+//     unsafe-inline = reportable (XSS bypass)
+//     unsafe-eval = reportable (XSS bypass)
+//     no-https/None over HTTP = reportable
 //   - Strict-Transport-Security  missing on HTTPS host = reportable
-//                                max-age < 15552000 (180 days) = warn
-//                                includeSubDomains missing = info
+//     max-age < 15552000 (180 days) = warn
+//     includeSubDomains missing = info
 //   - X-Frame-Options            missing AND no CSP frame-ancestors = reportable
-//                                DENY/SAMEORIGIN missing = reportable
+//     DENY/SAMEORIGIN missing = reportable
 //   - Referrer-Policy            missing = reportable (info)
-//                                unsafe-url / no-referrer-when-downgrade = warn
+//     unsafe-url / no-referrer-when-downgrade = warn
 //   - Permissions-Policy         missing = info
 //   - X-Content-Type-Options     missing nosniff = reportable
 //   - Cross-Origin-*             COOP/COEP/CORP missing on hosts that
-//                                serve user data = reportable (medium)
+//     serve user data = reportable (medium)
 //
 // Output: secheaders_findings.txt with tab-separated
 //

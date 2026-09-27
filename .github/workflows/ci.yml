@@ -1,0 +1,27 @@
+name: Go checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - name: Repository preflight
+        run: make preflight
+      - name: Formatting
+        run: make fmtcheck
+      - name: Tests
+        run: GOTOOLCHAIN=local go test ./...
+      - name: Vet
+        run: GOTOOLCHAIN=local go vet ./...
+      - name: Build all command wrappers
+        run: make build
+      - name: Diff whitespace
+        run: git diff --check

@@ -42,11 +42,11 @@ import (
 // service is a 3rd-party service fingerprint: name, body/header
 // signals, and a description the hunter reads.
 type service struct {
-	name  string
-	body  []string
-	hdrs  map[string]string
-	desc  string
-	sev   string
+	name string
+	body []string
+	hdrs map[string]string
+	desc string
+	sev  string
 }
 
 // fingerprintPack is the list of services the module knows about.

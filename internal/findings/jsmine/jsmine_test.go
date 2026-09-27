@@ -4,7 +4,7 @@ import "testing"
 
 func TestBundleHost(t *testing.T) {
 	cases := map[string]string{
-		"example.com_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.js": "example.com",
+		"example.com_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.js":          "example.com",
 		"deep.sub.example.com_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.js": "deep/sub/example.com",
 		"host_with_underscore_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.js": "host/with/underscore",
 	}
@@ -57,10 +57,10 @@ const rk = "rk_live_` + "DDDD" + "DDDD" + `EEEEEEEE` + `FFFFFFFF";
 const og = "AIzaSyAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 `
 	mustMatch := map[secretKind]bool{
-		skAWS:      true,
+		skAWS:       true,
 		skGitHubPAT: true,
-		skStripe:   true,
-		skGoogle:   true,
+		skStripe:    true,
+		skGoogle:    true,
 	}
 	for _, sp := range secretPatterns {
 		if !mustMatch[sp.kind] {

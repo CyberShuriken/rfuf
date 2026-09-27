@@ -14,6 +14,7 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/findings/gitexposure"
 	"github.com/CyberShuriken/rfuf/internal/findings/hostheader"
 	"github.com/CyberShuriken/rfuf/internal/findings/idor"
+	"github.com/CyberShuriken/rfuf/internal/findings/jsassets"
 	"github.com/CyberShuriken/rfuf/internal/findings/jsmine"
 	"github.com/CyberShuriken/rfuf/internal/findings/nextjsbypass"
 	"github.com/CyberShuriken/rfuf/internal/findings/oauth"
@@ -42,6 +43,7 @@ var Dispatch = map[string]func(workDir string) error{
 	"buckets":       buckets.Run,
 	"takeoversvc":   takeoversvc.Run,
 	"jsmine":        jsmine.Run,
+	"jsassets":      jsassets.Run,
 	"secheaders":    secheaders.Run,
 	"backupscan":    backupscan.Run,
 	"businesslogic": businesslogic.Run,

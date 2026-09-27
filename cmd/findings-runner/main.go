@@ -4,7 +4,7 @@
 // during development.
 //
 //	rfuf findings <finder-name> <workdir>
-//	go run ./cmd/findings-runner <finder-name> <workdir>
+//	go run ./cmd/findings-runner <finder-name> <workdir> (development only)
 package main
 
 import (

@@ -8,11 +8,11 @@ import (
 )
 
 type Paths struct {
-	NucleiTemplates          string
-	NucleiTemplatesRfuf      string // Absolute path to the bundled nuclei-templates-rfuf/ overlay
-	GfPatterns               string
-	WorkDir                  string
-	GoBin                    string
+	NucleiTemplates     string
+	NucleiTemplatesRfuf string // Absolute path to the bundled nuclei-templates-rfuf/ overlay
+	GfPatterns          string
+	WorkDir             string
+	GoBin               string
 	// SeclistsDirWordlist is the large wordlist (raft-medium). Kept for
 	// fallback if the small list isn't found anywhere on disk.
 	SeclistsDirWordlist string
@@ -42,8 +42,8 @@ func ResolvePaths(domain string) (*Paths, error) {
 
 	nucleiTemplates := resolveNucleiTemplates(home)
 	gfPatterns := filepath.Join(home, ".gf")
-		seclistsWordlist, seclistsWordlistSmall := resolveSeclists(home)
-		assetnoteWordlist := resolveAssetnote(home)
+	seclistsWordlist, seclistsWordlistSmall := resolveSeclists(home)
+	assetnoteWordlist := resolveAssetnote(home)
 
 	// Resolve the bundled nuclei-templates-rfuf overlay directory.
 	// We look relative to the running binary's location first (installed
@@ -60,7 +60,7 @@ func ResolvePaths(domain string) (*Paths, error) {
 		GoBin:                    goBin,
 		SeclistsDirWordlist:      seclistsWordlist,
 		SeclistsDirWordlistSmall: seclistsWordlistSmall,
-			AssetnoteWordlist: assetnoteWordlist,
+		AssetnoteWordlist:        assetnoteWordlist,
 	}, nil
 }
 
@@ -96,9 +96,10 @@ func resolveNucleiTemplates(home string) string {
 
 // resolveNucleiTemplatesRfuf returns the absolute path to the bundled
 // nuclei-templates-rfuf/ directory. It checks:
-//   1. Alongside the running binary (e.g. ~/.local/share/rfuf/nuclei-templates-rfuf)
-//   2. Relative to the current working directory (source-tree dev)
-//   3. In $HOME (user clone)
+//  1. Alongside the running binary (e.g. ~/.local/share/rfuf/nuclei-templates-rfuf)
+//  2. Relative to the current working directory (source-tree dev)
+//  3. In $HOME (user clone)
+//
 // Returns "" if none found — the pipeline handles the empty case gracefully.
 func resolveNucleiTemplatesRfuf() string {
 	// 1. Check alongside the running binary

@@ -7,7 +7,7 @@
 // tests the registered URIs against five bypass classes:
 //
 //   - exact-match        the allowlist is just the legit URI; nothing
-//                        to bypass, recorded as a baseline
+//     to bypass, recorded as a baseline
 //   - prefix-bypass      ?redirect_uri=https://app.com.evil.com
 //   - subdomain-bypass   ?redirect_uri=https://evil.app.com
 //   - path-traversal     ?redirect_uri=https://app.com/legit/../evil
@@ -83,10 +83,10 @@ func Run(workDir string) error {
 }
 
 type hostResult struct {
-	host       string
-	authorize  string // discovered authorize endpoint, "" if none
-	allowlist  []string
-	ok         bool
+	host      string
+	authorize string // discovered authorize endpoint, "" if none
+	allowlist []string
+	ok        bool
 }
 
 func probeAll(ctx context.Context, hosts []string) []string {
@@ -189,9 +189,9 @@ func fetchDiscovery(ctx context.Context, client *http.Client, url string) []stri
 		return nil
 	}
 	var doc struct {
-		RedirectURIs      []string `json:"redirect_uris"`
-		RegistrationURI   string   `json:"registration_endpoint"`
-		AuthorizationEP   string   `json:"authorization_endpoint"`
+		RedirectURIs    []string `json:"redirect_uris"`
+		RegistrationURI string   `json:"registration_endpoint"`
+		AuthorizationEP string   `json:"authorization_endpoint"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return nil

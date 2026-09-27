@@ -11,12 +11,12 @@ import (
 )
 
 var secretRegexes = map[string]*regexp.Regexp{
-	"AWS":       regexp.MustCompile(`(?i)(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)\s*=\s*["']?([A-Za-z0-9/+=]{16,})["']?`),
-	"Stripe":    regexp.MustCompile(`(?i)(STRIPE_KEY|STRIPE_SECRET|STRIPE_PUBLISHABLE)\s*=\s*["']?([a-zA-Z0-9_]{24,})["']?`),
-	"Database":  regexp.MustCompile(`(?i)(DB_PASSWORD|DATABASE_URL|POSTGRES_PASSWORD|MYSQL_ROOT_PASSWORD|MONGODB_URI)\s*=\s*["']?([^"'\s]+)["']?`),
-	"Azure":     regexp.MustCompile(`(?i)(AZURE_CLIENT_SECRET|AZURE_CLIENT_ID|AZURE_TENANT_ID)\s*=\s*["']?([^"'\s]+)["']?`),
-	"GCP":       regexp.MustCompile(`(?i)(GOOGLE_APPLICATION_CREDENTIALS|GCP_PROJECT_ID|GCP_SERVICE_ACCOUNT)\s*=\s*["']?([^"'\s]+)["']?`),
-	"General":   regexp.MustCompile(`(?i)(SECRET|PASSWORD|API_KEY|TOKEN|AUTH_TOKEN|SIGNING_KEY)\s*=\s*["']?([A-Za-z0-9/+=_-]{16,})["']?`),
+	"AWS":      regexp.MustCompile(`(?i)(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)\s*=\s*["']?([A-Za-z0-9/+=]{16,})["']?`),
+	"Stripe":   regexp.MustCompile(`(?i)(STRIPE_KEY|STRIPE_SECRET|STRIPE_PUBLISHABLE)\s*=\s*["']?([a-zA-Z0-9_]{24,})["']?`),
+	"Database": regexp.MustCompile(`(?i)(DB_PASSWORD|DATABASE_URL|POSTGRES_PASSWORD|MYSQL_ROOT_PASSWORD|MONGODB_URI)\s*=\s*["']?([^"'\s]+)["']?`),
+	"Azure":    regexp.MustCompile(`(?i)(AZURE_CLIENT_SECRET|AZURE_CLIENT_ID|AZURE_TENANT_ID)\s*=\s*["']?([^"'\s]+)["']?`),
+	"GCP":      regexp.MustCompile(`(?i)(GOOGLE_APPLICATION_CREDENTIALS|GCP_PROJECT_ID|GCP_SERVICE_ACCOUNT)\s*=\s*["']?([^"'\s]+)["']?`),
+	"General":  regexp.MustCompile(`(?i)(SECRET|PASSWORD|API_KEY|TOKEN|AUTH_TOKEN|SIGNING_KEY)\s*=\s*["']?([A-Za-z0-9/+=_-]{16,})["']?`),
 }
 
 // Run reads identified 200 OK URLs, fetches those that look like sensitive config files, and extracts secrets.
@@ -83,4 +83,3 @@ func fetchURL(urlStr string) ([]byte, error) {
 	}
 	return io.ReadAll(resp.Body)
 }
-

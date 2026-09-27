@@ -12,22 +12,22 @@
 // signal density):
 //
 //   - secrets       — AWS access key, GitHub PAT, Slack token, Stripe
-//                     live key, Google API key, OpenAI key, SendGrid
-//                     key, Twilio, Datadog, JWT-shaped strings
+//     live key, Google API key, OpenAI key, SendGrid
+//     key, Twilio, Datadog, JWT-shaped strings
 //   - post-endpoints — `fetch("...", { method: "POST" })` and
-//                      `axios.post("...", ...)` callsites
+//     `axios.post("...", ...)` callsites
 //   - admin-paths    — `/admin/`, `/internal/`, `/api/admin/`,
-//                      `/staff/`, `/moderator/` paths in fetch URLs
+//     `/staff/`, `/moderator/` paths in fetch URLs
 //   - s3-urls        — s3.amazonaws.com / s3-website / s3-accelerate
-//                      URLs hardcoded in the bundle
+//     URLs hardcoded in the bundle
 //   - graphql-ops    — `mutation { ... }` and `query { ... }` names
 //
 // Output: js_mine_findings.txt with one line per artifact, prefixed
 // by its severity:
 //
-//   CRITICAL <host> secret:aws-access-key id=AKIA... in bundle=...
-//   HIGH     <host> post-endpoint path=/api/v2/users/delete bundle=...
-//   MEDIUM   <host> admin-path path=/admin/billing bundle=...
+//	CRITICAL <host> secret:aws-access-key id=AKIA... in bundle=...
+//	HIGH     <host> post-endpoint path=/api/v2/users/delete bundle=...
+//	MEDIUM   <host> admin-path path=/admin/billing bundle=...
 //
 // Bundles are read from the work dir's js_bundles/ directory, which
 // the jsmap_scrape stage populates.
@@ -51,18 +51,18 @@ import (
 type secretKind string
 
 const (
-	skAWS         secretKind = "aws-access-key"
-	skAWSSecret   secretKind = "aws-secret-key"
-	skGitHubPAT   secretKind = "github-pat"
-	skSlack       secretKind = "slack-token"
-	skStripe      secretKind = "stripe-live-key"
-	skGoogle      secretKind = "google-api-key"
-	skOpenAI      secretKind = "openai-key"
-	skSendGrid    secretKind = "sendgrid-key"
-	skTwilio      secretKind = "twilio-key"
-	skDatadog     secretKind = "datadog-key"
-	skJWT         secretKind = "jwt"
-	skGenericAPI  secretKind = "generic-api-key"
+	skAWS        secretKind = "aws-access-key"
+	skAWSSecret  secretKind = "aws-secret-key"
+	skGitHubPAT  secretKind = "github-pat"
+	skSlack      secretKind = "slack-token"
+	skStripe     secretKind = "stripe-live-key"
+	skGoogle     secretKind = "google-api-key"
+	skOpenAI     secretKind = "openai-key"
+	skSendGrid   secretKind = "sendgrid-key"
+	skTwilio     secretKind = "twilio-key"
+	skDatadog    secretKind = "datadog-key"
+	skJWT        secretKind = "jwt"
+	skGenericAPI secretKind = "generic-api-key"
 )
 
 // secretPattern binds a secret kind to its regex. We require a known
@@ -97,10 +97,10 @@ var secretPatterns = []secretPattern{
 // 95% of callsites. The optional `method: "POST"` filter keeps
 // one-off GETs out.
 var (
-	postCallPattern    = regexp.MustCompile(`(?:fetch|axios\.post|axios\(\s*\{\s*method\s*:\s*["']POST["'])\s*\(\s*["']([^"']+)["']`)
-	adminPathPattern   = regexp.MustCompile(`["'](/(?:admin|internal|api/admin|staff|moderator|back-?office|backoffice)/[A-Za-z0-9/_-]+)["']`)
-	s3URLPattern       = regexp.MustCompile(`["'](https?://[A-Za-z0-9.-]*s3[A-Za-z0-9.-]*\.amazonaws\.com/[A-Za-z0-9._/-]+)["']`)
-	graphqlOpPattern   = regexp.MustCompile(`\b(mutation|query|subscription)\s+([A-Z][A-Za-z0-9_]{2,})\b`)
+	postCallPattern  = regexp.MustCompile(`(?:fetch|axios\.post|axios\(\s*\{\s*method\s*:\s*["']POST["'])\s*\(\s*["']([^"']+)["']`)
+	adminPathPattern = regexp.MustCompile(`["'](/(?:admin|internal|api/admin|staff|moderator|back-?office|backoffice)/[A-Za-z0-9/_-]+)["']`)
+	s3URLPattern     = regexp.MustCompile(`["'](https?://[A-Za-z0-9.-]*s3[A-Za-z0-9.-]*\.amazonaws\.com/[A-Za-z0-9._/-]+)["']`)
+	graphqlOpPattern = regexp.MustCompile(`\b(mutation|query|subscription)\s+([A-Z][A-Za-z0-9_]{2,})\b`)
 )
 
 // Run is the entry point. workDir is the rfuf work dir.

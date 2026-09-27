@@ -95,3 +95,22 @@ func TestAllGoInstallCommandsDisableToolchainSwitching(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryInstalledDependencyIsPinned(t *testing.T) {
+	tools := GetRequiredTools("/tmp/go-bin")
+	if len(lockedVersions) != len(tools) {
+		t.Fatalf("lock table has %d entries for %d installed tools", len(lockedVersions), len(tools))
+	}
+	for _, tool := range tools {
+		version := pinnedVersion(tool)
+		if version == "" || version == "unlocked" || !containsCmd(tool.InstallCommand, version) {
+			t.Errorf("%s has no matching immutable version pin: version=%q command=%q", tool.Name, version, tool.InstallCommand)
+		}
+		if containsCmd(tool.InstallCommand, "@latest") || containsCmd(tool.InstallCommand, "@master") || containsCmd(tool.InstallCommand, "releases/latest") {
+			t.Errorf("%s uses a floating dependency reference: %q", tool.Name, tool.InstallCommand)
+		}
+		if optionalTools[tool.Name] && (tool.Name == "httpx" || tool.Name == "nuclei" || tool.Name == "dnsx" || tool.Name == "gf") {
+			t.Errorf("core dependency %s must not be optional", tool.Name)
+		}
+	}
+}

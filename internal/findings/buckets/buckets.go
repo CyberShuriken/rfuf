@@ -14,9 +14,9 @@
 //     (prod, dev, backups, assets, ...).
 //  3. For each (provider, org, keyword) tuple, computes the bucket
 //     hostname:
-//       - S3:     {bucket}.s3.amazonaws.com
-//       - GCS:    storage.googleapis.com/{bucket}
-//       - Azure:  {bucket}.blob.core.windows.net
+//     - S3:     {bucket}.s3.amazonaws.com
+//     - GCS:    storage.googleapis.com/{bucket}
+//     - Azure:  {bucket}.blob.core.windows.net
 //  4. HEADs each hostname. A 200/403 with a known response shape
 //     means the bucket exists; a 404 means it doesn't.
 //  5. For S3 buckets that respond, also tries a GET on
@@ -42,7 +42,7 @@ import (
 // keywords are the suffixes we append to the org name. The list
 // mirrors the well-known bug-bounty bucket-takeover permutations.
 var keywords = []string{
-	"",                // bare org
+	"", // bare org
 	"-prod", "-dev", "-stg", "-test", "-staging", "-qa",
 	"-backups", "-backup", "-bak", "-old", "-new", "-archive", "-archived",
 	"-assets", "-media", "-images", "-img", "-static", "-cdn",
@@ -96,11 +96,11 @@ func Run(workDir string) error {
 // deriveOrgs extracts candidate organization names from the recon
 // outputs. Sources, in priority order:
 //
-//   1. The base of the user-supplied domain (e.g. "localwp" from
-//      "localwp.com") — most likely matches the bucket name.
-//   2. The second-level domain of alive.txt hosts (e.g. "acme" from
-//      "www.acme.com").
-//   3. The company-name token from tech_fingerprint.txt (if any).
+//  1. The base of the user-supplied domain (e.g. "localwp" from
+//     "localwp.com") — most likely matches the bucket name.
+//  2. The second-level domain of alive.txt hosts (e.g. "acme" from
+//     "www.acme.com").
+//  3. The company-name token from tech_fingerprint.txt (if any).
 func deriveOrgs(hosts, tech, domain []string) []string {
 	seen := map[string]bool{}
 	var out []string

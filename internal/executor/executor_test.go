@@ -77,7 +77,17 @@ func TestRunCommandInjectsRfufEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunCommand: %v", err)
 	}
-	if !strings.Contains(res.Stdout, "session=abc123|https://example.oast.fun") {
-		t.Fatalf("env injection failed; got stdout=%q", res.Stdout)
+	if !strings.Contains(res.Stdout, "[REDACTED]|https://example.oast.fun") || strings.Contains(res.Stdout, "session=abc123") {
+		t.Fatalf("auth secret was not redacted from command output: %q", res.Stdout)
+	}
+	if err := logFile.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	logged, err := os.ReadFile(logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "session=abc123") {
+		t.Fatalf("auth secret leaked into persisted command log: %s", logged)
 	}
 }
