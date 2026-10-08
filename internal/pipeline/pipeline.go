@@ -418,10 +418,10 @@ func selfBin() string {
 func buildAuthHeaderSnippet() string {
 	return `
 AUTH_HEADERS=()
-[ -n "$RFUF_AUTH_COOKIE" ] && AUTH_HEADERS+=(-H "Cookie: $RFUF_AUTH_COOKIE")
-[ -n "$RFUF_AUTH_HEADER" ] && AUTH_HEADERS+=(-H "Authorization: $RFUF_AUTH_HEADER")
-[ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
-[ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
+[ -n "${RFUF_AUTH_COOKIE:-}" ] && AUTH_HEADERS+=(-H "Cookie: ${RFUF_AUTH_COOKIE}")
+[ -n "${RFUF_AUTH_HEADER:-}" ] && AUTH_HEADERS+=(-H "Authorization: ${RFUF_AUTH_HEADER}")
+[ -n "${RFUF_BUG_BOUNTY_USERNAME:-}" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: ${RFUF_BUG_BOUNTY_USERNAME}" -H "X-HackerOne-Research: ${RFUF_BUG_BOUNTY_USERNAME}")
+[ -n "${RFUF_TEST_ACCOUNT_EMAIL:-}" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: ${RFUF_TEST_ACCOUNT_EMAIL}")
 `
 }
 
@@ -454,17 +454,11 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 
 func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 	domain := scanScope.RootDomain
-	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
 	wordlist := pickWordlist(paths)
 	authSnip := buildAuthHeaderSnippet()
 	self := selfBin()
 	filterTestableRef := self + " filter-testable"
 	findingsRunnerRef := self + " findings"
-	wildcardPattern := fmt.Sprintf(`^https?://([^/]+\.)?%s(/|$|[[:space:]])`, domainEscaped)
-	if scanScope.Mode == scope.ExactMode {
-		wildcardPattern = fmt.Sprintf(`^https?://%s(/|$|[[:space:]])`, domainEscaped)
-	}
-
 	disc := func(id, fullCmd, out string) string {
 		if scanScope.Mode == scope.ExactMode {
 			return fmt.Sprintf("echo %s > %s", domain, out)

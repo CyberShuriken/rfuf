@@ -289,7 +289,9 @@ Use `-max-targets` to cap final scoped URL streams and `-max-stage-requests` to 
 
 Development verification uses only local fixtures, fake scanner commands,
 loopback HTTP servers, and temporary directories. No live bug-bounty target
-was scanned during the reliability work described here.
+was scanned during the reliability work described here. The pipeline fixture
+matrix exercises exact and wildcard host-scope filtering, including rejection
+of out-of-scope hosts.
 
 The dashboard shows stage health separately from finding counts and redacts noisy scanner statistics and request metadata from the live panel. Raw child output remains in `.rfuf/rfuf.log` for local troubleshooting.
 

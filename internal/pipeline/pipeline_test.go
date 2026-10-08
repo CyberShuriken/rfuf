@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -748,13 +749,13 @@ func TestProgramHeadersReachShellStages(t *testing.T) {
 	}
 }
 
-func TestURLFilterSupportsProgramExclusions(t *testing.T) {
+func TestURLFilterUsesBoundedTargetStream(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	for _, s := range steps {
 		if s.ID != "url_filter_alive" {
 			continue
 		}
-		for _, marker := range []string{"RFUF_EXCLUDE_URL_REGEX", "all_urls_scannable.txt", "grep -Ev"} {
+		for _, marker := range []string{"target-stream", "-input all_urls.txt", "-output all_urls_scannable.txt", "-max-targets", "all_urls_alive_stream_status.json"} {
 			if !strings.Contains(s.Command, marker) {
 				t.Errorf("url_filter_alive missing %q: %q", marker, s.Command)
 			}
@@ -915,6 +916,7 @@ func TestLocalFixturePipelineMatrix(t *testing.T) {
 			if len(interest) == 0 {
 				gotInterest = nil
 			}
+			sort.Strings(tc.wantHighInterest)
 			if strings.Join(gotInterest, "\n") != strings.Join(tc.wantHighInterest, "\n") {
 				t.Fatalf("high-interest statuses=%v want %v", gotInterest, tc.wantHighInterest)
 			}
