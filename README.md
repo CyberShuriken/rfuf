@@ -524,7 +524,7 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 38 | Deep JS bundle mining (**new**) | `rfuf findings jsmine <workdir>` | `js_mine_findings.txt` |
 | 39 | Security headers analysis (**new**) | `rfuf findings secheaders <workdir>` | `secheaders_findings.txt` |
 | 40 | Backup / sensitive-file scan (**new**) | `rfuf findings backupscan <workdir>` | `backupscan_findings.txt` |
-| 41 | Business-logic surface (**new**) | `rfuf findings businesslogic <workdir>` | `business_logic_findings.txt` |
+| 41 | Business-logic surface (**new**) | `rfuf findings businesslogic <workdir>` | `business_logic_candidates.txt` |
 | 42 | Host-header injection (**new**) | `rfuf findings hostheader <workdir>` | `hostheader_findings.txt` |
 | 43 | Credentialed CORS preflight (**new**) | `rfuf findings cors2 <workdir>` | `cors2_findings.txt` |
 | 44 | Custom nuclei template pass (**new**) | `nuclei -t nuclei-templates-rfuf/` | `nuclei_rfuf_pass.txt` |

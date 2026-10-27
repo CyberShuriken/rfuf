@@ -416,8 +416,8 @@ func runReporting(workDir, domain string, ncfg notify.Config) {
 	if derr != nil {
 		fmt.Printf("[!] Warning: could not build findings.json: %v\n", derr)
 	} else {
-		fmt.Printf("[*] Wrote findings.json (%d finding(s), %d new subdomain(s), %d new JS asset(s))\n",
-			dg.TotalFindings, len(dg.NewSubdomains), len(dg.NewJSAssets))
+		fmt.Printf("[*] Wrote findings.json (%d submittable, %d informational, %d total line(s); %d new subdomain(s), %d new JS asset(s))\n",
+			dg.SubmittableFindings, dg.InformationalFindings, dg.TotalFindings, len(dg.NewSubdomains), len(dg.NewJSAssets))
 	}
 	if err := notify.Maybe(ncfg, dg); err != nil {
 		fmt.Printf("[!] Warning: notification failed: %v\n", err)

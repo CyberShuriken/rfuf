@@ -48,11 +48,11 @@ var categories = []Category{
 	{ID: "A03:2025", Name: "Software Supply Chain Failures", Stages: nil, Inputs: []string{"go.mod", "package-lock.json", "Dockerfile", ".github/workflows"}, Manual: "Provide repository, lockfiles, SBOM, CI workflows, and release metadata. Review dependency provenance, pinning, signed artifacts, and third-party action trust."},
 	{ID: "A04:2025", Name: "Cryptographic Failures", Stages: []string{"authshape_run", "nuclei_auth_scan", "js_mine_run"}, Inputs: []string{"authshape_findings.txt", "js_mine_findings.txt"}, Manual: "Review TLS, key storage, token signing and rotation, password hashing, encryption at rest, randomness, and sensitive-data minimization."},
 	{ID: "A05:2025", Name: "Injection", Stages: []string{"sqlmap_scan", "ghauri_sqli", "xss_scan", "rce_scan", "ssrf_scan", "lfi_scan", "reflection_run", "paramshape_run"}, Inputs: []string{"sqlmap_results", "ghauri_results.txt", "xss_vulnerabilities.txt"}, Manual: "Retest only the candidate parameter in a controlled account or local replica. Use non-destructive proofs and stop before data modification or extraction."},
-	{ID: "A06:2025", Name: "Insecure Design", Stages: []string{"businesslogic_run", "race_scan", "manual_review_queue"}, Inputs: []string{"business_logic_findings.txt", "race_candidates.txt", "manual_business_logic_review.txt"}, Manual: "Document the intended business invariant, then test authorization, limits, approval, replay, rollback, and state transitions with synthetic data."},
+	{ID: "A06:2025", Name: "Insecure Design", Stages: []string{"businesslogic_run", "race_scan", "manual_review_queue"}, Inputs: []string{"business_logic_candidates.txt", "race_candidates.txt", "manual_business_logic_review.txt"}, Manual: "Document the intended business invariant, then test authorization, limits, approval, replay, rollback, and state transitions with synthetic data."},
 	{ID: "A07:2025", Name: "Authentication Failures", Stages: []string{"authshape_run", "nuclei_auth_scan", "signup_takeover_run", "oauth_audit_run"}, Inputs: []string{"authshape_findings.txt", "auth_results.txt", "signup_takeover_findings.txt"}, Manual: "Test MFA, reset and recovery, session rotation, logout invalidation, rate limits, enumeration, OAuth state/PKCE, and token expiry with authorized test identities."},
 	{ID: "A08:2025", Name: "Software or Data Integrity Failures", Stages: []string{"backupscan_run", "js_mine_run", "signup_takeover_run"}, Inputs: []string{"backupscan_findings.txt", "js_mine_findings.txt"}, Manual: "Review signed updates, webhook verification, deserialization, CI/CD artifact integrity, tamper detection, and transaction rollback."},
 	{ID: "A09:2025", Name: "Security Logging and Alerting Failures", Stages: nil, Inputs: []string{"audit.log", "security-events"}, Manual: "Trigger safe events in a test tenant and verify actor, timestamp, correlation, alerting, retention, access control, and tamper resistance."},
-	{ID: "A10:2025", Name: "Mishandling of Exceptional Conditions", Stages: []string{"race_scan", "paramshape_run", "businesslogic_run"}, Inputs: []string{"race_candidates.txt", "paramshape_findings.txt", "business_logic_findings.txt"}, Manual: "Test fail-open authorization, partial failures, rollback, retry/idempotency, malformed input, resource limits, and state consistency without destructive actions."},
+	{ID: "A10:2025", Name: "Mishandling of Exceptional Conditions", Stages: []string{"race_scan", "paramshape_run", "businesslogic_run"}, Inputs: []string{"race_candidates.txt", "paramshape_findings.txt", "business_logic_candidates.txt"}, Manual: "Test fail-open authorization, partial failures, rollback, retry/idempotency, malformed input, resource limits, and state consistency without destructive actions."},
 }
 
 var owaspByCategory = map[string]string{
@@ -194,23 +194,37 @@ func evaluateCategories(workDir string, report coverage.CoverageReport, records 
 			continue
 		}
 		blocked := ""
-		completed := 0
+		exercised := 0 // ran with real input (Completed or CompletedEmpty)
+		noInput := 0   // ran but had no input to test (CompletedNoInput)
 		for _, stage := range category.Stages {
 			switch stageStatus[stage] {
 			case coverage.StatusFailed, coverage.StatusTimedOut, coverage.StatusBlocked, coverage.StatusSkipped:
 				blocked = string(stageStatus[stage])
+			case coverage.StatusCompletedNoInput:
+				noInput++
 			case coverage.StatusCompleted, coverage.StatusCompletedEmpty:
-				completed++
+				exercised++
 			}
 		}
 		status := "partial"
 		reason := "automation completed, but manual validation or additional context is required"
-		if blocked != "" {
+		switch {
+		case blocked != "":
 			status = "blocked"
 			reason = "one or more relevant stages are " + blocked
-		} else if completed == len(category.Stages) && count == 0 {
+		case exercised == 0:
+			// Every mapped stage ran on empty input — nothing was actually
+			// tested. This is the opposite of coverage; do not call it covered.
+			status = "not-exercised"
+			reason = "mapped stages ran with no input (e.g. an empty DAST funnel); nothing was actually tested"
+		case count == 0 && noInput > 0:
+			status = "partial"
+			reason = fmt.Sprintf("%d of %d mapped stages had no input; coverage is incomplete", noInput, len(category.Stages))
+		case count == 0:
+			// Covered only when every mapped stage was exercised with input and
+			// still recorded no findings — a genuine clean result.
 			status = "covered"
-			reason = "all mapped stages completed; no candidate evidence was recorded"
+			reason = "all mapped stages were exercised with input and recorded no findings"
 		}
 		artifacts := existingArtifacts(workDir, category.Inputs)
 		result = append(result, categoryResult{Category: category, Status: status, Artifacts: artifacts, Candidates: count, Reason: reason})

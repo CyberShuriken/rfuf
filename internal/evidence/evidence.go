@@ -53,7 +53,6 @@ var artifactCategories = map[string]struct {
 	"js_mine_findings.txt":         {"secret_exposure", "high"},
 	"secheaders_findings.txt":      {"security_headers", "medium"},
 	"backupscan_findings.txt":      {"backup_exposure", "high"},
-	"business_logic_findings.txt":  {"business_logic", "medium"},
 	"hostheader_findings.txt":      {"host_header", "high"},
 	"cors2_findings.txt":           {"cors", "high"},
 }
@@ -63,9 +62,17 @@ func BuildIndex(workDir string) ([]Record, error) {
 	for name, meta := range artifactCategories {
 		path := filepath.Join(workDir, name)
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			// A directory stage (e.g. sqlmap_results) that produced nothing still
+			// contains a .rfuf-manifest.json whose content_status is "empty". Do
+			// not synthesize candidate evidence rows from that bookkeeping file.
+			if dirIsEmptyByManifest(path) {
+				continue
+			}
 			entries, _ := os.ReadDir(path)
 			for _, entry := range entries {
-				if entry.IsDir() {
+				// Skip subdirectories and dotfiles (the .rfuf-manifest.json
+				// bookkeeping file is not a finding).
+				if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 					continue
 				}
 				part, err := readArtifact(filepath.Join(path, entry.Name()), filepath.Join(name, entry.Name()), meta.Category, meta.Severity)
@@ -89,6 +96,22 @@ func BuildIndex(workDir string) ([]Record, error) {
 		return records[i].EvidenceRef < records[j].EvidenceRef
 	})
 	return records, nil
+}
+
+// dirIsEmptyByManifest reports whether a directory stage declared itself empty
+// via the .rfuf-manifest.json the pipeline writes into every directory output.
+func dirIsEmptyByManifest(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, ".rfuf-manifest.json"))
+	if err != nil {
+		return false
+	}
+	var m struct {
+		Content string `json:"content_status"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	return m.Content == "empty"
 }
 
 func readArtifact(path, ref, category, severity string) ([]Record, error) {

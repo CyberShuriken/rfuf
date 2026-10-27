@@ -223,7 +223,7 @@ entry in `cmd/findings-runner/main.go` (3) add a Step to
 | 56 | js_mine_run | `internal/findings/jsmine` | `js_mine_findings.txt` |
 | 57 | secheaders_run | `internal/findings/secheaders` | `secheaders_findings.txt` |
 | 58 | backupscan_run | `internal/findings/backupscan` | `backupscan_findings.txt` |
-| 59 | businesslogic_run | `internal/findings/businesslogic` | `business_logic_findings.txt` |
+| 59 | businesslogic_run | `internal/findings/businesslogic` | `business_logic_candidates.txt` |
 | 60 | hostheader_run | `internal/findings/hostheader` | `hostheader_findings.txt` |
 | 61 | cors2_run | `internal/findings/cors2` | `cors2_findings.txt` |
 | 62 | nuclei_rfuf_pass | `nuclei -t nuclei-templates-rfuf/` | `nuclei_rfuf_pass.txt` |

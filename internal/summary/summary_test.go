@@ -157,7 +157,7 @@ func TestSummaryFormatArgOrder(t *testing.T) {
 		"reflection_findings.txt", "paramshape_findings.txt", "authshape_findings.txt",
 		"signup_takeover_findings.txt", "idor_surface.txt", "oauth_findings.txt",
 		"race_results.txt", "bucket_findings.txt", "takeover_v2_findings.txt",
-		"js_mine_findings.txt", "business_logic_findings.txt", "nuclei_rfuf_pass.txt",
+		"js_mine_findings.txt", "business_logic_candidates.txt", "nuclei_rfuf_pass.txt",
 		"backupscan_findings.txt", "hostheader_findings.txt",
 		"secheaders_findings.txt", "cors2_findings.txt",
 	} {

@@ -92,7 +92,7 @@ func Generate(workDir string, cp *checkpoint.Checkpoint) error {
 	// === Phase 2 new-finder outputs (5 new modules) ===
 	secheadersFindings := getFileContent(filepath.Join(workDir, "secheaders_findings.txt"))
 	backupscanFindings := getFileContent(filepath.Join(workDir, "backupscan_findings.txt"))
-	businesslogicFindings := getFileContent(filepath.Join(workDir, "business_logic_findings.txt"))
+	businesslogicFindings := getFileContent(filepath.Join(workDir, "business_logic_candidates.txt"))
 	hostheaderFindings := getFileContent(filepath.Join(workDir, "hostheader_findings.txt"))
 	cors2Findings := getFileContent(filepath.Join(workDir, "cors2_findings.txt"))
 

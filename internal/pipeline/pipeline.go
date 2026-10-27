@@ -817,7 +817,7 @@ if [ -n "%s" ] && [ -s alive.txt ]; then
 		fi
 		exit 0`, authSnip, wordlist, wordlist), "ffuf", "default", []string{"httpx_probe"}, 0},
 		{"dirbrute_verify_200", "if [ -s ffuf_dirs_raw.txt ]; then httpx -l ffuf_dirs_raw.txt -silent -status-code -mc 200 -o ffuf_dirs_200.txt; else : > ffuf_dirs_200.txt; fi", "httpx", "grep", []string{"dirbrute_ffuf"}, 0},
-		{"js_endpoints_scan", fmt.Sprintf("%s\nnuclei -l js_endpoints.txt -tags exposure,token-spray,misconfig %s \"${AUTH_HEADERS[@]}\" -o js_endpoint_findings.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"merge_js_endpoints"}, 0},
+		{"js_endpoints_scan", fmt.Sprintf("%s\nnuclei -l js_endpoints.txt -tags exposure,token-spray %s \"${AUTH_HEADERS[@]}\" -o js_endpoint_findings.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"merge_js_endpoints"}, 0},
 		{"nextjs_plaid_jwt_probe", buildAuthHeaderSnippet() + `
 : > nextjs_plaid_jwt_findings.txt
 

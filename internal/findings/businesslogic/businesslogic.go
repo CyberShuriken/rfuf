@@ -17,11 +17,11 @@
 //     in-EUR, role=admin, etc. The presence of these params is a
 //     "high-value target" signal for the hunter to test manually.
 //
-//  3. WRITE — a structured business_logic_findings.txt the hunter
+//  3. WRITE — a structured business_logic_candidates.txt the hunter
 //     can sort by severity, plus the raw URLs the existing
 //     manual_business_logic_review.txt consumes.
 //
-// Output: business_logic_findings.txt
+// Output: business_logic_candidates.txt
 //
 //	severity\thost\tpath\thint\tparams
 //
@@ -132,7 +132,7 @@ func Run(workDir string) error {
 		return fmt.Errorf("read all_urls.txt: %w", err)
 	}
 	if len(urls) == 0 {
-		return iohelp.WriteLines(workDir+"/business_logic_findings.txt", nil)
+		return iohelp.WriteLines(workDir+"/business_logic_candidates.txt", nil)
 	}
 
 	type hit struct {
@@ -148,6 +148,12 @@ func Run(workDir string) error {
 	for _, raw := range urls {
 		u, err := url.Parse(raw)
 		if err != nil {
+			continue
+		}
+		// all_urls.txt is built from the wayback/gau corpus, which routinely
+		// contains third-party hosts; drop anything outside scope so an
+		// unrelated domain (e.g. a parent-company host) never becomes a row.
+		if !iohelp.InScope(u.Hostname()) {
 			continue
 		}
 		pathLower := strings.ToLower(u.Path)
@@ -210,11 +216,14 @@ func Run(workDir string) error {
 		if len(h.params) > 0 {
 			params = "params=" + strings.Join(h.params, ",")
 		}
-		lines[i] = fmt.Sprintf("%s\t%s\t%s\tcat=%s\t%s\thint=%s",
+		lines[i] = fmt.Sprintf("%s\t%s\t%s\tcat=%s\t%s\thint=%s\tvalidation=candidate",
 			h.severity, uHost(h.url), pathOnly(h.url),
 			h.cat, params, h.hint)
 	}
-	return iohelp.WriteLines(workDir+"/business_logic_findings.txt", lines)
+	// These are untested path-keyword guesses, not confirmed findings. Write to
+	// *_candidates.txt (like race/paramsprayer) so the digest does not glob them
+	// into the submittable headline — they are operator-review leads only.
+	return iohelp.WriteLines(workDir+"/business_logic_candidates.txt", lines)
 }
 
 // suspiciousParamsAt returns the list of suspicious parameter names
