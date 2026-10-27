@@ -30,6 +30,7 @@ import (
 )
 
 // pickWordlist prefers the small, curated Seclists raft-small-directories.txt.
+// Used for directory/content fuzzing (ffuf), never for DNS subdomain brute.
 func pickWordlist(paths *config.Paths) string {
 	if paths.UserWordlist != "" {
 		return paths.UserWordlist
@@ -41,6 +42,16 @@ func pickWordlist(paths *config.Paths) string {
 		return paths.SeclistsDirWordlistSmall
 	}
 	return paths.SeclistsDirWordlist
+}
+
+// pickSubdomainWordlist returns a DNS prefix list for subdomain_brute.
+// User -wordlist overrides still win so operators can point at a custom
+// subdomain list; directory wordlists are not used as a fallback.
+func pickSubdomainWordlist(paths *config.Paths) string {
+	if paths.UserWordlist != "" {
+		return paths.UserWordlist
+	}
+	return paths.SeclistsDNSWordlist
 }
 
 func effectiveStepTimeout(global, perStep time.Duration) time.Duration {
@@ -312,6 +323,7 @@ var (
 		"crtsh":                  "curl",
 		"scope_guard":            "awk",
 		"scope_filter":           "rfuf",
+		"diff_snapshot":          "rfuf",
 		"dnsx_resolve":           "dnsx",
 		"subdomain_brute":        "dnsx",
 		"httpx_probe":            "httpx",
@@ -353,7 +365,9 @@ var (
 		"ffuf_js_endpoints":   true,
 		"hidden_params_arjun": true,
 		"katana_crawl":        true,
+		"subdomain_brute":     true,
 		"merge_brute_subs":    true,
+		"diff_snapshot":       true,
 		"merge_js_endpoints":  true,
 		"dirbrute_ffuf":       true,
 		"gau_urls":            true,
@@ -380,6 +394,7 @@ var (
 	urlMinerTimeout        = "10m"
 	sqlmapScanTimeout      = "15m"
 	xssScanTimeout         = "10m"
+	subdomainBruteTimeout  = 10 * time.Minute
 	xssScanTargetCap       = 500
 	sqlmapTargetCap        = 300
 	sqlmapHighSignalParams = "[?&](id|uid|user|account|order|doc|product|category|page|article|comment|msg|post|search|query|sort|filter|view|file|path|load|page_id|item_id|news_id|report_id|invoice)="
@@ -416,6 +431,11 @@ func selfBin() string {
 }
 
 func buildAuthHeaderSnippet() string {
+	// Every reference uses ${VAR:-} default expansion so the snippet is safe
+	// under `set -u` (nounset). Stages such as url_filter_alive run with
+	// `set -eu`, and these auth vars are only populated when the operator
+	// passes the matching -auth-* flag; a bare "$RFUF_AUTH_COOKIE" would abort
+	// the whole stage with "unbound variable" on any unauthenticated run.
 	return `
 AUTH_HEADERS=()
 [ -n "${RFUF_AUTH_COOKIE:-}" ] && AUTH_HEADERS+=(-H "Cookie: ${RFUF_AUTH_COOKIE}")
@@ -428,19 +448,19 @@ AUTH_HEADERS=()
 func buildAuthSqlmapCmd() string {
 	return `
 SQLMAP_AUTH_ARGS=()
-[ -n "$RFUF_AUTH_COOKIE" ] && SQLMAP_AUTH_ARGS+=("--cookie=$RFUF_AUTH_COOKIE")
-[ -n "$RFUF_AUTH_HEADER" ] && SQLMAP_AUTH_ARGS+=("--header=$RFUF_AUTH_HEADER")
-[ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && SQLMAP_AUTH_ARGS+=("--headers=X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME\\nX-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
-[ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && SQLMAP_AUTH_ARGS+=("--headers=X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
+[ -n "${RFUF_AUTH_COOKIE:-}" ] && SQLMAP_AUTH_ARGS+=("--cookie=$RFUF_AUTH_COOKIE")
+[ -n "${RFUF_AUTH_HEADER:-}" ] && SQLMAP_AUTH_ARGS+=("--header=$RFUF_AUTH_HEADER")
+[ -n "${RFUF_BUG_BOUNTY_USERNAME:-}" ] && SQLMAP_AUTH_ARGS+=("--headers=X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME\\nX-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
+[ -n "${RFUF_TEST_ACCOUNT_EMAIL:-}" ] && SQLMAP_AUTH_ARGS+=("--headers=X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
 `
 }
 
 func buildWafTamperSnippet() string {
 	return `
 WAF_SQLMAP_TAMPER=""
-[ -n "$RFUF_WAF_TAMPER" ] && WAF_SQLMAP_TAMPER="$RFUF_WAF_TAMPER"
+[ -n "${RFUF_WAF_TAMPER:-}" ] && WAF_SQLMAP_TAMPER="$RFUF_WAF_TAMPER"
 WAF_DALFOX_BYPASS=""
-[ -n "$RFUF_WAF_BYPASS" ] && WAF_DALFOX_BYPASS="$RFUF_WAF_BYPASS"
+[ -n "${RFUF_WAF_BYPASS:-}" ] && WAF_DALFOX_BYPASS="$RFUF_WAF_BYPASS"
 `
 }
 
@@ -454,7 +474,9 @@ func GetSteps(domain string, paths *config.Paths) []Step {
 
 func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 	domain := scanScope.RootDomain
+	domainEscaped := strings.ReplaceAll(domain, ".", "\\.")
 	wordlist := pickWordlist(paths)
+	dnsWordlist := pickSubdomainWordlist(paths)
 	authSnip := buildAuthHeaderSnippet()
 	self := selfBin()
 	filterTestableRef := self + " filter-testable"
@@ -466,18 +488,27 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 		return fullCmd
 	}
 
-	subdomainBruteCmd := "exit 0"
+	// Always materialize brute_subs.txt so merge_brute_subs never fails on a
+	// missing file in exact mode.
+	subdomainBruteCmd := ": > brute_subs.txt; exit 0"
 	if scanScope.Mode != scope.ExactMode {
-		subdomainBruteCmd = fmt.Sprintf(`set +e
+		if dnsWordlist == "" {
+			subdomainBruteCmd = `: > brute_subs.txt
+echo "[!] No DNS subdomain wordlist found; skipping subdomain brute" >&2
+exit 0`
+		} else {
+			subdomainBruteCmd = fmt.Sprintf(`set +e
 : > brute_subs.txt
 if [ "$RFUF_SCOPE_MODE" != "wildcard" ]; then
   exit 0
 fi
 if [ -s "%s" ]; then
-  sed "s|$|.%s|" "%s" | dnsx -silent -o brute_subs.txt
+  # DNS prefix list only — never feed web-content directory wordlists here.
+  awk 'BEGIN{IGNORECASE=1} /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/ {print tolower($0)}' "%s" | sed "s|$|.%s|" | dnsx -silent -o brute_subs.txt
 fi
 sort -u brute_subs.txt -o brute_subs.txt
-exit 0`, wordlist, domain, wordlist)
+exit 0`, dnsWordlist, dnsWordlist, domain)
+		}
 	}
 
 	return []Step{
@@ -485,7 +516,7 @@ exit 0`, wordlist, domain, wordlist)
 		{"subfinder", disc("subfinder", fmt.Sprintf("subfinder -d %s -all -o subfinder.txt", domain), "subfinder.txt"), "subfinder", "default", []string{"setup_directories"}, 0},
 		{"assetfinder", disc("assetfinder", fmt.Sprintf("assetfinder --subs-only %s > assetfinder.txt", domain), "assetfinder.txt"), "assetfinder", "default", []string{"setup_directories"}, 0},
 		{"amass_enum", disc("amass_enum", fmt.Sprintf("if ! timeout --foreground 10m amass enum -passive -norecursive -timeout 30 -d %s -o amass_raw.txt; then echo '[!] Amass enumeration failed; continuing with other sources' >/dev/null; fi; [ -f amass_raw.txt ] || touch amass_raw.txt", domain), "amass_raw.txt"), "amass", "default", []string{"setup_directories"}, 0},
-		{"amass_parse", disc("amass_parse", fmt.Sprintf("[ -f amass_raw.txt ] && grep -F \"%s\" amass_raw.txt | sort -u > amass_sub.txt || touch amass_sub.txt", domain), "amass_sub.txt"), "grep", "grep", []string{"amass_enum"}, 0},
+		{"amass_parse", disc("amass_parse", fmt.Sprintf(`[ -f amass_raw.txt ] && grep -oEi '[a-z0-9][a-z0-9._-]*[a-z0-9]' amass_raw.txt | grep -Ei '(^|\.)%s$' | tr '[:upper:]' '[:lower:]' | sort -u > amass_sub.txt || touch amass_sub.txt`, domainEscaped), "amass_sub.txt"), "grep", "grep", []string{"amass_enum"}, 0},
 		{"crtsh", fmt.Sprintf("curl -s \"https://crt.sh/?q=%%25.%s&output=json\" | jq -r '.[] | .name_value' | sort -u > crtsh.txt", domain), "curl", "default", []string{"setup_directories"}, 0},
 		{"merge_subs", "touch subfinder.txt assetfinder.txt amass_sub.txt crtsh.txt; cat subfinder.txt assetfinder.txt amass_sub.txt crtsh.txt | sort -u > subs.txt", "cat", "default", []string{"subfinder", "assetfinder", "amass_parse", "crtsh"}, 0},
 		{"scope_guard", `set +e
@@ -498,7 +529,12 @@ WILDCARD=0
 awk -v root="$ROOT" -v wildcard="$WILDCARD" '
   function lower(s) { return tolower(s) }
   {
-    host=lower($0); sub(/\.$/, "", host)
+    host=lower($0); gsub(/^[[:space:]]+|[[:space:]]+$/, "", host); sub(/\.$/, "", host)
+    # Drop Amass graph edges, wildcard DNS names, and other non-host junk.
+    if (host == "" || index(host, "*") || index(host, "/") || host ~ /[[:space:]]/ || host ~ /-->/ || host ~ /\.\./) {
+      print $0 > "out_of_scope_hosts.txt"
+      next
+    }
     if (host == root || (wildcard == 1 && length(host) > length(root)+1 && substr(host, length(host)-length(root), length(root)+1) == "." root)) print host > "in_scope_hosts.txt"
     else print $0 > "out_of_scope_hosts.txt"
   }
@@ -516,8 +552,8 @@ printf '{"input":"%s","root_domain":"%s","mode":"%s","in_scope":%s,"out_of_scope
 ' "$RFUF_SCOPE_INPUT" "$ROOT" "$RFUF_SCOPE_MODE" "${IN:-0}" "${OUT:-0}" "$RFUF_SCOPE_MODE" > scope.json
 touch scope.json in_scope_hosts.txt out_of_scope_hosts.txt scoped_subs.txt`, "awk", "default", []string{"merge_subs"}, 0},
 		{"dnsx_resolve", "dnsx -l scoped_subs.txt -silent -o live_subs.txt", "dnsx", "default", []string{"scope_guard"}, 0},
-		{"subdomain_brute", subdomainBruteCmd, "dnsx", "grep", []string{"dnsx_resolve"}, 0},
-		{"merge_brute_subs", "cat scoped_subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "cat", "default", []string{"subdomain_brute"}, 0},
+		{"subdomain_brute", subdomainBruteCmd, "dnsx", "grep", []string{"dnsx_resolve"}, subdomainBruteTimeout},
+		{"merge_brute_subs", "touch live_subs.txt brute_subs.txt; cat live_subs.txt brute_subs.txt | sort -u > subs_with_brute.txt && mv subs_with_brute.txt live_subs.txt", "cat", "default", []string{"subdomain_brute"}, 0},
 		{"httpx_probe", fmt.Sprintf("%s\nhttpx -l live_subs.txt -silent -status-code -title -tech-detect \"${AUTH_HEADERS[@]}\" -o alive.txt", authSnip), "httpx", "default", []string{"merge_brute_subs"}, 0},
 		{"s3_audit_run", fmt.Sprintf("%s\n%s s3auditor .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
 		{"tech_fingerprint", fmt.Sprintf("%s\nawk '{print $1}' alive.txt | httpx -silent -tech-detect \"${AUTH_HEADERS[@]}\" -o tech_fingerprint.txt", authSnip), "httpx", "default", []string{"httpx_probe"}, 0},
@@ -544,6 +580,7 @@ export -f fetch_spec
 cat alive.txt | awk '{print $1}' | xargs -P 10 -I{} bash -c 'fetch_spec "{}"'
 exit 0`, authSnip), "curl", "default", []string{"httpx_probe"}, 0},
 		{"jsmap_scrape", fmt.Sprintf("%s jsassets .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"diff_snapshot", fmt.Sprintf("%s diff-snapshot .", self), "rfuf", "default", []string{"merge_brute_subs", "jsmap_scrape"}, 0},
 		{"trufflehog_scan", `set +e
 : > trufflehog_results.txt
 : > trufflehog_stderr.log
@@ -589,10 +626,21 @@ exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", 
 		{"uro_dedup", "sort -u all_urls.txt -o all_urls.txt; cp all_urls.txt uro_urls.txt", "sort", "grep", []string{"merge_all_urls"}, 0},
 		{"url_filter_alive", fmt.Sprintf(`set -eu
 %s target-stream -input all_urls.txt -output all_urls_scannable.txt -source merged_discovery -status all_urls_alive_stream_status.json -provenance all_urls_alive_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
+if [ -n "${RFUF_EXCLUDE_URL_REGEX:-}" ]; then
+  grep -Ev "$RFUF_EXCLUDE_URL_REGEX" all_urls_scannable.txt > all_urls_scannable.filtered || true
+  mv all_urls_scannable.filtered all_urls_scannable.txt
+fi
 %s
 httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405,500 "${AUTH_HEADERS[@]}" > all_urls_status.txt
 awk '/ \[(200|301|302)\]/ {print $1}' all_urls_status.txt > all_urls_200.txt
 awk '/ \[(401|403|500)\]/ {print}' all_urls_status.txt > high_interest_urls.txt
+# Order the review list by HTTP status descending (500 > 403 > 401) so the
+# most interesting responses (server errors, forbidden-but-present endpoints)
+# sort above bare 401s. Stable, so same-status rows keep their scan order.
+if [ -s high_interest_urls.txt ]; then
+  awk '{ s=$0; gsub(/.*\[/,"",s); gsub(/\].*/,"",s); print s"\t"$0 }' high_interest_urls.txt | sort -rn -s | cut -f2- > high_interest_urls.ordered
+  mv high_interest_urls.ordered high_interest_urls.txt
+fi
 rm -f all_urls_status.txt`, self, authSnip), "httpx", "default", []string{"uro_dedup", "merge_js_endpoints"}, 0},
 		{"nextjs_bypass_run", fmt.Sprintf("%s\n%s nextjsbypass .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
 		{"bypass403", fmt.Sprintf("%s bypass403 .", findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
@@ -1286,7 +1334,16 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 						toolError = executor.ToolExitError(res.ToolExits)
 						toolTimedOut = executor.ToolTimedOut(res.ToolExits)
 					}
-					if err == nil && res.ExitCode == 0 && toolError == "" && !toolTimedOut {
+					// Artifacts a stage declares in zero_result_outputs are
+					// legitimately allowed to be empty. Materialize any that are
+					// missing whenever the stage did not time out, even if the
+					// underlying tool reported a non-zero exit on an empty result
+					// (e.g. ffuf with -maxtime/-recursion and no hits never writes
+					// its -o JSON file). Gating this on a perfectly clean tool exit
+					// left a valid empty dir-brute without ffuf_results/all.json,
+					// which a downstream required stage demands as input, aborting
+					// the whole run.
+					if err == nil && !toolTimedOut && !res.TimedOut {
 						_, outputs := stageArtifacts(step)
 						if materializeErr := ensureZeroResultArtifacts(paths.WorkDir, step.ID, outputs); materializeErr != nil {
 							err = materializeErr
@@ -1331,7 +1388,18 @@ func RunForScope(scanScope scope.Scope, resume bool, paths *config.Paths, stepTi
 					if emptyInput && !stageContracts[step.ID].EmptyInputValid {
 						missingOutput = true
 					}
-					if toolError != "" || toolTimedOut {
+					// A sub-tool returning a non-zero exit (recorded as a
+					// scanner_exit toolError) must not by itself fail a stage that
+					// otherwise ran to completion and produced all of its declared
+					// outputs. On large scopes these are expected partial hiccups —
+					// curl timing out on 1 of N hosts (curl=28), ffuf exiting
+					// non-zero on an empty result — and previously any one of them
+					// aborted the whole pipeline even though the stage's output was
+					// present (e.g. api_discovery had already written api_specs with
+					// 2778 lines). A genuinely missing/invalid required artifact is
+					// still caught by the output/input metric checks above; a real
+					// timeout is still caught by toolTimedOut below.
+					if toolTimedOut {
 						missingOutput = true
 					}
 					timedOut := res.TimedOut || toolTimedOut

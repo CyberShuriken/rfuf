@@ -12,3 +12,9 @@ coverage.out
 !README.txt
 sqlmap_results/
 .DS_Store
+
+# Local scan logs and editor/agent state (never publish)
+.rfuf-logs/
+.claude/settings.local.json
+.idea/
+.vscode/

@@ -192,8 +192,19 @@ func VerifyToolsPresent() error {
 	// CheckBinary on PATH. We deliberately don't try to repair anything
 	// here — if something is missing, the user should run the install
 	// path once without -resume.
-	fmt.Printf("%-20s %-10s %-20s %-32s %s\n", "TOOL", "REQUIRED", "STATUS", "VERSION", "PATH")
-	missingRequired := []string{}
+	// By default this prints a single summary line plus a row for anything
+	// that actually needs attention (missing required tools). The full
+	// per-tool table — 30+ rows, many with unparseable version banners — is
+	// only noise on a healthy resume, so it is gated behind RFUF_VERBOSE.
+	// Set RFUF_VERBOSE=1 to restore the complete TOOL/REQUIRED/STATUS table.
+	verbose := os.Getenv("RFUF_VERBOSE") != ""
+
+	type toolRow struct {
+		name, state, version, path string
+		required                   bool
+	}
+	var rows []toolRow
+
 	for _, t := range GetRequiredTools("") {
 		resolved, err := exec.LookPath(t.CheckBinary)
 		required := !optionalTools[t.Name]
@@ -201,17 +212,15 @@ func VerifyToolsPresent() error {
 			state := "missing_required"
 			if optionalTools[t.Name] {
 				state = "skipped_optional"
-			} else {
-				missingRequired = append(missingRequired, t.Name)
 			}
-			fmt.Printf("%-20s %-10t %-20s %-32s %s\n", t.Name, required, state, "—", "—")
+			rows = append(rows, toolRow{t.Name, state, "—", "—", required})
 			continue
 		}
 		version := installedVersion(resolved)
 		if locked := pinnedVersion(t); locked != "unlocked" {
 			version += " (pin " + locked + ")"
 		}
-		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", t.Name, required, "installed", version, resolved)
+		rows = append(rows, toolRow{t.Name, "installed", version, resolved, required})
 	}
 	for _, tool := range []struct {
 		name     string
@@ -229,12 +238,11 @@ func VerifyToolsPresent() error {
 			status := "skipped_optional"
 			if tool.required {
 				status = "missing_required"
-				missingRequired = append(missingRequired, tool.name)
 			}
-			fmt.Printf("%-20s %-10t %-20s %-32s %s\n", tool.name, tool.required, status, "—", "—")
+			rows = append(rows, toolRow{tool.name, status, "—", "—", tool.required})
 			continue
 		}
-		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", tool.name, tool.required, "installed", installedVersion(resolved), resolved)
+		rows = append(rows, toolRow{tool.name, "installed", installedVersion(resolved), resolved, tool.required})
 	}
 	home, _ := os.UserHomeDir()
 	wordlist := ""
@@ -245,10 +253,48 @@ func VerifyToolsPresent() error {
 		}
 	}
 	if wordlist == "" {
-		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", "seclists", false, "skipped_optional", "—", "—")
+		rows = append(rows, toolRow{"seclists", "skipped_optional", "—", "—", false})
 	} else {
-		fmt.Printf("%-20s %-10t %-20s %-32s %s\n", "seclists", false, "installed", "operator/package", wordlist)
+		rows = append(rows, toolRow{"seclists", "installed", "operator/package", wordlist, false})
 	}
+
+	var missingRequired, skippedOptional []string
+	requiredTotal, requiredPresent, installedCount := 0, 0, 0
+	for _, r := range rows {
+		if r.required {
+			requiredTotal++
+		}
+		switch r.state {
+		case "installed":
+			installedCount++
+			if r.required {
+				requiredPresent++
+			}
+		case "skipped_optional":
+			skippedOptional = append(skippedOptional, r.name)
+		case "missing_required":
+			missingRequired = append(missingRequired, r.name)
+		}
+	}
+
+	if verbose {
+		fmt.Printf("%-20s %-10s %-20s %-32s %s\n", "TOOL", "REQUIRED", "STATUS", "VERSION", "PATH")
+		for _, r := range rows {
+			fmt.Printf("%-20s %-10t %-20s %-32s %s\n", r.name, r.required, r.state, r.version, r.path)
+		}
+	} else {
+		summary := fmt.Sprintf("[*] Tools: %d/%d required present, %d installed", requiredPresent, requiredTotal, installedCount)
+		if len(skippedOptional) > 0 {
+			summary += fmt.Sprintf(", %d optional skipped (%s)", len(skippedOptional), strings.Join(skippedOptional, ", "))
+		}
+		fmt.Println(summary + "  (RFUF_VERBOSE=1 for full table)")
+		for _, r := range rows {
+			if r.state == "missing_required" {
+				fmt.Printf("    [!] missing required: %s\n", r.name)
+			}
+		}
+	}
+
 	if len(missingRequired) > 0 {
 		return fmt.Errorf("missing required tools (run `rfuf -d <domain>` once WITHOUT -resume to install): %s", strings.Join(missingRequired, ", "))
 	}

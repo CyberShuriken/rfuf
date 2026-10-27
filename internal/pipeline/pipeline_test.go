@@ -86,6 +86,133 @@ func TestAmassFailureDoesNotAbortPipeline(t *testing.T) {
 	t.Fatal("amass_enum step not found")
 }
 
+// TestAmassParseExtractsHostnamesNotGraphEdges ensures Amass edge output
+// like "host (FQDN) --> cname_record --> other.com" does not pollute
+// amass_sub.txt / subs.txt / out_of_scope_hosts.txt.
+func TestAmassParseExtractsHostnamesNotGraphEdges(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("*.arc.io", &config.Paths{}) {
+		if step.ID == "amass_parse" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("amass_parse step not found")
+	}
+	if strings.Contains(command, "grep -F") {
+		t.Fatalf("amass_parse must not keep full Amass graph lines via grep -F: %q", command)
+	}
+	if !strings.Contains(command, "grep -oEi") || !strings.Contains(command, "(^|\\.)") {
+		t.Fatalf("amass_parse must extract and filter hostnames: %q", command)
+	}
+
+	dir := t.TempDir()
+	raw := "" +
+		"arc.io (FQDN) --> ns_record --> vita.ns.cloudflare.com (FQDN)\n" +
+		"community.arc.io (FQDN) --> cname_record --> ingress.gradual.us (FQDN)\n" +
+		"explorer.arc.io (FQDN) --> a_record --> 1.2.3.4 (IPAddress)\n"
+	if err := os.WriteFile(filepath.Join(dir, "amass_raw.txt"), []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("amass_parse failed: %v output=%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "amass_sub.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "-->") || strings.Contains(text, "cloudflare.com") || strings.Contains(text, "gradual.us") {
+		t.Fatalf("amass_sub.txt still contains graph junk: %q", text)
+	}
+	for _, want := range []string{"arc.io", "community.arc.io", "explorer.arc.io"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("amass_sub.txt missing %q: %q", want, text)
+		}
+	}
+}
+
+// TestSubdomainBruteUsesDNSWordlistNotWebContent catches the hang where
+// raft-small-directories.txt was fed to dnsx as subdomain prefixes.
+func TestSubdomainBruteUsesDNSWordlistNotWebContent(t *testing.T) {
+	dnsList := filepath.Join(t.TempDir(), "dns.txt")
+	if err := os.WriteFile(dnsList, []byte("www\napi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	webList := filepath.Join(t.TempDir(), "raft-small-directories.txt")
+	if err := os.WriteFile(webList, []byte("cgi-bin\nwp-admin\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	steps := GetSteps("*.example.com", &config.Paths{
+		SeclistsDNSWordlist:      dnsList,
+		SeclistsDirWordlistSmall: webList,
+	})
+	var brute Step
+	for _, step := range steps {
+		if step.ID == "subdomain_brute" {
+			brute = step
+			break
+		}
+	}
+	if brute.ID == "" {
+		t.Fatal("subdomain_brute step not found")
+	}
+	if !strings.Contains(brute.Command, dnsList) {
+		t.Fatalf("subdomain_brute must use DNS wordlist %q, got: %q", dnsList, brute.Command)
+	}
+	if strings.Contains(brute.Command, webList) || strings.Contains(brute.Command, "raft-small") {
+		t.Fatalf("subdomain_brute must not use web-content wordlist: %q", brute.Command)
+	}
+	if brute.Timeout != subdomainBruteTimeout {
+		t.Fatalf("subdomain_brute timeout=%v want %v", brute.Timeout, subdomainBruteTimeout)
+	}
+}
+
+// TestScopeGuardRejectsWildcardAndGraphJunk keeps *.preview and Amass
+// edges out of scoped_subs.txt so httpx/dnsx do not probe junk hosts.
+func TestScopeGuardRejectsWildcardAndGraphJunk(t *testing.T) {
+	var command string
+	for _, step := range GetSteps("*.arc.io", &config.Paths{}) {
+		if step.ID == "scope_guard" {
+			command = step.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("scope_guard step not found")
+	}
+	dir := t.TempDir()
+	subs := "" +
+		"arc.io\n" +
+		"api.arc.io\n" +
+		"*.preview.studio.arc.io\n" +
+		"community.arc.io (FQDN) --> cname_record --> ingress.gradual.us (FQDN)\n" +
+		"outside.example.com\n"
+	if err := os.WriteFile(filepath.Join(dir, "subs.txt"), []byte(subs), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", command)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "RFUF_DOMAIN=arc.io", "RFUF_SCOPE_INPUT=*.arc.io", "RFUF_SCOPE_MODE=wildcard")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("scope_guard failed: %v output=%s", err, out)
+	}
+	inScope, err := os.ReadFile(filepath.Join(dir, "scoped_subs.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(inScope)
+	if strings.Contains(text, "*") || strings.Contains(text, "-->") || strings.Contains(text, "outside.example.com") {
+		t.Fatalf("scoped_subs.txt still contains junk: %q", text)
+	}
+	if !strings.Contains(text, "arc.io") || !strings.Contains(text, "api.arc.io") {
+		t.Fatalf("scoped_subs.txt missing in-scope hosts: %q", text)
+	}
+}
+
 func TestReconArtifactContractsMatchProducerFiles(t *testing.T) {
 	steps := GetSteps("example.com", &config.Paths{})
 	for _, want := range []struct {
@@ -917,6 +1044,10 @@ func TestLocalFixturePipelineMatrix(t *testing.T) {
 				gotInterest = nil
 			}
 			sort.Strings(tc.wantHighInterest)
+			// Compare as a set: url_filter_alive now orders high_interest_urls.txt
+			// by HTTP status descending (500 > 403 > 401), so assert membership
+			// rather than a fixed order.
+			sort.Strings(gotInterest)
 			if strings.Join(gotInterest, "\n") != strings.Join(tc.wantHighInterest, "\n") {
 				t.Fatalf("high-interest statuses=%v want %v", gotInterest, tc.wantHighInterest)
 			}
@@ -1230,10 +1361,10 @@ func TestMergeBruteSubsPassesWhenBruteSubsEmpty(t *testing.T) {
 		t.Fatal("merge_brute_subs step not found")
 	}
 
-	// Exact-mode fixture: scoped_subs.txt has the apex, brute_subs.txt
-	// is empty (subdomain_brute exits 0 immediately in exact mode).
+	// Exact-mode fixture: live_subs.txt has the apex (dnsx_resolve output),
+	// brute_subs.txt is empty (subdomain_brute exits 0 immediately).
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "scoped_subs.txt"), []byte("wolt.com\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "live_subs.txt"), []byte("wolt.com\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "brute_subs.txt"), nil, 0644); err != nil {
@@ -1276,7 +1407,7 @@ func TestMergeBruteSubsPassesWhenBruteSubsEmpty(t *testing.T) {
 }
 
 // TestMergeBruteSubsPassesWhenScopedSubsEmpty covers the rarer both-empty
-// case: if scoped_subs.txt is empty AND brute_subs.txt is empty (a zero-
+// case: if live_subs.txt is empty AND brute_subs.txt is empty (a zero-
 // result exact-mode scan with no upstream discovery), merge_brute_subs
 // still must materialize live_subs.txt so downstream stages don't see a
 // missing file.
@@ -1293,8 +1424,8 @@ func TestMergeBruteSubsPassesWhenScopedSubsEmpty(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	// Both inputs empty.
-	if err := os.WriteFile(filepath.Join(dir, "scoped_subs.txt"), nil, 0644); err != nil {
+	// Both inputs empty / missing — touch in the merge command covers this.
+	if err := os.WriteFile(filepath.Join(dir, "live_subs.txt"), nil, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "brute_subs.txt"), nil, 0644); err != nil {

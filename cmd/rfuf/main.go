@@ -11,15 +11,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/CyberShuriken/rfuf/internal/config"
+	"github.com/CyberShuriken/rfuf/internal/diffsnap"
+	"github.com/CyberShuriken/rfuf/internal/digest"
 	"github.com/CyberShuriken/rfuf/internal/executor"
 	"github.com/CyberShuriken/rfuf/internal/filter"
 	"github.com/CyberShuriken/rfuf/internal/findings"
 	"github.com/CyberShuriken/rfuf/internal/installer"
 	"github.com/CyberShuriken/rfuf/internal/installer/sysinstall"
+	"github.com/CyberShuriken/rfuf/internal/notify"
 	"github.com/CyberShuriken/rfuf/internal/pipeline"
 	"github.com/CyberShuriken/rfuf/internal/scope"
 )
@@ -52,6 +56,22 @@ func main() {
 		case "target-stream":
 			if err := runTargetStream(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "rfuf target-stream: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "diff-snapshot":
+			if len(os.Args) != 3 {
+				fmt.Fprintln(os.Stderr, "usage: rfuf diff-snapshot <workdir>")
+				os.Exit(2)
+			}
+			if err := diffsnap.Run(os.Args[2]); err != nil {
+				fmt.Fprintf(os.Stderr, "rfuf diff-snapshot: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "monitor":
+			if err := runMonitor(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "rfuf monitor: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -102,7 +122,7 @@ func main() {
 				fmt.Println("Usage: rfuf clean -d <domain>")
 				os.Exit(1)
 			}
-			paths, err := config.ResolvePaths(*cleanDomain)
+			paths, err := config.ResolvePathsWithBase(*cleanDomain, config.LoadSettings().OutputDir)
 			if err != nil {
 				fmt.Printf("[!] failed to resolve paths: %v\n", err)
 				os.Exit(1)
@@ -122,6 +142,10 @@ func main() {
 	maxTargets := flag.Int("max-targets", 10000, "Maximum URLs retained in the final scoped target streams.")
 	maxStageRequests := flag.Int("max-stage-requests", 300, "Per-tool request-rate ceiling passed to scanners that support a rate flag.")
 	userWordlist := flag.String("wordlist", "", "Override the default directory wordlist with a specific file path.")
+	outputDir := flag.String("output-dir", "", "Base directory for per-domain output (default ~/Desktop/Bug_Bounty; or $RFUF_OUTPUT_DIR / config file).")
+	notifyWebhook := flag.String("notify-webhook", "", "Webhook URL to post a run digest to on completion (Slack/Discord/generic; or $RFUF_NOTIFY_WEBHOOK).")
+	notifyType := flag.String("notify-type", "", "Notification payload format: auto|slack|discord|generic (default auto).")
+	notifyOn := flag.String("notify-on", "", "When to notify: change (only when new subdomains/JS appear) or always (default change).")
 	skipInstall := flag.Bool("skip-install", false, "Skip dependency installation entirely (fastest resume path — use only if you trust your $PATH)")
 
 	// Auth mode — injected as env vars into every shell command. Stage
@@ -207,9 +231,13 @@ func main() {
 
 	fmt.Printf("[*] RFUF v%s | target: %s | scope: %s (%s)\n", version, *domain, normalizedDomain, parsedScope.Mode)
 
+	// Load persistent settings (config file + env); CLI flags override.
+	settings := config.LoadSettings()
+	effOutputDir := firstNonEmpty(*outputDir, settings.OutputDir)
+
 	// 1. Resolve Paths using the normalized root so wildcard and non-wildcard
 	// invocations resume into the same per-domain work directory.
-	paths, err := config.ResolvePaths(normalizedDomain)
+	paths, err := config.ResolvePathsWithBase(normalizedDomain, effOutputDir)
 	if err != nil {
 		fmt.Printf("[!] Error resolving paths: %v\n", err)
 		os.Exit(1)
@@ -370,6 +398,126 @@ func main() {
 		fmt.Printf("[!] Pipeline failed: %v\n", err)
 		os.Exit(1)
 	}
+
+	// 7. Consolidate results into findings.json and optionally notify.
+	runReporting(paths.WorkDir, normalizedDomain, notify.Config{
+		Webhook: firstNonEmpty(*notifyWebhook, settings.NotifyWebhook),
+		Type:    firstNonEmpty(*notifyType, settings.NotifyType),
+		On:      firstNonEmpty(*notifyOn, settings.NotifyOn),
+	})
+}
+
+// runReporting is the post-run reporting step: it consolidates the scattered
+// result files into findings.json and sends an optional notification. A
+// failure here must never fail the scan whose output already landed on disk,
+// so every error is downgraded to a warning.
+func runReporting(workDir, domain string, ncfg notify.Config) {
+	dg, derr := digest.Build(workDir, domain)
+	if derr != nil {
+		fmt.Printf("[!] Warning: could not build findings.json: %v\n", derr)
+	} else {
+		fmt.Printf("[*] Wrote findings.json (%d finding(s), %d new subdomain(s), %d new JS asset(s))\n",
+			dg.TotalFindings, len(dg.NewSubdomains), len(dg.NewJSAssets))
+	}
+	if err := notify.Maybe(ncfg, dg); err != nil {
+		fmt.Printf("[!] Warning: notification failed: %v\n", err)
+	}
+}
+
+// firstNonEmpty returns the first argument whose trimmed value is non-empty.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// runMonitor re-runs a normal RFUF scan on a fixed interval, forwarding all
+// non-monitor arguments (-d, auth flags, --notify-webhook, …) to each run.
+// Change detection and notification are handled by the normal run path: the
+// diff_snapshot stage computes deltas and the notifier (default -notify-on
+// change) stays quiet until new surface appears.
+func runMonitor(args []string) error {
+	interval := 6 * time.Hour
+	iterations := 0 // 0 == run forever
+	var passthrough []string
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-interval" || a == "--interval":
+			if i+1 >= len(args) {
+				return errors.New("-interval requires a duration (e.g. 6h)")
+			}
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil {
+				return fmt.Errorf("invalid -interval: %w", err)
+			}
+			interval = d
+			i++
+		case strings.HasPrefix(a, "-interval=") || strings.HasPrefix(a, "--interval="):
+			d, err := time.ParseDuration(a[strings.IndexByte(a, '=')+1:])
+			if err != nil {
+				return fmt.Errorf("invalid -interval: %w", err)
+			}
+			interval = d
+		case a == "-iterations" || a == "--iterations":
+			if i+1 >= len(args) {
+				return errors.New("-iterations requires a count")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 0 {
+				return fmt.Errorf("invalid -iterations: %q", args[i+1])
+			}
+			iterations = n
+			i++
+		case strings.HasPrefix(a, "-iterations=") || strings.HasPrefix(a, "--iterations="):
+			n, err := strconv.Atoi(a[strings.IndexByte(a, '=')+1:])
+			if err != nil || n < 0 {
+				return fmt.Errorf("invalid -iterations: %q", a)
+			}
+			iterations = n
+		default:
+			passthrough = append(passthrough, a)
+		}
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot resolve own binary path: %w", err)
+	}
+	if interval < time.Minute {
+		return errors.New("-interval must be at least 1m to avoid hammering the target")
+	}
+
+	fmt.Printf("[*] monitor: every %s, %s, forwarding: %s\n",
+		interval, iterationsLabel(iterations), strings.Join(passthrough, " "))
+
+	for round := 1; iterations == 0 || round <= iterations; round++ {
+		fmt.Printf("\n[*] monitor: starting run %d (%s)\n", round, time.Now().Format(time.RFC3339))
+		cmd := exec.Command(self, passthrough...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("[!] monitor: run %d exited with error: %v (continuing)\n", round, err)
+		}
+		if iterations != 0 && round >= iterations {
+			break
+		}
+		fmt.Printf("[*] monitor: sleeping %s until next run\n", interval)
+		time.Sleep(interval)
+	}
+	return nil
+}
+
+func iterationsLabel(n int) string {
+	if n == 0 {
+		return "forever"
+	}
+	return fmt.Sprintf("%d iteration(s)", n)
 }
 
 func runTargetStream(args []string) error {

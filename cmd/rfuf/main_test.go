@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/CyberShuriken/rfuf/internal/executor"
+	"github.com/CyberShuriken/rfuf/internal/notify"
 )
 
 func TestVerifyAuthSessionSendsConfiguredHeaders(t *testing.T) {
@@ -103,5 +105,57 @@ func TestVerifyAuthSessionMarkerMismatch(t *testing.T) {
 	verified, status, err := verifyAuthSession(server.URL, "AUTHENTICATED")
 	if err != nil || verified || status != http.StatusOK {
 		t.Fatalf("verified=%v status=%d err=%v", verified, status, err)
+	}
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	if got := firstNonEmpty("", "  ", "x", "y"); got != "x" {
+		t.Fatalf("firstNonEmpty=%q want x", got)
+	}
+	if got := firstNonEmpty("", ""); got != "" {
+		t.Fatalf("firstNonEmpty of empties=%q want empty", got)
+	}
+}
+
+func TestRunMonitorValidatesArgs(t *testing.T) {
+	if err := runMonitor([]string{"-interval"}); err == nil {
+		t.Fatal("missing -interval value should error")
+	}
+	if err := runMonitor([]string{"-interval", "nonsense", "-d", "x"}); err == nil {
+		t.Fatal("bad -interval duration should error")
+	}
+	if err := runMonitor([]string{"-interval", "30s", "-d", "x"}); err == nil {
+		t.Fatal("sub-minute interval should be rejected")
+	}
+	if err := runMonitor([]string{"-iterations", "-5", "-d", "x"}); err == nil {
+		t.Fatal("negative -iterations should error")
+	}
+}
+
+func TestRunReportingWritesFindingsAndNotifies(t *testing.T) {
+	dir := t.TempDir()
+	// Simulate a completed run's artifacts.
+	if err := os.WriteFile(filepath.Join(dir, "credentials_found.txt"), []byte("https://x/.env\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "new_subdomains.txt"), []byte("beta.example.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		gotBody = string(data)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	runReporting(dir, "example.com", notify.Config{Webhook: srv.URL, Type: "slack", On: "change"})
+
+	if _, err := os.Stat(filepath.Join(dir, "findings.json")); err != nil {
+		t.Fatalf("findings.json not written: %v", err)
+	}
+	if !strings.Contains(gotBody, "beta.example.com") {
+		t.Fatalf("notification did not include new subdomain; body=%q", gotBody)
 	}
 }

@@ -20,13 +20,79 @@ type Paths struct {
 	// Default for ffuf — fewer false positives and ~7x faster against the
 	// same number of hosts. Falls back to SeclistsDirWordlist at use site.
 	SeclistsDirWordlistSmall string
+	// SeclistsDNSWordlist is a DNS subdomain prefix list (not web-content
+	// directories). Used only by subdomain_brute.
+	SeclistsDNSWordlist string
 	// AssetnoteWordlist is the Assetnote curated wordlist.
 	AssetnoteWordlist string
 	// UserWordlist is a wordlist override provided via CLI flag.
 	UserWordlist string
 }
 
+// Settings holds user-configurable defaults loaded from the config file and
+// environment. CLI flags take precedence over these at the call site.
+// Precedence, high to low: flag > environment variable > config file > the
+// built-in default.
+type Settings struct {
+	// OutputDir is the base directory under which per-domain work
+	// directories are created (default ~/Desktop/Bug_Bounty).
+	OutputDir string `json:"output_dir"`
+	// NotifyWebhook is a Slack/Discord/generic webhook URL to post a run
+	// digest to on completion. Empty disables notifications.
+	NotifyWebhook string `json:"notify_webhook"`
+	// NotifyType selects the payload format: auto|slack|discord|generic.
+	NotifyType string `json:"notify_type"`
+	// NotifyOn is when to notify: change|always.
+	NotifyOn string `json:"notify_on"`
+}
+
+// ConfigFilePath returns the config file location: $RFUF_CONFIG if set,
+// otherwise ~/.config/rfuf/config.json.
+func ConfigFilePath() string {
+	if p := os.Getenv("RFUF_CONFIG"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "rfuf", "config.json")
+}
+
+// LoadSettings reads the config file (if present) and overlays environment
+// variables on top. It never errors: a missing or malformed file yields the
+// zero value, and callers overlay CLI flags afterward.
+func LoadSettings() Settings {
+	var s Settings
+	if path := ConfigFilePath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			_ = json.Unmarshal(data, &s)
+		}
+	}
+	if v := os.Getenv("RFUF_OUTPUT_DIR"); v != "" {
+		s.OutputDir = v
+	}
+	if v := os.Getenv("RFUF_NOTIFY_WEBHOOK"); v != "" {
+		s.NotifyWebhook = v
+	}
+	if v := os.Getenv("RFUF_NOTIFY_TYPE"); v != "" {
+		s.NotifyType = v
+	}
+	if v := os.Getenv("RFUF_NOTIFY_ON"); v != "" {
+		s.NotifyOn = v
+	}
+	return s
+}
+
+// ResolvePaths resolves per-domain paths under the default output base.
 func ResolvePaths(domain string) (*Paths, error) {
+	return ResolvePathsWithBase(domain, "")
+}
+
+// ResolvePathsWithBase resolves per-domain paths, placing the work directory
+// under baseDir. An empty baseDir falls back to ~/Desktop/Bug_Bounty, the
+// historical default.
+func ResolvePathsWithBase(domain, baseDir string) (*Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("could not get home directory: %v", err)
@@ -38,11 +104,16 @@ func ResolvePaths(domain string) (*Paths, error) {
 	}
 	goBin := filepath.Join(goPath, "bin")
 
-	workDir := filepath.Join(home, "Desktop", "Bug_Bounty", domain)
+	base := baseDir
+	if base == "" {
+		base = filepath.Join(home, "Desktop", "Bug_Bounty")
+	}
+	workDir := filepath.Join(base, domain)
 
 	nucleiTemplates := resolveNucleiTemplates(home)
 	gfPatterns := filepath.Join(home, ".gf")
 	seclistsWordlist, seclistsWordlistSmall := resolveSeclists(home)
+	dnsWordlist := resolveDNSWordlist(home)
 	assetnoteWordlist := resolveAssetnote(home)
 
 	// Resolve the bundled nuclei-templates-rfuf overlay directory.
@@ -60,6 +131,7 @@ func ResolvePaths(domain string) (*Paths, error) {
 		GoBin:                    goBin,
 		SeclistsDirWordlist:      seclistsWordlist,
 		SeclistsDirWordlistSmall: seclistsWordlistSmall,
+		SeclistsDNSWordlist:      dnsWordlist,
 		AssetnoteWordlist:        assetnoteWordlist,
 	}, nil
 }
@@ -168,4 +240,29 @@ func resolveSeclists(home string) (string, string) {
 		return ""
 	}
 	return firstHit(medium), firstHit(small)
+}
+
+// resolveDNSWordlist finds a subdomain-prefix wordlist. Web-content
+// directory lists must never be used here — appending ".domain" to path
+// tokens produces tens of thousands of invalid DNS queries and stalls
+// subdomain_brute.
+func resolveDNSWordlist(home string) string {
+	candidates := []string{
+		"/usr/share/wordlists/SecLists/Discovery/DNS/subdomains-top1million-5000.txt",
+		"/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
+		"/usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-5000.txt",
+		filepath.Join(home, "SecLists", "Discovery", "DNS", "subdomains-top1million-5000.txt"),
+		"/usr/share/wordlists/SecLists/Discovery/DNS/subdomains-top1million-20000.txt",
+		"/usr/share/seclists/Discovery/DNS/subdomains-top1million-20000.txt",
+		filepath.Join(home, "SecLists", "Discovery", "DNS", "subdomains-top1million-20000.txt"),
+		"/usr/share/wordlists/SecLists/Discovery/DNS/namelist.txt",
+		"/usr/share/seclists/Discovery/DNS/namelist.txt",
+		filepath.Join(home, "SecLists", "Discovery", "DNS", "namelist.txt"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }

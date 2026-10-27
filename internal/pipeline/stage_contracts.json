@@ -263,6 +263,38 @@
       "crtsh.txt"
     ]
   },
+  "diff_snapshot": {
+    "inputs": [
+      "live_subs.txt",
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt",
+      "js_bundles"
+    ],
+    "outputs": [
+      "new_subdomains.txt",
+      "new_js_assets.txt",
+      "diff_report.json",
+      "diff_report.md"
+    ],
+    "dependencies": [
+      "merge_brute_subs",
+      "jsmap_scrape"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "rfuf",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "new_subdomains.txt",
+      "new_js_assets.txt"
+    ]
+  },
   "dirbrute_ffuf": {
     "inputs": [
       "alive.txt"
@@ -861,7 +893,8 @@
   },
   "merge_brute_subs": {
     "inputs": [
-      "brute_subs.txt"
+      "brute_subs.txt",
+      "live_subs.txt"
     ],
     "outputs": [
       "live_subs.txt"
@@ -1644,12 +1677,14 @@
     "dependencies": [
       "dnsx_resolve"
     ],
-    "policy": "required",
+    "policy": "optional",
     "empty_input_valid": true,
-    "timeout": "inherit",
+    "timeout": "10m0s",
     "tool": "dnsx",
     "directory_outputs": [],
-    "zero_result_outputs": []
+    "zero_result_outputs": [
+      "brute_subs.txt"
+    ]
   },
   "subfinder": {
     "inputs": [],

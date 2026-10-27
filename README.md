@@ -63,6 +63,11 @@ step, and can resume exactly where it stopped.
 - **Auto-generated `findings.md`** — severity-grouped report with retest
   hints per vulnerability class and a transparent "what was filtered out"
   appendix. Open this first after a run.
+- **Run-over-run diffing + monitoring** — each run reports *new* subdomains
+  and JS assets vs. the last run; `rfuf monitor` re-runs on a schedule and
+  pings a Slack/Discord/generic webhook only when fresh surface appears.
+- **Consolidated `findings.json`** — one machine-readable roll-up of every
+  result class (counts, samples, deltas) for your own triage tooling.
 - **Pure Go** — single static binary, no runtime dependencies.
 
 ### High-Signal Methodology Modules (NEW)
@@ -330,6 +335,73 @@ on big targets, or `-step-timeout 0` only when you explicitly want unlimited
 stage runtime. Stages with known-bounded runtime (gau, waybackurls) additionally
 carry their own per-stage cap (10 minutes); see the stage table below.
 
+### Run-over-run diffing (new subdomains & JS)
+
+Recon is most valuable when it is repeated: the subdomain or JavaScript bundle
+that appears *between* sweeps is fresh, un-triaged attack surface. On every run
+the `diff_snapshot` stage compares the current inventories against the previous
+run's stored baseline and writes just the deltas:
+
+- `new_subdomains.txt` — hosts in `live_subs.txt` not seen on the last run.
+- `new_js_assets.txt` — URLs in `js_assets.txt` not seen on the last run.
+- `diff_report.md` / `diff_report.json` — new **and** removed entries, with counts.
+
+The first run on a target simply establishes the baseline (no deltas). Each run
+promotes its inventory to `.rfuf/history/latest/` and keeps a timestamped
+archive (last 10). Baselines live under `.rfuf/`, so they survive both `-resume`
+and fresh runs into the same per-domain directory — re-run RFUF periodically and
+read `new_subdomains.txt` first.
+
+### Continuous monitoring & notifications
+
+Recon pays off when it is repeated and you are told what changed. Three
+pieces close that loop:
+
+**Consolidated export.** Every run writes `findings.json` — one machine-
+readable roll-up of all result classes (counts + samples, most-severe first)
+plus the run-over-run `new_subdomains` / `new_js_assets` deltas. Feed it to
+your own triage tooling instead of grepping dozens of `.txt` files.
+
+**Notifications.** Point RFUF at a webhook and it posts a run digest on
+completion:
+
+```bash
+rfuf -d example.com -notify-webhook https://hooks.slack.com/services/XXX
+```
+
+The format is inferred from the URL (`hooks.slack.com` → Slack,
+`discord.com/api/webhooks` → Discord, anything else → the raw `findings.json`),
+or force it with `-notify-type slack|discord|generic`. By default RFUF only
+notifies when the diff found **new** subdomains or JS (`-notify-on change`);
+use `-notify-on always` for a completion ping every run.
+
+**Monitor mode.** Re-run on a schedule and only hear about changes:
+
+```bash
+rfuf monitor -interval 6h -iterations 0 -d example.com \
+  -notify-webhook https://discord.com/api/webhooks/XXX
+```
+
+`monitor` forwards every non-monitor flag (`-d`, auth, `-notify-*`, …) to a
+normal scan each interval; `-iterations 0` runs forever, a positive count
+stops after N runs. Change detection and alerting ride the normal run path,
+so a monitored target stays quiet until fresh attack surface appears.
+
+**Config file.** Set durable defaults in `~/.config/rfuf/config.json` (or
+`$RFUF_CONFIG`) so you don't repeat flags:
+
+```json
+{
+  "output_dir": "/data/bb",
+  "notify_webhook": "https://hooks.slack.com/services/XXX",
+  "notify_on": "change"
+}
+```
+
+Precedence is flag > environment variable (`$RFUF_OUTPUT_DIR`,
+`$RFUF_NOTIFY_WEBHOOK`, `$RFUF_NOTIFY_TYPE`, `$RFUF_NOTIFY_ON`) > config file
+> built-in default.
+
 ### Fedora setup troubleshooting
 
 On Fedora, RFUF passes the terminal’s standard input to `sudo dnf`, so package installation can request the user password normally. The installer checks representative executables rather than treating package names such as `ca-certificates` and `openssl` as PATH commands; this prevents a needless `git` package prompt when Git is already installed.
@@ -421,6 +493,7 @@ added per the bb-methodology / security-arsenal playbook are marked
 | 8 | GraphQL exposure | `nuclei` (graphql panel templates) | `graphql_exposed.txt` |
 | 9 | Crawling | `katana` | `katana_urls.txt` → `clean_katana_urls.txt` |
 | 10 | Secret scanning | `trufflehog` + grep | `trufflehog_results.txt`, `potential_secrets.txt` |
+| 10 | Run-over-run diff (**new**) | `rfuf diff-snapshot <workdir>` | `new_subdomains.txt`, `new_js_assets.txt`, `diff_report.md`, `diff_report.json` |
 | 11 | Historical URL mining | `gau`, `waybackurls` | `all_urls.txt` |
 | 12 | URL dedup | `sort -u` | `all_urls.txt`, `uro_urls.txt` |
 | 13 | 200-only URL filter (**new**) | `httpx -mc 200` | `all_urls_200.txt` |
@@ -482,7 +555,10 @@ large targets (thousands of alive hosts):
 ~/Desktop/Bug_Bounty/<domain>/
 ├── .rfuf/
 │   ├── checkpoint.json    # resume state
-│   └── rfuf.log           # full command log
+│   ├── rfuf.log           # full command log
+│   └── history/           # run-over-run snapshots (baseline + archives)
+│       ├── latest/        # the inventory the next run diffs against
+│       └── <timestamp>/   # per-run archive (last 10 kept)
 ├── scope.json
 ├── in_scope_hosts.txt
 ├── out_of_scope_hosts.txt
@@ -505,6 +581,10 @@ large targets (thousands of alive hosts):
 ├── all_urls.txt
 ├── all_urls_200.txt
 ├── js_assets.txt
+├── new_subdomains.txt     # subdomains first seen on THIS run (vs last run)
+├── new_js_assets.txt      # JS assets first seen on THIS run (vs last run)
+├── diff_report.md         # run-over-run delta summary (new/removed)
+├── diff_report.json       # machine-readable delta report
 ├── js_endpoints.txt
 ├── js_asset_metadata.jsonl
 ├── js_asset_errors.jsonl
@@ -525,6 +605,7 @@ large targets (thousands of alive hosts):
 ├── ffuf_results/
 ├── ffuf_dirs_200.txt
 ├── manual_business_logic_review.txt
+├── findings.json         # consolidated machine-readable roll-up (all classes + deltas)
 ├── SUMMARY.md
 └── findings.md
 ```
@@ -578,7 +659,10 @@ rfuf/
 ├── internal/
 │   ├── checkpoint/        # persistent resume state
 │   ├── cli/               # live alt-screen dashboard renderer
-│   ├── config/            # path resolution (home, gopath, wordlists)
+│   ├── config/            # path resolution + settings (output dir, notify) from file/env
+│   ├── diffsnap/          # run-over-run diffing (new subdomains / JS assets)
+│   ├── digest/            # consolidated findings.json roll-up
+│   ├── notify/            # Slack / Discord / generic webhook notifier
 │   ├── executor/          # bash command runner + log writer + auth/env threading
 │   ├── filter/            # "is this URL testable?" library
 │   ├── installer/         # tool installation & verification
@@ -622,10 +706,14 @@ this dispatcher.
 
 - [ ] Parallel stages where dependencies allow (currently strictly
   sequential).
-- [ ] Configurable output directory via env var or flag.
-- [ ] Optional config file for stage toggles / custom nuclei tags.
+- [x] Configurable output directory via env var or flag (`-output-dir` /
+  `$RFUF_OUTPUT_DIR` / config file).
+- [x] Optional config file (`~/.config/rfuf/config.json` or `$RFUF_CONFIG`)
+  for output dir and notification defaults.
 - [ ] macOS / WSL testing in CI.
-- [ ] Webhook notification on pipeline completion.
+- [x] Webhook notification on pipeline completion (`-notify-webhook`;
+  Slack / Discord / generic).
+- [x] Continuous monitoring (`rfuf monitor`) with notify-on-change.
 
 ## Disclaimer
 
