@@ -242,6 +242,44 @@ func probeOne(ctx context.Context, client *http.Client, provider, bucket, host s
 		// Treat as ambiguous.
 		severity = "INFO"
 	}
-	return fmt.Sprintf("%s\t%s\tbucket=%s\tstatus=%d\tseverity=%s\thost=%s",
+	region := resp.Header.Get("x-amz-bucket-region")
+	line := fmt.Sprintf("%s\t%s\tbucket=%s\tstatus=%d\tseverity=%s\thost=%s",
 		provider, severity, bucket, status, severity, host)
+	if region != "" {
+		line += "\tregion=" + region
+	}
+	// For a public-readable S3 bucket, confirm and quantify exposure with an
+	// actual object listing rather than reporting the bare 200.
+	if provider == "s3" && status == 200 {
+		if objs := s3ObjectCount(ctx, client, host); objs >= 0 {
+			line += fmt.Sprintf("\tobjects=%d\tlistable=true", objs)
+		}
+	}
+	return line
+}
+
+// s3ObjectCount issues a ListObjectsV2 request and returns the visible object
+// count, or -1 if the bucket is not publicly listable.
+func s3ObjectCount(ctx context.Context, client *http.Client, host string) int {
+	req, err := iohelp.NewRequestWithContext(ctx, "GET", strings.TrimRight(host, "/")+"/?list-type=2&max-keys=1000", nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("User-Agent", "rfuf-buckets/1.0")
+	iohelp.ApplyAuth(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return -1
+	}
+	buf := make([]byte, 64*1024)
+	n, _ := resp.Body.Read(buf)
+	body := string(buf[:n])
+	if !strings.Contains(body, "<ListBucketResult") {
+		return -1
+	}
+	return strings.Count(body, "<Key>")
 }

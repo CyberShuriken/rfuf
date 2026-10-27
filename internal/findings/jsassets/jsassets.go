@@ -194,7 +194,15 @@ func Run(workDir string) error {
 				continue
 			}
 			seenAssets[assetURL] = true
-			assetParsed, _ := url.Parse(assetURL)
+			assetParsed, parseErr := url.Parse(assetURL)
+			if parseErr != nil || assetParsed == nil {
+				// One malformed asset URL (e.g. a bracketed/invalid IPv6 host)
+				// must not nil-panic and take down the whole jsassets stage.
+				if err := writeFailure(errorWriter, errorTextWriter, &failedCount, assetURL, "", "unparseable_url", 0); err != nil {
+					return err
+				}
+				continue
+			}
 			body, meta, fetchErr := fetch(client, assetURL, assetKind(assetParsed), maxAssetBytes)
 			if fetchErr != nil {
 				if err := writeFailure(errorWriter, errorTextWriter, &failedCount, assetURL, assetParsed.Hostname(), fetchErr.Error(), meta.Status); err != nil {

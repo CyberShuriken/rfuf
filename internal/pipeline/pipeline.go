@@ -389,7 +389,11 @@ var (
 		"waf_detect":          true,
 		"port_scan_naabu":     true,
 	}
-	nucleiOptimized        = " -rl ${RFUF_MAX_STAGE_REQUESTS:-300} -c 50 -bs 25 -timeout 5 -retries 1 -silent -stats -stats-interval 30"
+	// Rate and concurrency are env-driven so the WAF-pacing snippet can lower
+	// them per stage; -mhe (max-host-errors) makes nuclei stop hammering a host
+	// after it returns too many errors, which is what prevents the 70k-130k
+	// error storms seen against CloudFront/Varnish edges.
+	nucleiOptimized = " -rl ${RFUF_NUCLEI_RL:-${RFUF_MAX_STAGE_REQUESTS:-300}} -c ${RFUF_NUCLEI_CONC:-50} -bs 25 -mhe ${RFUF_NUCLEI_MHE:-30} -timeout 5 -retries 1 -silent -stats -stats-interval 30"
 	maxScanTargets         = 5000
 	urlMinerTimeout        = "10m"
 	sqlmapScanTimeout      = "15m"
@@ -464,6 +468,21 @@ WAF_DALFOX_BYPASS=""
 `
 }
 
+// buildNucleiPacingSnippet emits a snippet that, when a rate-limiting edge
+// (CloudFront/Cloudflare/Varnish/Akamai/Fastly/Imperva/Sucuri) is fingerprinted
+// in waf_detections.txt or tech_fingerprint.txt, lowers nuclei's request rate
+// and concurrency for this stage via the RFUF_NUCLEI_* vars that nucleiOptimized
+// reads. It must run in the same shell as the nuclei invocation it precedes.
+func buildNucleiPacingSnippet() string {
+	return `
+if { cat waf_detections.txt tech_fingerprint.txt; } 2>/dev/null | grep -qiE 'cloudfront|cloudflare|varnish|akamai|fastly|imperva|sucuri'; then
+  export RFUF_NUCLEI_RL="${RFUF_NUCLEI_RL:-40}"
+  export RFUF_NUCLEI_CONC="${RFUF_NUCLEI_CONC:-15}"
+  echo "[*] WAF/CDN edge detected — pacing nuclei (rl=${RFUF_NUCLEI_RL} c=${RFUF_NUCLEI_CONC})" >&2
+fi
+`
+}
+
 func GetSteps(domain string, paths *config.Paths) []Step {
 	parsed, err := scope.Parse(domain)
 	if err != nil {
@@ -478,6 +497,8 @@ func GetStepsForScope(scanScope scope.Scope, paths *config.Paths) []Step {
 	wordlist := pickWordlist(paths)
 	dnsWordlist := pickSubdomainWordlist(paths)
 	authSnip := buildAuthHeaderSnippet()
+	// Prefix for the full-corpus nuclei stages: auth headers + WAF-aware pacing.
+	nucleiPre := authSnip + buildNucleiPacingSnippet()
 	self := selfBin()
 	filterTestableRef := self + " filter-testable"
 	findingsRunnerRef := self + " findings"
@@ -568,10 +589,18 @@ fetch_spec() {
   [ -n "$RFUF_BUG_BOUNTY_USERNAME" ] && AUTH_HEADERS+=(-H "X-Bug-Bounty: $RFUF_BUG_BOUNTY_USERNAME" -H "X-HackerOne-Research: $RFUF_BUG_BOUNTY_USERNAME")
   [ -n "$RFUF_TEST_ACCOUNT_EMAIL" ] && AUTH_HEADERS+=(-H "X-Test-Account-Email: $RFUF_TEST_ACCOUNT_EMAIL")
   SAFE_HOST=$(echo "$HOST" | sed 's|https\?://||;s|[:/.]|_|g')
-  for SPEC_PATH in /openapi.json /swagger.json /api/openapi.json /api/swagger.json /sitemap.xml /robots.txt /.well-known/openid-configuration; do
+  for SPEC_PATH in /openapi.json /swagger.json /api/openapi.json /api/swagger.json /sitemap.xml; do
     URL="${HOST}${SPEC_PATH}"
-    OUT="api_specs/${SAFE_HOST}$(echo "$SPEC_PATH" | sed 's|^/||;s|/|_|g').json"
+    case "$SPEC_PATH" in *.xml) EXT=xml ;; *) EXT=json ;; esac
+    OUT="api_specs/${SAFE_HOST}$(echo "$SPEC_PATH" | sed 's|^/||;s|/|_|g;s|\.[a-z]*$||').${EXT}"
     if curl -sk --max-time 5 "${AUTH_HEADERS[@]}" -o "$OUT" "$URL" && [ -s "$OUT" ]; then
+      # Keep only bodies that actually look like a spec; a 404 HTML page or a
+      # stray doc must not be parsed as one. Record the real fetch URL in a
+      # .src sidecar so specparser can reconstruct the host losslessly.
+      if [ "$EXT" = json ] && ! grep -qE '"(paths|openapi|swagger)"' "$OUT"; then
+        rm -f "$OUT"; continue
+      fi
+      echo "$URL" > "$OUT.src"
       echo "[+] Found spec: $URL"
     fi
   done
@@ -615,9 +644,20 @@ grep -Eih '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-
 # Also scan JS bundles for embedded secrets (no URL false positives here)
 [ -s js_bundles/ ] && grep -Eroh '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-(test_|live_)?[A-Za-z0-9]{24,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_.+/=-]+|xox[baprs]-[A-Za-z0-9-]{10,}|sk_live_[A-Za-z0-9]{24,}|ya29\.[0-9A-Za-z_-]{50,})' js_bundles/ 2>/dev/null | sort -u >> js_secrets.txt
 exit 0`, "grep", "grep", []string{"katana_crawl", "jsmap_scrape"}, 0},
-		{"katana_crawl", fmt.Sprintf("awk '{print $1}' alive.txt | head -n %d > katana_targets.txt && katana -list katana_targets.txt -jc -kf all -d 2 -ct 10m -timeout 10 -iqp -o katana_urls.txt && sort -u katana_urls.txt -o clean_katana_urls.txt", katanaTargetCap), "katana", "default", []string{"httpx_probe"}, katanaStepTimeout},
-		{"gau_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout %s cat live_subs.txt | gau --threads 5 --subs | tee gau_urls.txt", urlMinerTimeout), "gau", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
-		{"wayback_urls", fmt.Sprintf("[ -s live_subs.txt ] && timeout %s cat live_subs.txt | waybackurls | tee wayback_urls.txt", urlMinerTimeout), "waybackurls", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
+		{"katana_crawl", fmt.Sprintf(`%s
+awk '{print $1}' alive.txt | head -n %d > katana_targets.txt && katana -list katana_targets.txt -jc -kf all -d 2 -ct 10m -timeout 10 -iqp "${AUTH_HEADERS[@]}" -o katana_urls.txt && sort -u katana_urls.txt -o clean_katana_urls.txt`, authSnip, katanaTargetCap), "katana", "default", []string{"httpx_probe"}, katanaStepTimeout},
+		{"gau_urls", fmt.Sprintf(`: > gau_urls.txt
+if [ -s live_subs.txt ]; then
+  # Read domains from stdin (not cat|tee: tee's exit 0 used to mask a failing
+  # gau as a clean empty run). Capture stderr so a dead source is diagnosable.
+  timeout %s gau --threads 5 --subs --providers wayback,commoncrawl,otx,urlscan < live_subs.txt > gau_urls.txt 2> gau_stderr.log || echo "[!] gau exited non-zero (see gau_stderr.log)" >&2
+fi
+exit 0`, urlMinerTimeout), "gau", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
+		{"wayback_urls", fmt.Sprintf(`: > wayback_urls.txt
+if [ -s live_subs.txt ]; then
+  timeout %s waybackurls < live_subs.txt > wayback_urls.txt 2> wayback_stderr.log || echo "[!] waybackurls exited non-zero (see wayback_stderr.log)" >&2
+fi
+exit 0`, urlMinerTimeout), "waybackurls", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
 		{"spec_parser", fmt.Sprintf("%s specparser .", findingsRunnerRef), "findings-runner", "default", []string{"api_discovery"}, 0},
 		{"merge_all_urls", `: > all_urls.txt
 touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt
@@ -634,6 +674,9 @@ fi
 httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405,500 "${AUTH_HEADERS[@]}" > all_urls_status.txt
 awk '/ \[(200|301|302)\]/ {print $1}' all_urls_status.txt > all_urls_200.txt
 awk '/ \[(401|403|500)\]/ {print}' all_urls_status.txt > high_interest_urls.txt
+# Auth-walled (401/403) URL column — fed to the param-agnostic path lane
+# (nuclei/bypass403) so logged-out surface behind a login is still probed.
+awk '/ \[(401|403)\]/ {print $1}' all_urls_status.txt > auth_walled_urls.txt
 # Order the review list by HTTP status descending (500 > 403 > 401) so the
 # most interesting responses (server errors, forbidden-but-present endpoints)
 # sort above bare 401s. Stable, so same-status rows keep their scan order.
@@ -672,13 +715,19 @@ printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage
   awk '{print $1}' alive.txt 2>/dev/null
   awk '{print $1}' all_urls_200.txt 2>/dev/null
   cat js_endpoints.txt 2>/dev/null
+  # Path lane: path-based discovered routes (SPA/REST/OpenAPI) and auth-walled
+  # 401/403 endpoints. These have no query string so the param-gated DAST
+  # generators drop them, but nuclei's path/misconfig/exposure/auth/idor
+  # templates test them directly.
+  awk '{print $1}' all_urls.txt 2>/dev/null
+  awk '{print $1}' high_interest_urls.txt 2>/dev/null
 } | grep -E '^https?://' | sed 's/[[:space:]]*$//' | sort -u | head -n %d > nuclei_targets.txt
 printf 'inputs alive=%%s urls=%%s js=%%s targets=%%s\\n' "$(wc -l < alive.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "$(wc -l < nuclei_targets.txt 2>/dev/null || echo 0)" > nuclei_targets_status.txt
 exit 0`, nucleiTargetCap), "awk", "grep", []string{"scope_filter"}, 0},
-		{"nuclei_exposures", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags exposure %s -o credentials_found.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
-		{"nuclei_misconfigs", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags misconfig %s -o misconfigs.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
-		{"nuclei_auth_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags auth %s -o auth_results.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
-		{"nuclei_graphql_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags graphql %s -o nuclei_graphql_scan.txt", authSnip, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
+		{"nuclei_exposures", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags exposure %s -o credentials_found.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
+		{"nuclei_misconfigs", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags misconfig %s -o misconfigs.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
+		{"nuclei_auth_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags auth %s -o auth_results.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
+		{"nuclei_graphql_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags graphql %s \"${AUTH_HEADERS[@]}\" -o nuclei_graphql_scan.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
 		{"filter_testable_sqli", fmt.Sprintf(`%s . all_urls_200.txt > sqli_targets_filtered.txt
 [ -s sqli_targets_filtered.txt ] && { gf sqli sqli_targets_filtered.txt >> sqli_targets.txt; grep -Ei '%s' sqli_targets_filtered.txt >> sqli_targets.txt; }
 [ -s sqli_targets.txt ] && sort -u sqli_targets.txt -o sqli_targets.txt
@@ -907,14 +956,34 @@ if command -v wafw00f >/dev/null 2>&1; then
   # while wafw00f expects one URL per line. Keep only the URL column and
   # retain a bounded input so a wildcard scope cannot create an unbounded
   # WAF fingerprinting stage.
-  awk '{print $1}' alive.txt 2>/dev/null | sed '/^$/d' | head -n 200 > waf_targets_tmp.txt
+  # Keep only the URL column, drop blanks, non-http lines, and bracketed/
+  # malformed IPv6 hosts — wafw00f (Python) aborts the whole batch with
+  # "ValueError: Invalid IPv6 URL" on one bad line.
+  awk '{print $1}' alive.txt 2>/dev/null | sed '/^$/d' | grep -E '^https?://' | grep -v '[][]' | head -n 200 > waf_targets_tmp.txt
   if [ -s waf_targets_tmp.txt ]; then
     wafw00f -i waf_targets_tmp.txt -o waf_detections.txt >/dev/null 2>&1 || :
   fi
 fi
 exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
-		{"port_scan_naabu", "if command -v naabu >/dev/null 2>&1; then naabu -list alive.txt -top-ports 1000 -rate 1000 -silent -o naabu_ports.txt; else : > naabu_ports.txt; fi", "naabu", "grep", []string{"httpx_probe"}, 0},
-		{"hidden_params_arjun", "if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then head -n 100 alive.txt > arjun_targets_tmp.txt; arjun -i arjun_targets_tmp.txt -oT hidden_params.txt -t 10 --rate-limit 10; rm -f arjun_targets_tmp.txt; else : > hidden_params.txt; fi", "arjun", "grep", []string{"httpx_probe"}, 0},
+		{"port_scan_naabu", `: > naabu_ports.txt
+if command -v naabu >/dev/null 2>&1; then
+  # Reduce URL rows to bare hosts and drop bracketed/malformed hosts.
+  awk '{print $1}' alive.txt 2>/dev/null | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | grep -v '[][]' | sort -u > naabu_targets.txt
+  # SYN scan needs CAP_NET_RAW/root; fall back to a TCP connect scan when
+  # unprivileged so the stage yields ports instead of exiting 1 with none.
+  SCAN_TYPE=""; [ "$(id -u)" != "0" ] && SCAN_TYPE="-s connect"
+  [ -s naabu_targets.txt ] && { naabu -list naabu_targets.txt -top-ports 1000 -rate 1000 -silent $SCAN_TYPE -o naabu_ports.txt || echo "[!] naabu exited non-zero" >&2; }
+fi
+exit 0`, "naabu", "grep", []string{"httpx_probe"}, 0},
+		{"hidden_params_arjun", `: > hidden_params.txt
+if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then
+  # arjun (Python) wants one URL per line; feed the sanitized URL column so a
+  # metadata row or bad IPv6 host can't crash it ("Invalid IPv6 URL").
+  awk '{print $1}' alive.txt 2>/dev/null | grep -E '^https?://' | grep -v '[][]' | head -n 100 > arjun_targets_tmp.txt
+  [ -s arjun_targets_tmp.txt ] && { arjun -i arjun_targets_tmp.txt -oT hidden_params.txt -t 10 --rate-limit 10 || echo "[!] arjun exited non-zero" >&2; }
+  rm -f arjun_targets_tmp.txt
+fi
+exit 0`, "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt; else : > ghauri_results.txt; fi", "ghauri", "grep", []string{"sqli_targets_replace"}, 0},
 		{"reflection_run", fmt.Sprintf("%s reflection .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
 		{"paramshape_run", fmt.Sprintf("%s paramshape .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
@@ -931,13 +1000,14 @@ exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
 		{"businesslogic_run", fmt.Sprintf("%s businesslogic .", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
 		{"hostheader_run", fmt.Sprintf("%s hostheader .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"cors2_run", fmt.Sprintf("%s cors2 .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
-		{"nuclei_rfuf_pass", fmt.Sprintf(`if [ -n "%s" ] && [ -d "%s" ]; then
+		{"nuclei_rfuf_pass", fmt.Sprintf(`%s
+		if [ -n "%s" ] && [ -d "%s" ]; then
 		  nuclei -l nuclei_targets.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt
 		else
 		  echo "[!] nuclei-templates-rfuf overlay not found — skipping custom template pass"
 		  : > nuclei_rfuf_pass.txt
 		fi
-		exit 0`, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
+		exit 0`, nucleiPre, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, paths.NucleiTemplatesRfuf, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
 		{"env_secrets_run", fmt.Sprintf("%s\n%s envsecrets .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"dirbrute_ffuf"}, 0},
 		{"git_exposure_run", fmt.Sprintf("%s\n%s gitexposure .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"env_secrets_run"}, 0},
 		{"paramsprayer_run", fmt.Sprintf("%s\n%s paramsprayer .", authSnip, findingsRunnerRef), "findings-runner", "default", []string{"url_filter_alive"}, 0},
@@ -1653,6 +1723,17 @@ func ValidateStepContracts(steps []Step) error {
 	return nil
 }
 
+// artifactLineCount returns the line count of a work-directory artifact via the
+// shared coverage metric, or 0 if it is missing/unmeasurable. Used by the
+// coverage gate to compute the DAST funnel ratio.
+func artifactLineCount(workDir, name string) int {
+	metrics := coverage.MeasureArtifacts(workDir, []string{name})
+	if len(metrics) == 1 {
+		return metrics[0].Lines
+	}
+	return 0
+}
+
 func containsPath(paths []string, expected string) bool {
 	for _, path := range paths {
 		if path == expected {
@@ -1693,6 +1774,22 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 	}
 	if err == nil {
 		report = coverage.Evaluate(domain, startedAt, time.Now(), stageRecords)
+		// Funnel anomaly: many discovered URLs but zero testable DAST targets
+		// means the entire injection half ran on empty input (the SPA/REST
+		// collapse this release targets). Record-based anomalies are added
+		// inside Evaluate; this file-content check needs the work directory.
+		if discovered := artifactLineCount(paths.WorkDir, "all_urls.txt"); discovered >= 50 {
+			testable := 0
+			for _, f := range []string{"sqli_targets.txt", "xss_targets.txt", "rce_targets.txt", "idor_targets.txt", "ssrf_targets.txt", "redirect_targets.txt", "lfi_targets.txt"} {
+				testable += artifactLineCount(paths.WorkDir, f)
+			}
+			if testable == 0 {
+				report.Anomalies = append(report.Anomalies, fmt.Sprintf("0 testable DAST targets generated from %d discovered URLs", discovered))
+				if report.Status == "COMPLETE" {
+					report.Status = "DEGRADED"
+				}
+			}
+		}
 		authMode, authErr := authenticationMode(paths.WorkDir)
 		if authErr != nil {
 			report.Status = "INCOMPLETE"
@@ -1709,7 +1806,9 @@ func finalizeRun(domain string, paths *config.Paths, cp *checkpoint.Checkpoint, 
 			runErr = writeErr
 		}
 		if report.Status != "COMPLETE" && runErr == nil {
-			runErr = fmt.Errorf("coverage incomplete: %s", strings.Join(report.RequiredIssues, "; "))
+			issues := append([]string{}, report.RequiredIssues...)
+			issues = append(issues, report.Anomalies...)
+			runErr = fmt.Errorf("coverage %s: %s", strings.ToLower(report.Status), strings.Join(issues, "; "))
 		}
 	}
 	evidenceRecords, evidenceErr := evidence.BuildIndex(paths.WorkDir)

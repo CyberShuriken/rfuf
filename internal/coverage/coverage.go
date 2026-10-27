@@ -81,6 +81,7 @@ type CoverageReport struct {
 	SkippedStages   int           `json:"skipped_stages"`
 	BlockedStages   int           `json:"blocked_stages"`
 	RequiredIssues  []string      `json:"required_issues,omitempty"`
+	Anomalies       []string      `json:"anomalies,omitempty"`
 	Stages          []StageRecord `json:"stages"`
 }
 
@@ -425,7 +426,58 @@ func Evaluate(domain string, startedAt, finishedAt time.Time, records []StageRec
 			report.Status = "INCOMPLETE"
 		}
 	}
+	// Cross-stage anomaly detection: a run can satisfy every required stage
+	// yet have a whole capability silently produce nothing (soft-stage crashes
+	// and dead URL sources are Required=false, so they never reach the checks
+	// above). Surface them as a loud DEGRADED status instead of a green run.
+	report.Anomalies = append(report.Anomalies, detectAnomalies(records)...)
+	if report.Status == "COMPLETE" && len(report.Anomalies) > 0 {
+		report.Status = "DEGRADED"
+	}
 	return report
+}
+
+// detectAnomalies returns cross-stage warning signals derived purely from the
+// stage records. File-content signals (e.g. the DAST funnel ratio) are added by
+// the caller where the work directory is available.
+func detectAnomalies(records []StageRecord) []string {
+	var anomalies []string
+	byID := make(map[string]StageRecord, len(records))
+	for _, r := range records {
+		byID[r.StageID] = r
+	}
+
+	// 1. Soft-stage crashes (recorded Failed with ExitCode -1) — swallowed
+	// during the run because the stage is not Required.
+	for _, r := range records {
+		if r.Status == StatusFailed && r.ExitCode == -1 {
+			msg := fmt.Sprintf("stage %s crashed (exit -1)", r.StageID)
+			if r.Error != "" {
+				msg += ": " + r.Error
+			}
+			anomalies = append(anomalies, msg)
+		}
+	}
+
+	// 2. URL discovery sources that returned nothing. If a majority of the
+	// present sources are empty the discovery corpus is likely starved.
+	sources := []string{"gau_urls", "wayback_urls", "katana_crawl"}
+	var emptyNames []string
+	present := 0
+	for _, s := range sources {
+		r, ok := byID[s]
+		if !ok {
+			continue
+		}
+		present++
+		if r.OutputCount == 0 {
+			emptyNames = append(emptyNames, s)
+		}
+	}
+	if present > 0 && len(emptyNames) >= (present+1)/2 {
+		anomalies = append(anomalies, fmt.Sprintf("%d of %d URL discovery sources returned 0 (%s)", len(emptyNames), present, strings.Join(emptyNames, ", ")))
+	}
+	return anomalies
 }
 
 func WriteReport(workDir string, report CoverageReport) error {
