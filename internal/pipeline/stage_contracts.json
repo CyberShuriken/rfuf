@@ -1206,13 +1206,13 @@
   },
   "port_scan_naabu": {
     "inputs": [
-      "alive.txt"
+      "live_subs.txt"
     ],
     "outputs": [
       "naabu_ports.txt"
     ],
     "dependencies": [
-      "httpx_probe"
+      "merge_brute_subs"
     ],
     "policy": "optional",
     "empty_input_valid": true,

@@ -971,14 +971,16 @@ fi
 exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
 		{"port_scan_naabu", `: > naabu_ports.txt
 if command -v naabu >/dev/null 2>&1; then
-  # Reduce URL rows to bare hosts and drop bracketed/malformed hosts.
-  awk '{print $1}' alive.txt 2>/dev/null | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | grep -v '[][]' | sort -u > naabu_targets.txt
+  # Scan ALL resolved hosts (live_subs.txt), not just HTTP-200 ones (alive.txt):
+  # non-HTTP services — Celery Flower, *-db, *-redis, internal k8s API — resolve
+  # in DNS but never appear in alive.txt, yet are exactly what a port scan is for.
+  awk '{print $1}' live_subs.txt 2>/dev/null | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | grep -v '[][]' | sort -u > naabu_targets.txt
   # SYN scan needs CAP_NET_RAW/root; fall back to a TCP connect scan when
   # unprivileged so the stage yields ports instead of exiting 1 with none.
   SCAN_TYPE=""; [ "$(id -u)" != "0" ] && SCAN_TYPE="-s connect"
   [ -s naabu_targets.txt ] && { naabu -list naabu_targets.txt -top-ports 1000 -rate 1000 -silent $SCAN_TYPE -o naabu_ports.txt || echo "[!] naabu exited non-zero" >&2; }
 fi
-exit 0`, "naabu", "grep", []string{"httpx_probe"}, 0},
+exit 0`, "naabu", "grep", []string{"merge_brute_subs"}, 0},
 		{"hidden_params_arjun", `: > hidden_params.txt
 if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then
   # arjun (Python) wants one URL per line; feed the sanitized URL column so a
