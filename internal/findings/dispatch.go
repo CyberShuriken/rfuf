@@ -18,6 +18,7 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/findings/idor"
 	"github.com/CyberShuriken/rfuf/internal/findings/jsassets"
 	"github.com/CyberShuriken/rfuf/internal/findings/jsmine"
+	"github.com/CyberShuriken/rfuf/internal/findings/mobile"
 	"github.com/CyberShuriken/rfuf/internal/findings/nextjsbypass"
 	"github.com/CyberShuriken/rfuf/internal/findings/oauth"
 	"github.com/CyberShuriken/rfuf/internal/findings/paramshape"
@@ -60,6 +61,7 @@ var Dispatch = map[string]func(workDir string) error{
 	"s3auditor":     s3auditor.Run,
 	"apiversion":    apiversion.Run,
 	"graphql":       graphql.Run,
+	"mobile":        mobile.Run,
 }
 
 // RunFinder dispatches to the named finder. Returns an error for unknown

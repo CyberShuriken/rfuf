@@ -178,6 +178,8 @@ func main() {
 		"Extended regular expression for URLs to exclude before downstream scans (repeat program exclusions safely).")
 	scopeFile := flag.String("scope-file", "",
 		"Path to a file of additional in-scope assets (one per line; bare root = exact, *.root = wildcard, # comments). Pins the run to a validated multi-asset program scope so requests and findings stay within it.")
+	apkArtifact := flag.String("apk", "",
+		"Local path or URL to a mobile app artifact (APK/IPA) to statically analyze for backend endpoints and secrets; in-scope endpoints feed the scan corpus.")
 	loginURL := flag.String("login-url", "",
 		"Optional login endpoint. RFUF POSTs -login-data here, captures the resulting session cookie(s), and scans authenticated — no need to paste a cookie. Opt-in; unset = unchanged.")
 	loginData := flag.String("login-data", "",
@@ -299,6 +301,13 @@ func main() {
 	if *authRequired && strings.TrimSpace(*authCheckURL) == "" {
 		fmt.Println("[!] -auth-required needs -auth-check-url so RFUF can verify the supplied session before scanning")
 		os.Exit(1)
+	}
+	if strings.TrimSpace(*apkArtifact) != "" {
+		if err := stageAPKArtifact(paths.WorkDir, strings.TrimSpace(*apkArtifact)); err != nil {
+			fmt.Printf("[!] could not stage -apk artifact: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("[*] mobile artifact staged for static analysis")
 	}
 	buildAuthEnv(cookieValue, bearerValue, *bugBountyUsername, *testAccountEmail)
 	executor.AuthEnv["RFUF_DOMAIN"] = normalizedDomain
@@ -686,6 +695,55 @@ func runFilterTestable(args []string) error {
 //	${RFUF_AUTH_HEADER:+"--headers=Authorization: $RFUF_AUTH_HEADER"}
 //
 // and the per-tool wrappers translate them into the right CLI flags.
+// stageAPKArtifact places the operator-supplied app artifact into an isolated
+// <workDir>/mobile_artifacts/ directory for the mobile finder to read. The URL
+// is operator-provided (often an app store / CDN, intentionally outside the web
+// scope), so the download is not scope-gated; the bytes are only ever read with
+// archive/zip in-memory and never executed, so an untrusted artifact is safe.
+func stageAPKArtifact(workDir, src string) error {
+	dir := filepath.Join(workDir, "mobile_artifacts")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	name := filepath.Base(src)
+	if i := strings.IndexAny(name, "?#"); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" || name == "." || name == "/" {
+		name = "app.apk"
+	}
+	dst := filepath.Join(dir, name)
+	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+		resp, err := http.Get(src)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("download returned status %d", resp.StatusCode)
+		}
+		out, err := os.Create(dst)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		_, err = io.Copy(out, io.LimitReader(resp.Body, 500<<20))
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
 // performLogin POSTs credentials to a login endpoint and returns the captured
 // session as a "k1=v1; k2=v2" cookie string, so a scan can authenticate from a
 // username/password instead of a hand-pasted cookie. It follows redirects with

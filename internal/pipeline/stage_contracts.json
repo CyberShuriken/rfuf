@@ -871,6 +871,8 @@
       "gau_urls.txt",
       "katana_targets.txt",
       "katana_urls.txt",
+      "mobile_endpoints.txt",
+      "mobile_findings.txt",
       "openapi_paths.txt",
       "wayback_urls.txt"
     ],
@@ -882,7 +884,8 @@
       "wayback_urls",
       "katana_crawl",
       "api_discovery",
-      "spec_parser"
+      "spec_parser",
+      "mobile_recon"
     ],
     "policy": "required",
     "empty_input_valid": true,
@@ -1960,6 +1963,27 @@
       "graphql_findings.txt",
       "graphql_targets.txt",
       "graphql_candidates.txt"
+    ]
+  },
+  "mobile_recon": {
+    "inputs": [
+      "."
+    ],
+    "outputs": [
+      "mobile_endpoints.txt",
+      "mobile_findings.txt"
+    ],
+    "dependencies": [
+      "setup_directories"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "mobile_endpoints.txt",
+      "mobile_findings.txt"
     ]
   }
 }

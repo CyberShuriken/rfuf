@@ -389,6 +389,7 @@ var (
 		"waf_detect":          true,
 		"port_scan_naabu":     true,
 		"graphql_introspect":  true,
+		"mobile_recon":        true,
 	}
 	// Rate and concurrency are env-driven so the WAF-pacing snippet can lower
 	// them per stage; -mhe (max-host-errors) makes nuclei stop hammering a host
@@ -661,9 +662,10 @@ fi
 exit 0`, urlMinerTimeout), "waybackurls", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
 		{"spec_parser", fmt.Sprintf("%s specparser .", findingsRunnerRef), "findings-runner", "default", []string{"api_discovery"}, 0},
 		{"merge_all_urls", `: > all_urls.txt
-touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt
-cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt 2>/dev/null | sort -u > all_urls.txt
-exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", "api_discovery", "spec_parser"}, 0},
+touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt mobile_endpoints.txt
+cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt mobile_endpoints.txt 2>/dev/null | sort -u > all_urls.txt
+exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", "api_discovery", "spec_parser", "mobile_recon"}, 0},
+		{"mobile_recon", fmt.Sprintf("%s mobile .", findingsRunnerRef), "findings-runner", "grep", []string{"setup_directories"}, 0},
 		{"uro_dedup", "sort -u all_urls.txt -o all_urls.txt; cp all_urls.txt uro_urls.txt", "sort", "grep", []string{"merge_all_urls"}, 0},
 		{"url_filter_alive", fmt.Sprintf(`set -eu
 %s target-stream -input all_urls.txt -output all_urls_scannable.txt -source merged_discovery -status all_urls_alive_stream_status.json -provenance all_urls_alive_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
