@@ -722,9 +722,10 @@ printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage
   # templates test them directly.
   awk '{print $1}' all_urls.txt 2>/dev/null
   awk '{print $1}' high_interest_urls.txt 2>/dev/null
+  cat js_post_targets.txt 2>/dev/null
 } | grep -E '^https?://' | sed 's/[[:space:]]*$//' | sort -u | head -n %d > nuclei_targets.txt
 printf 'inputs alive=%%s urls=%%s js=%%s targets=%%s\\n' "$(wc -l < alive.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "$(wc -l < nuclei_targets.txt 2>/dev/null || echo 0)" > nuclei_targets_status.txt
-exit 0`, nucleiTargetCap), "awk", "grep", []string{"scope_filter"}, 0},
+exit 0`, nucleiTargetCap), "awk", "grep", []string{"scope_filter", "js_mine_run"}, 0},
 		{"nuclei_exposures", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags exposure %s -o credentials_found.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
 		{"nuclei_misconfigs", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags misconfig %s -o misconfigs.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
 		{"nuclei_auth_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags auth %s -o auth_results.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},

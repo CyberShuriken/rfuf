@@ -722,7 +722,8 @@
       "jsmap_status.txt"
     ],
     "outputs": [
-      "js_mine_findings.txt"
+      "js_mine_findings.txt",
+      "js_post_targets.txt"
     ],
     "dependencies": [
       "jsmap_scrape"
@@ -733,7 +734,8 @@
     "tool": "findings-runner",
     "directory_outputs": [],
     "zero_result_outputs": [
-      "js_mine_findings.txt"
+      "js_mine_findings.txt",
+      "js_post_targets.txt"
     ]
   },
   "jsmap_scrape": {
@@ -1103,27 +1105,30 @@
       "alive.txt",
       "all_urls.txt",
       "all_urls_200.txt",
+      "all_urls_200_provenance.jsonl",
       "all_urls_200_scannable.txt",
+      "all_urls_200_stream_status.json",
+      "all_urls_provenance.jsonl",
       "all_urls_scannable.txt",
+      "all_urls_stream_status.json",
+      "high_interest_provenance.jsonl",
+      "high_interest_stream_status.json",
       "high_interest_urls_scannable.txt",
       "js_endpoints.txt",
+      "js_endpoints_provenance.jsonl",
       "js_endpoints_scannable.txt",
-      "scope_filter_status.txt",
-      "all_urls_stream_status.json",
-      "all_urls_provenance.jsonl",
-      "all_urls_200_stream_status.json",
-      "all_urls_200_provenance.jsonl",
-      "high_interest_stream_status.json",
-      "high_interest_provenance.jsonl",
       "js_endpoints_stream_status.json",
-      "js_endpoints_provenance.jsonl"
+      "js_mine_findings.txt",
+      "js_post_targets.txt",
+      "scope_filter_status.txt"
     ],
     "outputs": [
       "nuclei_targets.txt",
       "nuclei_targets_status.txt"
     ],
     "dependencies": [
-      "scope_filter"
+      "scope_filter",
+      "js_mine_run"
     ],
     "policy": "required",
     "empty_input_valid": true,
