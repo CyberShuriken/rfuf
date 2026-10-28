@@ -124,6 +124,7 @@ func Run(workDir string) error {
 		sev  string // for sorting
 	}
 	var findings []finding
+	postTargets := map[string]bool{} // scope-gated POST endpoint URLs → testable targets
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -172,6 +173,12 @@ func Run(workDir string) error {
 					sev, host, path, e.Name()),
 				sev: sev,
 			})
+			// Synthesize a testable target URL from the mined POST endpoint so
+			// it enters the scan corpus instead of staying a report-only row.
+			// bundleHost can carry path segments; the first component is the host.
+			if hostOnly := strings.SplitN(host, "/", 2)[0]; hostOnly != "" && iohelp.InScope(hostOnly) {
+				postTargets["https://"+hostOnly+path] = true
+			}
 		}
 
 		// === Admin paths (in GET URLs — the existing jsmap_scrape
@@ -225,7 +232,16 @@ func Run(workDir string) error {
 	for i, f := range findings {
 		lines[i] = f.line
 	}
-	return iohelp.WriteLines(workDir+"/js_mine_findings.txt", lines)
+	if err := iohelp.WriteLines(workDir+"/js_mine_findings.txt", lines); err != nil {
+		return err
+	}
+
+	targets := make([]string, 0, len(postTargets))
+	for u := range postTargets {
+		targets = append(targets, u)
+	}
+	sort.Strings(targets)
+	return iohelp.WriteLines(workDir+"/js_post_targets.txt", targets)
 }
 
 // bundleHost reverses jsmap_scrape's filename scheme:

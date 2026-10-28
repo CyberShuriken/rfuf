@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -51,6 +52,23 @@ var LineCallback func(line string)
 // nightmares when the cookie contains characters like ';' or '&' that bash
 // would otherwise interpret. Each tool reads RFUF_AUTH_* directly.
 var AuthEnv = map[string]string{}
+
+// authMu guards AuthEnv. The scheduler loop can mutate AuthEnv mid-run (e.g.
+// applyWafStealth adds stealth headers once a WAF is detected) while many stage
+// goroutines concurrently range it in redactSecrets/rfufEnv — without this lock
+// that is a fatal "concurrent map iteration and map write". Startup population
+// in package main happens before any stage goroutine and needs no lock, but
+// every read that can run concurrently with the run, and every mid-run write,
+// goes through authMu / SetAuthEnv.
+var authMu sync.RWMutex
+
+// SetAuthEnv safely sets an AuthEnv key. Use it for any write that can happen
+// while stages are running (the scheduler loop), not the one-time startup fill.
+func SetAuthEnv(key, value string) {
+	authMu.Lock()
+	AuthEnv[key] = value
+	authMu.Unlock()
+}
 
 // OOBURL is the interactsh callback URL allocated at pipeline boot.
 // Empty string means no OOB is wired. Stage commands substitute this
@@ -347,12 +365,14 @@ func scanAndForward(r io.Reader, logWriter io.Writer, buf *bytes.Buffer) {
 }
 
 func redactSecrets(text string) string {
+	authMu.RLock()
 	secrets := make([]string, 0, len(AuthEnv)+2)
 	for key, value := range AuthEnv {
 		if strings.Contains(strings.ToLower(key), "auth") && len(value) >= 4 {
 			secrets = append(secrets, value)
 		}
 	}
+	authMu.RUnlock()
 	for _, value := range []string{OOBToken} {
 		if len(value) >= 4 {
 			secrets = append(secrets, value)
@@ -392,6 +412,7 @@ func rfufEnv() []string {
 		"RFUF_OOB_TOKEN=" + OOBToken,
 	}
 	// Stable ordering for predictable test logs.
+	authMu.RLock()
 	keys := []string{}
 	for k := range AuthEnv {
 		keys = append(keys, k)
@@ -400,6 +421,7 @@ func rfufEnv() []string {
 	for _, k := range keys {
 		env = append(env, k+"="+AuthEnv[k])
 	}
+	authMu.RUnlock()
 	return env
 }
 

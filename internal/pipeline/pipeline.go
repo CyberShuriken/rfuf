@@ -389,6 +389,7 @@ var (
 		"waf_detect":          true,
 		"port_scan_naabu":     true,
 		"graphql_introspect":  true,
+		"mobile_recon":        true,
 	}
 	// Rate and concurrency are env-driven so the WAF-pacing snippet can lower
 	// them per stage; -mhe (max-host-errors) makes nuclei stop hammering a host
@@ -405,7 +406,7 @@ var (
 	sqlmapHighSignalParams = "[?&](id|uid|user|account|order|doc|product|category|page|article|comment|msg|post|search|query|sort|filter|view|file|path|load|page_id|item_id|news_id|report_id|invoice)="
 	ghauriTargetCap        = 200
 	jsAssetTotalCap        = 5000
-	nucleiTargetCap        = 10000
+	nucleiTargetCap        = 2000
 	katanaTargetCap        = 200
 	katanaCrawlDuration    = "10m"
 	katanaStepTimeout      = 12 * time.Minute
@@ -661,9 +662,10 @@ fi
 exit 0`, urlMinerTimeout), "waybackurls", "default", []string{"merge_brute_subs"}, 10 * time.Minute},
 		{"spec_parser", fmt.Sprintf("%s specparser .", findingsRunnerRef), "findings-runner", "default", []string{"api_discovery"}, 0},
 		{"merge_all_urls", `: > all_urls.txt
-touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt
-cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt 2>/dev/null | sort -u > all_urls.txt
-exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", "api_discovery", "spec_parser"}, 0},
+touch gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt mobile_endpoints.txt
+cat gau_urls.txt wayback_urls.txt clean_katana_urls.txt openapi_paths.txt mobile_endpoints.txt 2>/dev/null | sort -u > all_urls.txt
+exit 0`, "cat", "default", []string{"gau_urls", "wayback_urls", "katana_crawl", "api_discovery", "spec_parser", "mobile_recon"}, 0},
+		{"mobile_recon", fmt.Sprintf("%s mobile .", findingsRunnerRef), "findings-runner", "grep", []string{"setup_directories"}, 0},
 		{"uro_dedup", "sort -u all_urls.txt -o all_urls.txt; cp all_urls.txt uro_urls.txt", "sort", "grep", []string{"merge_all_urls"}, 0},
 		{"url_filter_alive", fmt.Sprintf(`set -eu
 %s target-stream -input all_urls.txt -output all_urls_scannable.txt -source merged_discovery -status all_urls_alive_stream_status.json -provenance all_urls_alive_provenance.jsonl -max-targets "${RFUF_MAX_TARGETS:-10000}"
@@ -722,9 +724,10 @@ printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage
   # templates test them directly.
   awk '{print $1}' all_urls.txt 2>/dev/null
   awk '{print $1}' high_interest_urls.txt 2>/dev/null
+  cat js_post_targets.txt 2>/dev/null
 } | grep -E '^https?://' | sed 's/[[:space:]]*$//' | sort -u | head -n %d > nuclei_targets.txt
 printf 'inputs alive=%%s urls=%%s js=%%s targets=%%s\\n' "$(wc -l < alive.txt 2>/dev/null || echo 0)" "$(wc -l < all_urls_200.txt 2>/dev/null || echo 0)" "$(wc -l < js_endpoints.txt 2>/dev/null || echo 0)" "$(wc -l < nuclei_targets.txt 2>/dev/null || echo 0)" > nuclei_targets_status.txt
-exit 0`, nucleiTargetCap), "awk", "grep", []string{"scope_filter"}, 0},
+exit 0`, nucleiTargetCap), "awk", "grep", []string{"scope_filter", "js_mine_run"}, 0},
 		{"nuclei_exposures", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags exposure %s -o credentials_found.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
 		{"nuclei_misconfigs", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags misconfig %s -o misconfigs.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
 		{"nuclei_auth_scan", fmt.Sprintf("%s\nnuclei -l nuclei_targets.txt -tags auth %s -o auth_results.txt", nucleiPre, nucleiOptimized), "nuclei", "grep", []string{"nuclei_target_merge"}, 0},
@@ -968,14 +971,16 @@ fi
 exit 0`, "wafw00f", "grep", []string{"httpx_probe"}, 0},
 		{"port_scan_naabu", `: > naabu_ports.txt
 if command -v naabu >/dev/null 2>&1; then
-  # Reduce URL rows to bare hosts and drop bracketed/malformed hosts.
-  awk '{print $1}' alive.txt 2>/dev/null | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | grep -v '[][]' | sort -u > naabu_targets.txt
+  # Scan ALL resolved hosts (live_subs.txt), not just HTTP-200 ones (alive.txt):
+  # non-HTTP services — Celery Flower, *-db, *-redis, internal k8s API — resolve
+  # in DNS but never appear in alive.txt, yet are exactly what a port scan is for.
+  awk '{print $1}' live_subs.txt 2>/dev/null | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##' | grep -v '[][]' | sort -u > naabu_targets.txt
   # SYN scan needs CAP_NET_RAW/root; fall back to a TCP connect scan when
   # unprivileged so the stage yields ports instead of exiting 1 with none.
   SCAN_TYPE=""; [ "$(id -u)" != "0" ] && SCAN_TYPE="-s connect"
   [ -s naabu_targets.txt ] && { naabu -list naabu_targets.txt -top-ports 1000 -rate 1000 -silent $SCAN_TYPE -o naabu_ports.txt || echo "[!] naabu exited non-zero" >&2; }
 fi
-exit 0`, "naabu", "grep", []string{"httpx_probe"}, 0},
+exit 0`, "naabu", "grep", []string{"merge_brute_subs"}, 0},
 		{"hidden_params_arjun", `: > hidden_params.txt
 if command -v arjun >/dev/null 2>&1 && [ -s alive.txt ]; then
   # arjun (Python) wants one URL per line; feed the sanitized URL column so a
@@ -1004,7 +1009,13 @@ exit 0`, "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"cors2_run", fmt.Sprintf("%s cors2 .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"nuclei_rfuf_pass", fmt.Sprintf(`%s
 		if [ -n "%s" ] && [ -d "%s" ]; then
-		  nuclei -l nuclei_targets.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt
+		  # The custom overlay is ~1.5k templates; running it against the full
+		  # URL corpus (up to the cap) is millions of requests / days under WAF
+		  # pacing. Reduce to unique scheme://host so a big template set stays
+		  # tractable (host-level is the right granularity for these templates).
+		  awk -F/ 'NF>=3 {print $1"//"$3}' nuclei_targets.txt | sort -u | head -n 500 > nuclei_rfuf_hosts.txt
+		  [ -s nuclei_rfuf_hosts.txt ] || cp nuclei_targets.txt nuclei_rfuf_hosts.txt
+		  nuclei -l nuclei_rfuf_hosts.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt
 		else
 		  echo "[!] nuclei-templates-rfuf overlay not found — skipping custom template pass"
 		  : > nuclei_rfuf_pass.txt
@@ -1152,8 +1163,11 @@ func applyWafStealth(paths *config.Paths) bool {
 		return false
 	}
 
-	executor.AuthEnv["RFUF_USER_AGENT"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-	executor.AuthEnv["RFUF_STEALTH_HEADERS"] = "-H \"X-Forwarded-For: 127.0.0.1\" -H \"X-Real-IP: 127.0.0.1\""
+	// Runs inside the scheduler loop while stage goroutines range AuthEnv, so
+	// the write must be synchronized (SetAuthEnv) to avoid a fatal concurrent
+	// map iteration/write.
+	executor.SetAuthEnv("RFUF_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	executor.SetAuthEnv("RFUF_STEALTH_HEADERS", "-H \"X-Forwarded-For: 127.0.0.1\" -H \"X-Real-IP: 127.0.0.1\"")
 	return true
 }
 
