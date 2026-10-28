@@ -390,6 +390,13 @@ var (
 		"port_scan_naabu":     true,
 		"graphql_introspect":  true,
 		"mobile_recon":        true,
+		"protopollution_run":  true,
+		"ssti_run":            true,
+		"nosqli_run":          true,
+		"cachepoison_run":     true,
+		"xxe_run":             true,
+		"csrf_run":            true,
+		"smuggling_run":       true,
 	}
 	// Rate and concurrency are env-driven so the WAF-pacing snippet can lower
 	// them per stage; -mhe (max-host-errors) makes nuclei stop hammering a host
@@ -992,6 +999,13 @@ fi
 exit 0`, "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"ghauri_sqli", "if command -v ghauri >/dev/null 2>&1; then { head -n 200 sqli_targets.txt; grep -Ei '[?&](id|uid|order|product|category|page|article|comment|msg)=' sqli_targets.txt; } | sort -u | head -n 100 > ghauri_targets.txt; [ -s ghauri_targets.txt ] && ghauri -m ghauri_targets.txt --batch --level=2 --risk=1 --technique=BT -o ghauri_results.txt; else : > ghauri_results.txt; fi", "ghauri", "grep", []string{"sqli_targets_replace"}, 0},
 		{"reflection_run", fmt.Sprintf("%s reflection .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"protopollution_run", fmt.Sprintf("%s protopollution .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"ssti_run", fmt.Sprintf("%s ssti .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"nosqli_run", fmt.Sprintf("%s nosqli .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"cachepoison_run", fmt.Sprintf("%s cachepoison .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"xxe_run", fmt.Sprintf("%s xxe .", findingsRunnerRef), "findings-runner", "grep", []string{"scope_filter"}, 0},
+		{"csrf_run", fmt.Sprintf("%s csrf .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
+		{"smuggling_run", fmt.Sprintf("%s smuggling .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"paramshape_run", fmt.Sprintf("%s paramshape .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"authshape_run", fmt.Sprintf("%s authshape .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"signup_takeover_run", fmt.Sprintf("%s signup .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},

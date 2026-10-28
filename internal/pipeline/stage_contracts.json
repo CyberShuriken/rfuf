@@ -1983,5 +1983,223 @@
       "mobile_endpoints.txt",
       "mobile_findings.txt"
     ]
+  },
+  "protopollution_run": {
+    "inputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt",
+      "all_urls_stream_status.json",
+      "all_urls_provenance.jsonl",
+      "all_urls_200_stream_status.json",
+      "all_urls_200_provenance.jsonl",
+      "high_interest_stream_status.json",
+      "high_interest_provenance.jsonl",
+      "js_endpoints_stream_status.json",
+      "js_endpoints_provenance.jsonl"
+    ],
+    "outputs": [
+      "prototype_pollution_findings.txt",
+      "prototype_pollution_candidates.txt"
+    ],
+    "dependencies": [
+      "scope_filter"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "prototype_pollution_findings.txt",
+      "prototype_pollution_candidates.txt"
+    ]
+  },
+  "ssti_run": {
+    "inputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt",
+      "all_urls_stream_status.json",
+      "all_urls_provenance.jsonl",
+      "all_urls_200_stream_status.json",
+      "all_urls_200_provenance.jsonl",
+      "high_interest_stream_status.json",
+      "high_interest_provenance.jsonl",
+      "js_endpoints_stream_status.json",
+      "js_endpoints_provenance.jsonl"
+    ],
+    "outputs": [
+      "ssti_findings.txt",
+      "ssti_candidates.txt"
+    ],
+    "dependencies": [
+      "scope_filter"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "ssti_findings.txt",
+      "ssti_candidates.txt"
+    ]
+  },
+  "nosqli_run": {
+    "inputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt",
+      "all_urls_stream_status.json",
+      "all_urls_provenance.jsonl",
+      "all_urls_200_stream_status.json",
+      "all_urls_200_provenance.jsonl",
+      "high_interest_stream_status.json",
+      "high_interest_provenance.jsonl",
+      "js_endpoints_stream_status.json",
+      "js_endpoints_provenance.jsonl"
+    ],
+    "outputs": [
+      "nosqli_findings.txt",
+      "nosqli_candidates.txt"
+    ],
+    "dependencies": [
+      "scope_filter"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "nosqli_findings.txt",
+      "nosqli_candidates.txt"
+    ]
+  },
+  "cachepoison_run": {
+    "inputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt",
+      "all_urls_stream_status.json",
+      "all_urls_provenance.jsonl",
+      "all_urls_200_stream_status.json",
+      "all_urls_200_provenance.jsonl",
+      "high_interest_stream_status.json",
+      "high_interest_provenance.jsonl",
+      "js_endpoints_stream_status.json",
+      "js_endpoints_provenance.jsonl"
+    ],
+    "outputs": [
+      "cache_poisoning_findings.txt",
+      "cache_poisoning_candidates.txt"
+    ],
+    "dependencies": [
+      "scope_filter"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "cache_poisoning_findings.txt",
+      "cache_poisoning_candidates.txt"
+    ]
+  },
+  "xxe_run": {
+    "inputs": [
+      "all_urls_200_scannable.txt",
+      "all_urls_scannable.txt",
+      "high_interest_urls_scannable.txt",
+      "js_endpoints_scannable.txt",
+      "scope_filter_status.txt",
+      "all_urls.txt",
+      "all_urls_200.txt",
+      "js_endpoints.txt",
+      "all_urls_stream_status.json",
+      "all_urls_provenance.jsonl",
+      "all_urls_200_stream_status.json",
+      "all_urls_200_provenance.jsonl",
+      "high_interest_stream_status.json",
+      "high_interest_provenance.jsonl",
+      "js_endpoints_stream_status.json",
+      "js_endpoints_provenance.jsonl"
+    ],
+    "outputs": [
+      "xxe_findings.txt",
+      "xxe_candidates.txt"
+    ],
+    "dependencies": [
+      "scope_filter"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "xxe_findings.txt",
+      "xxe_candidates.txt"
+    ]
+  },
+  "csrf_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "csrf_candidates.txt"
+    ],
+    "dependencies": [
+      "httpx_probe"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "csrf_candidates.txt"
+    ]
+  },
+  "smuggling_run": {
+    "inputs": [
+      "alive.txt"
+    ],
+    "outputs": [
+      "http_smuggling_candidates.txt"
+    ],
+    "dependencies": [
+      "httpx_probe"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "http_smuggling_candidates.txt"
+    ]
   }
 }

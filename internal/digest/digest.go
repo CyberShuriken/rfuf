@@ -47,6 +47,14 @@ var coreSources = []source{
 	{"graphql_exposed", "graphql_exposed.txt", "MEDIUM"},
 	{"misconfig", "misconfigs.txt", "MEDIUM"},
 	{"secrets", "potential_secrets.txt", "MEDIUM"},
+	// Confirmed outputs of the new active scanners (their *_candidates.txt
+	// counterparts are intentionally NOT listed/globbed, so untested leads never
+	// count as submittable).
+	{"ssti", "ssti_findings.txt", "HIGH"},
+	{"prototype_pollution", "prototype_pollution_findings.txt", "HIGH"},
+	{"nosqli", "nosqli_findings.txt", "HIGH"},
+	{"xxe", "xxe_findings.txt", "HIGH"},
+	{"cache_poisoning", "cache_poisoning_findings.txt", "HIGH"},
 }
 
 // Finding tiers. "confirmed" sources are real scanner outputs whose lines can
