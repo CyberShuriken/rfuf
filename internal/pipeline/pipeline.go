@@ -406,7 +406,7 @@ var (
 	sqlmapHighSignalParams = "[?&](id|uid|user|account|order|doc|product|category|page|article|comment|msg|post|search|query|sort|filter|view|file|path|load|page_id|item_id|news_id|report_id|invoice)="
 	ghauriTargetCap        = 200
 	jsAssetTotalCap        = 5000
-	nucleiTargetCap        = 10000
+	nucleiTargetCap        = 2000
 	katanaTargetCap        = 200
 	katanaCrawlDuration    = "10m"
 	katanaStepTimeout      = 12 * time.Minute
@@ -1007,7 +1007,13 @@ exit 0`, "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"cors2_run", fmt.Sprintf("%s cors2 .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"nuclei_rfuf_pass", fmt.Sprintf(`%s
 		if [ -n "%s" ] && [ -d "%s" ]; then
-		  nuclei -l nuclei_targets.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt
+		  # The custom overlay is ~1.5k templates; running it against the full
+		  # URL corpus (up to the cap) is millions of requests / days under WAF
+		  # pacing. Reduce to unique scheme://host so a big template set stays
+		  # tractable (host-level is the right granularity for these templates).
+		  awk -F/ 'NF>=3 {print $1"//"$3}' nuclei_targets.txt | sort -u | head -n 500 > nuclei_rfuf_hosts.txt
+		  [ -s nuclei_rfuf_hosts.txt ] || cp nuclei_targets.txt nuclei_rfuf_hosts.txt
+		  nuclei -l nuclei_rfuf_hosts.txt -t "%s" %s "${AUTH_HEADERS[@]}" -o nuclei_rfuf_pass.txt
 		else
 		  echo "[!] nuclei-templates-rfuf overlay not found — skipping custom template pass"
 		  : > nuclei_rfuf_pass.txt
