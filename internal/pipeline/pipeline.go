@@ -394,7 +394,7 @@ var (
 	// them per stage; -mhe (max-host-errors) makes nuclei stop hammering a host
 	// after it returns too many errors, which is what prevents the 70k-130k
 	// error storms seen against CloudFront/Varnish edges.
-	nucleiOptimized = " -rl ${RFUF_NUCLEI_RL:-${RFUF_MAX_STAGE_REQUESTS:-300}} -c ${RFUF_NUCLEI_CONC:-50} -bs 25 -mhe ${RFUF_NUCLEI_MHE:-30} -timeout 5 -retries 1 -silent -stats -stats-interval 30"
+	nucleiOptimized        = " -rl ${RFUF_NUCLEI_RL:-${RFUF_MAX_STAGE_REQUESTS:-300}} -c ${RFUF_NUCLEI_CONC:-50} -bs 25 -mhe ${RFUF_NUCLEI_MHE:-30} -timeout 5 -retries 1 -silent -stats -stats-interval 30"
 	maxScanTargets         = 5000
 	urlMinerTimeout        = "10m"
 	sqlmapScanTimeout      = "15m"

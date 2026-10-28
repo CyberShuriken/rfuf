@@ -71,14 +71,14 @@ type Category struct {
 
 // Digest is the consolidated view of one run, written to findings.json.
 type Digest struct {
-	GeneratedAt          string     `json:"generated_at"`
-	Domain               string     `json:"domain"`
-	TotalFindings        int        `json:"total_findings"`
-	SubmittableFindings  int        `json:"submittable_findings"`
-	InformationalFindings int       `json:"informational_findings"`
-	NewSubdomains        []string   `json:"new_subdomains"`
-	NewJSAssets          []string   `json:"new_js_assets"`
-	Findings             []Category `json:"findings"`
+	GeneratedAt           string     `json:"generated_at"`
+	Domain                string     `json:"domain"`
+	TotalFindings         int        `json:"total_findings"`
+	SubmittableFindings   int        `json:"submittable_findings"`
+	InformationalFindings int        `json:"informational_findings"`
+	NewSubdomains         []string   `json:"new_subdomains"`
+	NewJSAssets           []string   `json:"new_js_assets"`
+	Findings              []Category `json:"findings"`
 }
 
 // severityRank orders categories most-severe first in the output.
