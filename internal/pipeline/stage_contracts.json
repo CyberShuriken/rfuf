@@ -1966,9 +1966,7 @@
     ]
   },
   "mobile_recon": {
-    "inputs": [
-      "."
-    ],
+    "inputs": [],
     "outputs": [
       "mobile_endpoints.txt",
       "mobile_findings.txt"
