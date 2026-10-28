@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,6 +178,14 @@ func main() {
 		"Extended regular expression for URLs to exclude before downstream scans (repeat program exclusions safely).")
 	scopeFile := flag.String("scope-file", "",
 		"Path to a file of additional in-scope assets (one per line; bare root = exact, *.root = wildcard, # comments). Pins the run to a validated multi-asset program scope so requests and findings stay within it.")
+	loginURL := flag.String("login-url", "",
+		"Optional login endpoint. RFUF POSTs -login-data here, captures the resulting session cookie(s), and scans authenticated — no need to paste a cookie. Opt-in; unset = unchanged.")
+	loginData := flag.String("login-data", "",
+		"Request body for -login-url (e.g. 'email=u@x.com&password=p' or a JSON object with -login-content-type application/json).")
+	loginContentType := flag.String("login-content-type", "application/x-www-form-urlencoded",
+		"Content-Type for -login-data (default form-encoded; use application/json for JSON logins).")
+	loginSuccessMarker := flag.String("login-success-marker", "",
+		"Optional text expected in the login response to confirm success before trusting the captured session.")
 	authCheckURL := flag.String("auth-check-url", "",
 		"Optional URL used to verify that supplied auth material reaches an authenticated surface.")
 	authCheckMarker := flag.String("auth-check-marker", "",
@@ -268,6 +278,19 @@ func main() {
 	if err != nil {
 		fmt.Printf("[!] %v\n", err)
 		os.Exit(1)
+	}
+	// Login-replay: acquire a session automatically instead of pasting a cookie.
+	if strings.TrimSpace(*loginURL) != "" && cookieValue == "" {
+		captured, lerr := performLogin(*loginURL, *loginData, *loginContentType, *loginSuccessMarker)
+		if lerr != nil {
+			fmt.Printf("[!] login-replay failed: %v\n", lerr)
+			if *authRequired {
+				os.Exit(1)
+			}
+		} else {
+			cookieValue = captured
+			fmt.Println("[*] login-replay: session acquired; scanning authenticated")
+		}
 	}
 	if *authRequired && cookieValue == "" && bearerValue == "" {
 		fmt.Println("[!] authenticated testing was required but no cookie or bearer token was supplied")
@@ -663,6 +686,58 @@ func runFilterTestable(args []string) error {
 //	${RFUF_AUTH_HEADER:+"--headers=Authorization: $RFUF_AUTH_HEADER"}
 //
 // and the per-tool wrappers translate them into the right CLI flags.
+// performLogin POSTs credentials to a login endpoint and returns the captured
+// session as a "k1=v1; k2=v2" cookie string, so a scan can authenticate from a
+// username/password instead of a hand-pasted cookie. It follows redirects with
+// a cookie jar (login flows often 302 to set the session), optionally confirms
+// a success marker in the response body, and fails if no cookie was set.
+func performLogin(loginURL, data, contentType, marker string) (string, error) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequest("POST", loginURL, strings.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("login returned status %d", resp.StatusCode)
+	}
+	if marker != "" && !strings.Contains(string(body), marker) {
+		return "", fmt.Errorf("login success marker %q not found in response", marker)
+	}
+	u, err := url.Parse(loginURL)
+	if err != nil {
+		return "", err
+	}
+	cookies := jar.Cookies(u)
+	if len(cookies) == 0 {
+		return "", errors.New("login succeeded but set no cookies")
+	}
+	parts := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		parts = append(parts, c.Name+"="+c.Value)
+	}
+	return strings.Join(parts, "; "), nil
+}
+
 // readScopeFile reads a -scope-file: one asset expression per line, with blank
 // lines and #-comments ignored. The expressions themselves are validated by the
 // caller via scope.WithExtraRoots.
