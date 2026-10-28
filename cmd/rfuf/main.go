@@ -174,6 +174,8 @@ func main() {
 		"Dedicated test-account email for the X-Test-Account-Email request header required by some programs.")
 	excludeURLRegex := flag.String("exclude-url-regex", "",
 		"Extended regular expression for URLs to exclude before downstream scans (repeat program exclusions safely).")
+	scopeFile := flag.String("scope-file", "",
+		"Path to a file of additional in-scope assets (one per line; bare root = exact, *.root = wildcard, # comments). Pins the run to a validated multi-asset program scope so requests and findings stay within it.")
 	authCheckURL := flag.String("auth-check-url", "",
 		"Optional URL used to verify that supplied auth material reaches an authenticated surface.")
 	authCheckMarker := flag.String("auth-check-marker", "",
@@ -279,6 +281,22 @@ func main() {
 	executor.AuthEnv["RFUF_DOMAIN"] = normalizedDomain
 	executor.AuthEnv["RFUF_SCOPE_INPUT"] = parsedScope.Input
 	executor.AuthEnv["RFUF_SCOPE_MODE"] = string(parsedScope.Mode)
+	if strings.TrimSpace(*scopeFile) != "" {
+		extras, serr := readScopeFile(*scopeFile)
+		if serr != nil {
+			fmt.Printf("[!] invalid -scope-file: %v\n", serr)
+			os.Exit(1)
+		}
+		// Validate every entry via the scope parser; a malformed asset fails loudly.
+		if _, verr := parsedScope.WithExtraRoots(extras); verr != nil {
+			fmt.Printf("[!] invalid asset in -scope-file: %v\n", verr)
+			os.Exit(1)
+		}
+		if len(extras) > 0 {
+			executor.AuthEnv["RFUF_SCOPE_EXTRA"] = strings.Join(extras, ",")
+			fmt.Printf("[*] Scope file: %d extra in-scope asset(s) enforced\n", len(extras))
+		}
+	}
 	if err := writeValidationInputsMetadata(paths.WorkDir, secondCookieValue != "", secondBearerValue != "", *roleA, *roleB, *repositoryPath, *testAPIBaseURL); err != nil {
 		fmt.Printf("[!] failed to write validation metadata: %v\n", err)
 		os.Exit(1)
@@ -538,6 +556,12 @@ func runTargetStream(args []string) error {
 	if err != nil {
 		return errors.New("scope must be configured before canonicalizing targets")
 	}
+	if extra := strings.TrimSpace(os.Getenv("RFUF_SCOPE_EXTRA")); extra != "" {
+		scanScope, err = scanScope.WithExtraRoots(strings.Split(extra, ","))
+		if err != nil {
+			return errors.New("invalid RFUF_SCOPE_EXTRA")
+		}
+	}
 	lines := []string{}
 	file, err := os.Open(*input)
 	if err == nil {
@@ -639,6 +663,28 @@ func runFilterTestable(args []string) error {
 //	${RFUF_AUTH_HEADER:+"--headers=Authorization: $RFUF_AUTH_HEADER"}
 //
 // and the per-tool wrappers translate them into the right CLI flags.
+// readScopeFile reads a -scope-file: one asset expression per line, with blank
+// lines and #-comments ignored. The expressions themselves are validated by the
+// caller via scope.WithExtraRoots.
+func readScopeFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read scope file: %w", err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("scope file %s contains no assets", path)
+	}
+	return out, nil
+}
+
 func authValue(inline, filePath, label string) (string, error) {
 	if strings.TrimSpace(inline) != "" {
 		return strings.TrimSpace(inline), nil

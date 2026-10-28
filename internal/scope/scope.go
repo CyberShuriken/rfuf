@@ -24,6 +24,29 @@ type Scope struct {
 	Input      string `json:"input"`
 	RootDomain string `json:"root_domain"`
 	Mode       Mode   `json:"mode"`
+	// Extra holds additional in-scope assets supplied via -scope-file, each a
+	// parsed root with its own exact/wildcard mode. A host is in scope if it
+	// matches the primary root or any extra. This lets an operator pin a run to
+	// a validated multi-asset program scope instead of inferring it from -d.
+	Extra []Scope `json:"extra,omitempty"`
+}
+
+// WithExtraRoots returns a copy of s with additional in-scope asset expressions
+// appended (each a bare root = exact, or *.root = wildcard). Invalid
+// expressions produce an error so a malformed scope file fails loudly.
+func (s Scope) WithExtraRoots(exprs []string) (Scope, error) {
+	for _, e := range exprs {
+		e = strings.TrimSpace(e)
+		if e == "" || strings.HasPrefix(e, "#") {
+			continue
+		}
+		parsed, err := Parse(e)
+		if err != nil {
+			return s, err
+		}
+		s.Extra = append(s.Extra, Scope{Input: parsed.Input, RootDomain: parsed.RootDomain, Mode: parsed.Mode})
+	}
+	return s, nil
 }
 
 // Parse preserves whether the operator explicitly supplied a wildcard.
@@ -85,6 +108,23 @@ func normalizeRoot(input, original string) (string, error) {
 func (s Scope) IncludesHost(host string) bool {
 	host = normalizeHost(host)
 	if host == "" || host == "<nil>" {
+		return false
+	}
+	if s.matchesRoot(host) {
+		return true
+	}
+	for _, e := range s.Extra {
+		if e.matchesRoot(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesRoot tests an already-normalized host against this scope's own root
+// only (not its Extra list), so IncludesHost can fan out without re-normalizing.
+func (s Scope) matchesRoot(host string) bool {
+	if s.RootDomain == "" {
 		return false
 	}
 	if s.Mode == ExactMode {

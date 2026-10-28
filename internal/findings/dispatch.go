@@ -13,6 +13,7 @@ import (
 	"github.com/CyberShuriken/rfuf/internal/findings/cors2"
 	"github.com/CyberShuriken/rfuf/internal/findings/envsecrets"
 	"github.com/CyberShuriken/rfuf/internal/findings/gitexposure"
+	"github.com/CyberShuriken/rfuf/internal/findings/graphql"
 	"github.com/CyberShuriken/rfuf/internal/findings/hostheader"
 	"github.com/CyberShuriken/rfuf/internal/findings/idor"
 	"github.com/CyberShuriken/rfuf/internal/findings/jsassets"
@@ -58,6 +59,7 @@ var Dispatch = map[string]func(workDir string) error{
 	"nextjsbypass":  nextjsbypass.Run,
 	"s3auditor":     s3auditor.Run,
 	"apiversion":    apiversion.Run,
+	"graphql":       graphql.Run,
 }
 
 // RunFinder dispatches to the named finder. Returns an error for unknown

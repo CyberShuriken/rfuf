@@ -56,6 +56,12 @@ func policyFromEnv() (requestPolicy, error) {
 	if err != nil {
 		return requestPolicy{}, errors.New("request blocked: invalid_scope")
 	}
+	if extra := strings.TrimSpace(os.Getenv("RFUF_SCOPE_EXTRA")); extra != "" {
+		parsed, err = parsed.WithExtraRoots(strings.Split(extra, ","))
+		if err != nil {
+			return requestPolicy{}, errors.New("request blocked: invalid_scope")
+		}
+	}
 	var exclude *regexp.Regexp
 	if expression := strings.TrimSpace(os.Getenv("RFUF_EXCLUDE_URL_REGEX")); expression != "" {
 		exclude, err = regexp.Compile(expression)

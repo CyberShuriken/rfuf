@@ -388,6 +388,7 @@ var (
 		"idor_run":            true,
 		"waf_detect":          true,
 		"port_scan_naabu":     true,
+		"graphql_introspect":  true,
 	}
 	// Rate and concurrency are env-driven so the WAF-pacing snippet can lower
 	// them per stage; -mhe (max-host-errors) makes nuclei stop hammering a host
@@ -995,6 +996,7 @@ exit 0`, "arjun", "grep", []string{"httpx_probe"}, 0},
 		{"bucket_guess_run", fmt.Sprintf("%s buckets .", findingsRunnerRef), "findings-runner", "grep", []string{"tech_fingerprint"}, 0},
 		{"takeover_v2_run", fmt.Sprintf("%s takeoversvc .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"js_mine_run", fmt.Sprintf("%s jsmine .", findingsRunnerRef), "findings-runner", "grep", []string{"jsmap_scrape"}, 0},
+		{"graphql_introspect", fmt.Sprintf("%s graphql .", findingsRunnerRef), "findings-runner", "grep", []string{"jsmap_scrape"}, 0},
 		{"secheaders_run", fmt.Sprintf("%s secheaders .", findingsRunnerRef), "findings-runner", "grep", []string{"httpx_probe"}, 0},
 		{"backupscan_run", fmt.Sprintf("%s backupscan .", findingsRunnerRef), "findings-runner", "grep", []string{"tech_fingerprint"}, 0},
 		{"businesslogic_run", fmt.Sprintf("%s businesslogic .", findingsRunnerRef), "findings-runner", "grep", []string{"merge_all_urls"}, 0},
