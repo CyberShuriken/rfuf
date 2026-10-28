@@ -1155,8 +1155,11 @@ func applyWafStealth(paths *config.Paths) bool {
 		return false
 	}
 
-	executor.AuthEnv["RFUF_USER_AGENT"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-	executor.AuthEnv["RFUF_STEALTH_HEADERS"] = "-H \"X-Forwarded-For: 127.0.0.1\" -H \"X-Real-IP: 127.0.0.1\""
+	// Runs inside the scheduler loop while stage goroutines range AuthEnv, so
+	// the write must be synchronized (SetAuthEnv) to avoid a fatal concurrent
+	// map iteration/write.
+	executor.SetAuthEnv("RFUF_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	executor.SetAuthEnv("RFUF_STEALTH_HEADERS", "-H \"X-Forwarded-For: 127.0.0.1\" -H \"X-Real-IP: 127.0.0.1\"")
 	return true
 }
 
