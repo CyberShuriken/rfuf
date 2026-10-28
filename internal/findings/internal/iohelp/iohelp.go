@@ -7,9 +7,46 @@ package iohelp
 
 import (
 	"bufio"
+	"net/url"
 	"os"
 	"strings"
 )
+
+// ValidateURL reports whether a line is a well-formed http(s) URL with a
+// parseable host. It exists so a single malformed entry (a bracketed or
+// invalid IPv6 literal, a non-http scheme, a bare word) cannot crash a
+// downstream consumer — whether that's a Go module dereferencing the parse
+// result or an external Python tool (wafw00f/arjun) that aborts the process
+// with "ValueError: Invalid IPv6 URL". Callers filter a host/URL list through
+// this before handing it to such a consumer.
+func ValidateURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	// url.Hostname() strips IPv6 brackets; an unparseable literal leaves it
+	// empty. Reject anything without a usable host.
+	return u.Hostname() != ""
+}
+
+// SanitizeURLs returns only the lines of in that pass ValidateURL, preserving
+// order. Use it to clean a target list before it reaches a crash-prone tool.
+func SanitizeURLs(in []string) []string {
+	out := in[:0:0]
+	for _, l := range in {
+		if ValidateURL(l) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
 
 // ReadLines reads a file and returns its non-blank lines. Missing file
 // is not an error — it returns (nil, nil). Every module starts with

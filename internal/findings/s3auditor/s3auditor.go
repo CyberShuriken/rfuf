@@ -32,20 +32,41 @@ func Run(workDir string) error {
 	}
 	iohelp.HardenClient(client)
 
+	seen := map[string]bool{}
 	for _, urlStr := range urls {
-		if !isS3Bucket(urlStr) {
+		if !isObjectStoreCandidate(urlStr) {
 			continue
 		}
+		root := strings.TrimRight(urlStr, "/")
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
 
-		// 1. Test for ListBucket (Root)
-		if getStatusCode(client, urlStr) == 200 {
-			findings = append(findings, fmt.Sprintf("[LISTED] %s - Bucket listing is enabled", urlStr))
+		status, body, hdr := fetchRoot(client, root)
+
+		// A custom/CloudFront domain is still worth flagging when the origin is
+		// AmazonS3 (revealed by response headers), not just when the hostname
+		// literally contains "s3".
+		if region := hdr.Get("x-amz-bucket-region"); region != "" {
+			findings = append(findings, fmt.Sprintf("[S3-ORIGIN] %s - AmazonS3-backed (region=%s)", root, region))
+		} else if strings.Contains(strings.ToLower(hdr.Get("Server")), "amazons3") {
+			findings = append(findings, fmt.Sprintf("[S3-ORIGIN] %s - AmazonS3-backed (Server header)", root))
+		}
+
+		// A real public listing returns an S3 ListBucketResult document, not
+		// merely HTTP 200 (a CloudFront 200 on index.html is not a listing).
+		switch {
+		case status == 200 && strings.Contains(body, "<ListBucketResult"):
+			findings = append(findings, fmt.Sprintf("[LISTED] %s - public bucket listing enabled (%d objects visible)", root, strings.Count(body, "<Key>")))
+		case status == 200 && strings.Contains(body, "<?xml") && strings.Contains(body, "<Contents>"):
+			findings = append(findings, fmt.Sprintf("[LISTED] %s - public object listing", root))
 		}
 
 		// Probe only with GET requests. Write permissions require explicit,
 		// operator-directed validation and are never tested automatically.
 		for _, file := range sensitiveFiles {
-			target := fmt.Sprintf("%s/%s", strings.TrimRight(urlStr, "/"), file)
+			target := root + "/" + file
 			if getStatusCode(client, target) == 200 {
 				findings = append(findings, fmt.Sprintf("[EXPOSED] %s - Found sensitive file", target))
 			}
@@ -66,10 +87,16 @@ func writeStatus(workDir, status string) error {
 	return os.WriteFile(workDir+"/s3_audit_status.json", append(data, '\n'), 0644)
 }
 
-func isS3Bucket(url string) bool {
+// isObjectStoreCandidate gates which URLs are worth a root probe. It covers the
+// classic S3 hostnames plus CloudFront and other object-store fronts, so an
+// S3-backed CDN origin (confirmed later via response headers) is not skipped on
+// the hostname alone.
+func isObjectStoreCandidate(url string) bool {
 	url = strings.ToLower(url)
 	patterns := []string{
-		"s3.amazonaws.com", "cdn-s3", "bucket", "s3-", "minio", "digitaloceanspaces",
+		"s3.amazonaws.com", "s3-", "s3.dualstack", ".s3.", "cdn-s3", "bucket",
+		"minio", "digitaloceanspaces", "cloudfront.net",
+		"storage.googleapis.com", "blob.core.windows.net", ".r2.dev",
 	}
 	for _, p := range patterns {
 		if strings.Contains(url, p) {
@@ -77,6 +104,24 @@ func isS3Bucket(url string) bool {
 		}
 	}
 	return false
+}
+
+// fetchRoot GETs a bucket/CDN root and returns the status, a bounded body
+// snippet (enough to recognise an S3 ListBucketResult), and the headers.
+func fetchRoot(client *http.Client, url string) (int, string, http.Header) {
+	req, err := iohelp.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, "", http.Header{}
+	}
+	iohelp.ApplyAuth(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", http.Header{}
+	}
+	defer resp.Body.Close()
+	buf := make([]byte, 16*1024)
+	n, _ := resp.Body.Read(buf)
+	return resp.StatusCode, string(buf[:n]), resp.Header
 }
 
 func getStatusCode(client *http.Client, url string) int {

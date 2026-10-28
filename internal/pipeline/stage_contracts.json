@@ -171,7 +171,7 @@
       "all_urls.txt"
     ],
     "outputs": [
-      "business_logic_findings.txt"
+      "business_logic_candidates.txt"
     ],
     "dependencies": [
       "merge_all_urls"
@@ -182,7 +182,7 @@
     "tool": "findings-runner",
     "directory_outputs": [],
     "zero_result_outputs": [
-      "business_logic_findings.txt"
+      "business_logic_candidates.txt"
     ]
   },
   "bypass403": {
@@ -1924,6 +1924,37 @@
     "zero_result_outputs": [
       "xss_targets.txt",
       "xss_targets_filtered.txt"
+    ]
+  },
+  "graphql_introspect": {
+    "inputs": [
+      "js_asset_errors.jsonl",
+      "js_asset_errors.txt",
+      "js_asset_metadata.jsonl",
+      "js_assets.txt",
+      "js_endpoint_provenance.jsonl",
+      "js_endpoints.txt",
+      "jsmap_status.txt",
+      "js_bundles",
+      "alive.txt"
+    ],
+    "outputs": [
+      "graphql_findings.txt",
+      "graphql_targets.txt",
+      "graphql_candidates.txt"
+    ],
+    "dependencies": [
+      "jsmap_scrape"
+    ],
+    "policy": "optional",
+    "empty_input_valid": true,
+    "timeout": "inherit",
+    "tool": "findings-runner",
+    "directory_outputs": [],
+    "zero_result_outputs": [
+      "graphql_findings.txt",
+      "graphql_targets.txt",
+      "graphql_candidates.txt"
     ]
   }
 }

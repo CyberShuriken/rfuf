@@ -137,6 +137,11 @@ func Run(workDir string) error {
 		if err != nil {
 			continue
 		}
+		// Drop third-party hosts pulled in from the wayback/gau corpus so the
+		// IDOR surface never lists out-of-scope endpoints.
+		if !iohelp.InScope(u.Hostname()) {
+			continue
+		}
 		q := u.Query()
 		if len(q) == 0 {
 			continue

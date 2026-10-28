@@ -49,27 +49,73 @@ var coreSources = []source{
 	{"secrets", "potential_secrets.txt", "MEDIUM"},
 }
 
+// Finding tiers. "confirmed" sources are real scanner outputs whose lines can
+// count toward the submittable headline (subject to per-line severity);
+// "informational" covers the generically-globbed finder files, which are
+// heuristic and never counted as submittable on their own.
+const (
+	tierConfirmed     = "confirmed"
+	tierInformational = "informational"
+)
+
 // Category is a per-class result summary in the digest.
 type Category struct {
-	Name     string   `json:"name"`
-	Severity string   `json:"severity"`
-	File     string   `json:"file"`
-	Count    int      `json:"count"`
-	Samples  []string `json:"samples,omitempty"`
+	Name        string   `json:"name"`
+	Severity    string   `json:"severity"`
+	Tier        string   `json:"tier"`
+	File        string   `json:"file"`
+	Count       int      `json:"count"`
+	Submittable int      `json:"submittable"`
+	Samples     []string `json:"samples,omitempty"`
 }
 
 // Digest is the consolidated view of one run, written to findings.json.
 type Digest struct {
-	GeneratedAt   string     `json:"generated_at"`
-	Domain        string     `json:"domain"`
-	TotalFindings int        `json:"total_findings"`
-	NewSubdomains []string   `json:"new_subdomains"`
-	NewJSAssets   []string   `json:"new_js_assets"`
-	Findings      []Category `json:"findings"`
+	GeneratedAt           string     `json:"generated_at"`
+	Domain                string     `json:"domain"`
+	TotalFindings         int        `json:"total_findings"`
+	SubmittableFindings   int        `json:"submittable_findings"`
+	InformationalFindings int        `json:"informational_findings"`
+	NewSubdomains         []string   `json:"new_subdomains"`
+	NewJSAssets           []string   `json:"new_js_assets"`
+	Findings              []Category `json:"findings"`
 }
 
 // severityRank orders categories most-severe first in the output.
 var severityRank = map[string]int{"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+// sevWords maps nuclei's lowercase severity token to our canonical label.
+var sevWords = map[string]string{"info": "INFO", "low": "LOW", "medium": "MEDIUM", "high": "HIGH", "critical": "CRITICAL"}
+
+// lineSeverity returns the real severity of a result line. nuclei writes a
+// bracketed severity token per line (e.g. "[cve] [http] [info] https://..."),
+// so a public, info-tagged hit is no longer counted at the file's hand-assigned
+// severity. Lines without a recognizable token fall back to the source default.
+func lineSeverity(line, fallback string) string {
+	rest := line
+	for {
+		i := strings.IndexByte(rest, '[')
+		if i < 0 {
+			break
+		}
+		rest = rest[i+1:]
+		j := strings.IndexByte(rest, ']')
+		if j < 0 {
+			break
+		}
+		if s, ok := sevWords[strings.ToLower(strings.TrimSpace(rest[:j]))]; ok {
+			return s
+		}
+		rest = rest[j+1:]
+	}
+	return fallback
+}
+
+// isSubmittable reports whether a severity is worth a human's time to triage
+// for a report. info/low are informational noise on a mature program.
+func isSubmittable(sev string) bool {
+	return severityRank[sev] <= severityRank["MEDIUM"]
+}
 
 // Build scans workDir, writes findings.json, and returns the digest. It is
 // tolerant of missing files (a run may not produce every artifact) and never
@@ -83,7 +129,7 @@ func Build(workDir, domain string) (Digest, error) {
 	}
 
 	seen := map[string]bool{}
-	add := func(src source) {
+	add := func(src source, tier string) {
 		if seen[src.File] {
 			return
 		}
@@ -92,7 +138,23 @@ func Build(workDir, domain string) (Digest, error) {
 			return
 		}
 		seen[src.File] = true
-		cat := Category{Name: src.Category, Severity: src.Severity, File: src.File, Count: len(lines)}
+
+		// Derive the category severity from the real per-line severities (the
+		// most-severe line present) and count how many lines are actually worth
+		// triaging. Informational-tier (globbed finder) files never contribute
+		// to the submittable count regardless of their line severities.
+		catSev := "INFO"
+		submittable := 0
+		for _, ln := range lines {
+			sev := lineSeverity(ln, src.Severity)
+			if severityRank[sev] < severityRank[catSev] {
+				catSev = sev
+			}
+			if tier == tierConfirmed && isSubmittable(sev) {
+				submittable++
+			}
+		}
+		cat := Category{Name: src.Category, Severity: catSev, Tier: tier, File: src.File, Count: len(lines), Submittable: submittable}
 		if len(lines) > maxSamples {
 			cat.Samples = append(cat.Samples, lines[:maxSamples]...)
 		} else {
@@ -100,16 +162,22 @@ func Build(workDir, domain string) (Digest, error) {
 		}
 		d.Findings = append(d.Findings, cat)
 		d.TotalFindings += len(lines)
+		d.SubmittableFindings += submittable
+		if tier != tierConfirmed {
+			d.InformationalFindings += len(lines)
+		}
 	}
 
 	for _, src := range coreSources {
-		add(src)
+		add(src, tierConfirmed)
 	}
 	// Pick up every finder's *_findings.txt generically so new finders are
-	// covered without changing this file. These are MEDIUM by default.
+	// covered without changing this file. These are heuristic/informational and
+	// never count toward the submittable headline. (*_candidates.txt files are
+	// intentionally NOT globbed — untested leads stay out of the digest.)
 	for _, match := range glob(workDir, "*_findings.txt") {
 		base := filepath.Base(match)
-		add(source{Category: strings.TrimSuffix(base, "_findings.txt"), File: base, Severity: "MEDIUM"})
+		add(source{Category: strings.TrimSuffix(base, "_findings.txt"), File: base, Severity: "INFO"}, tierInformational)
 	}
 
 	sort.SliceStable(d.Findings, func(i, j int) bool {

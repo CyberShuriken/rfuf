@@ -56,6 +56,12 @@ func policyFromEnv() (requestPolicy, error) {
 	if err != nil {
 		return requestPolicy{}, errors.New("request blocked: invalid_scope")
 	}
+	if extra := strings.TrimSpace(os.Getenv("RFUF_SCOPE_EXTRA")); extra != "" {
+		parsed, err = parsed.WithExtraRoots(strings.Split(extra, ","))
+		if err != nil {
+			return requestPolicy{}, errors.New("request blocked: invalid_scope")
+		}
+	}
 	var exclude *regexp.Regexp
 	if expression := strings.TrimSpace(os.Getenv("RFUF_EXCLUDE_URL_REGEX")); expression != "" {
 		exclude, err = regexp.Compile(expression)
@@ -92,6 +98,24 @@ func ConfigureFromWorkDir(workDir string) error {
 	}
 	_, err = policyFromEnv()
 	return err
+}
+
+// InScope reports whether host is within the active run scope. Finders use it
+// to drop out-of-scope hosts they DERIVE from response data (redirect targets,
+// reflected CORS origins, third-party hosts pulled in from the wayback/gau
+// corpus) before writing them to a findings file. The request-boundary policy
+// only gates what we SEND; nothing re-checks what a finder EMITS, which is how
+// an out-of-scope host (e.g. a wayback row for an unrelated domain) ends up in
+// the report. Fails open (returns true) only when no scope is configured at
+// all, so a misconfigured run never silently drops every host-bearing finding;
+// in the normal case (scope configured by the pipeline / ConfigureFromWorkDir)
+// it enforces the exact/wildcard scope.
+func InScope(host string) bool {
+	policy, err := policyFromEnv()
+	if err != nil {
+		return true
+	}
+	return policy.scope.IncludesHost(host)
 }
 
 // NewRequestWithContext constructs an authenticated HTTP request only when
