@@ -200,13 +200,19 @@ func classifyStageResult(exitCode int, timedOut, grepStage, missingOutput, empty
 	if !success || missingOutput {
 		return coverage.StatusFailed
 	}
+	// A stage that produced output ran to completion, regardless of whether
+	// it had declared file-inputs. Seed stages (subfinder, crtsh, …) take the
+	// domain as a CLI arg, so they have zero file-inputs (emptyInput=true) yet
+	// legitimately emit dozens of records — they must NOT be mislabeled
+	// completed_no_input, which poisons any coverage/verify check keying off
+	// status!=completed or empty_reason!=null. So outputCount wins first.
+	if outputCount > 0 {
+		return coverage.StatusCompleted
+	}
 	if emptyInput {
 		return coverage.StatusCompletedNoInput
 	}
-	if outputCount == 0 {
-		return coverage.StatusCompletedEmpty
-	}
-	return coverage.StatusCompleted
+	return coverage.StatusCompletedEmpty
 }
 
 func stageError(toolError string, exitCode int, timedOut bool) string {
@@ -642,7 +648,8 @@ fi
 trufflehog filesystem "${INPUTS[@]}" --results=verified,unknown --json > trufflehog_results.txt 2> trufflehog_stderr.log
 RC=$?
 sort -u trufflehog_results.txt -o trufflehog_results.txt 2>/dev/null
-FINDING_COUNT=$(grep -cve '^$' trufflehog_results.txt 2>/dev/null || echo 0)
+FINDING_COUNT=$(grep -cve '^$' trufflehog_results.txt 2>/dev/null)
+FINDING_COUNT=${FINDING_COUNT:-0}
 if [ "$RC" -eq 0 ]; then STATUS=completed; else STATUS=scan_error; fi
 printf '{"status":"%s","inputs":%s,"findings":%s,"exit_code":%s}\n' "$STATUS" "$INPUT_COUNT" "$FINDING_COUNT" "$RC" > trufflehog_status.json
 exit 0`, "trufflehog", "grep", []string{"katana_crawl", "jsmap_scrape", "api_discovery"}, 0},
@@ -681,7 +688,7 @@ if [ -n "${RFUF_EXCLUDE_URL_REGEX:-}" ]; then
   mv all_urls_scannable.filtered all_urls_scannable.txt
 fi
 %s
-httpx -l all_urls_scannable.txt -silent -status-code -mc 200,301,302,401,403,405,500 "${AUTH_HEADERS[@]}" > all_urls_status.txt
+httpx -l all_urls_scannable.txt -silent -status-code -nc -mc 200,301,302,401,403,405,500 "${AUTH_HEADERS[@]}" > all_urls_status.txt
 awk '/ \[(200|301|302)\]/ {print $1}' all_urls_status.txt > all_urls_200.txt
 awk '/ \[(401|403|500)\]/ {print}' all_urls_status.txt > high_interest_urls.txt
 # Auth-walled (401/403) URL column — fed to the param-agnostic path lane
@@ -719,7 +726,7 @@ cp all_urls_scannable.txt all_urls.txt
 cp all_urls_200_scannable.txt all_urls_200.txt
 cp high_interest_urls_scannable.txt high_interest_urls.txt
 cp js_endpoints_scannable.txt js_endpoints.txt
-printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt)" "$(wc -l < all_urls_200.txt)" "$(wc -l < js_endpoints.txt)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt`, self, self, self, self), "rfuf", "default", []string{"merge_js_endpoints"}, 0},
+printf 'all_urls=%%s all_urls_200=%%s js_endpoints=%%s max_targets=%%s max_stage_requests=%%s\\n' "$(wc -l < all_urls.txt)" "$(wc -l < all_urls_200.txt)" "$(wc -l < js_endpoints.txt)" "${RFUF_MAX_TARGETS:-10000}" "${RFUF_MAX_STAGE_REQUESTS:-300}" > scope_filter_status.txt`, self, self, self, self), "rfuf", "default", []string{"merge_js_endpoints", "url_filter_alive"}, 0},
 		{"nuclei_target_merge", fmt.Sprintf(`set +e
 {
   awk '{print $1}' alive.txt 2>/dev/null

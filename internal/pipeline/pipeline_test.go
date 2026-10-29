@@ -258,6 +258,31 @@ func TestStepIDsAreUniqueAndFindersUseInstalledBinary(t *testing.T) {
 	}
 }
 
+// Regression: url_filter_alive captures httpx STDOUT via ">" and splits it into
+// lanes with awk '/ \[(200|301|302)\]/' etc. This httpx build colorizes stdout
+// even when redirected to a file, so without -nc the ANSI escapes wrap the
+// status code (` [<ESC>[31m403<ESC>[0m]`) and every awk status match fails —
+// silently zeroing all_urls_200, high_interest, and auth_walled. The pipeline
+// tests feed clean mock output so they can't catch it structurally; this guards
+// the -nc flag directly. Any httpx whose stdout is captured (">" redirect, not
+// "-o FILE") for status parsing must disable color.
+func TestHTTPXStdoutStatusParseDisablesColor(t *testing.T) {
+	steps := GetSteps("example.com", &config.Paths{})
+	for _, step := range steps {
+		for _, line := range strings.Split(step.Command, "\n") {
+			if !strings.Contains(line, "httpx") || !strings.Contains(line, "-status-code") {
+				continue
+			}
+			if strings.Contains(line, "-o ") || !strings.Contains(line, ">") {
+				continue // "-o FILE" writes uncolored output; only stdout capture is affected
+			}
+			if !strings.Contains(line, "-nc") {
+				t.Fatalf("%s redirects httpx stdout for status parsing without -nc; ANSI color will break the awk status match: %q", step.ID, line)
+			}
+		}
+	}
+}
+
 func TestOptionalStagePolicyIsExplicit(t *testing.T) {
 	if stageRequired("subfinder") {
 		t.Fatal("subfinder should be optional and classified as such")
@@ -439,6 +464,7 @@ func TestStageResultStatusDoesNotHideFailuresOrMissingArtifacts(t *testing.T) {
 		{name: "missing output", code: 0, missing: true, want: coverage.StatusFailed},
 		{name: "grep no matches", code: 1, grep: true, outputs: 0, want: coverage.StatusCompletedEmpty},
 		{name: "empty input", code: 0, noInput: true, outputs: 0, want: coverage.StatusCompletedNoInput},
+		{name: "seed stage: no file input but produced output", code: 0, noInput: true, outputs: 5, want: coverage.StatusCompleted},
 		{name: "findings output", code: 0, outputs: 1, want: coverage.StatusCompleted},
 	}
 	for _, tc := range cases {

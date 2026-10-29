@@ -432,7 +432,9 @@
     "timeout": "inherit",
     "tool": "ffuf",
     "directory_outputs": [],
-    "zero_result_outputs": []
+    "zero_result_outputs": [
+      "ffuf_js_results.json"
+    ]
   },
   "filter_testable_sqli": {
     "inputs": [
@@ -1417,6 +1419,9 @@
     "inputs": [
       "all_urls.txt",
       "all_urls_200.txt",
+      "all_urls_scannable.txt",
+      "all_urls_alive_stream_status.json",
+      "all_urls_alive_provenance.jsonl",
       "js_endpoints.txt",
       "js_endpoints_full.txt",
       "merge_js_endpoints_status.txt",
@@ -1441,7 +1446,8 @@
       "js_endpoints_provenance.jsonl"
     ],
     "dependencies": [
-      "merge_js_endpoints"
+      "merge_js_endpoints",
+      "url_filter_alive"
     ],
     "policy": "required",
     "empty_input_valid": true,
